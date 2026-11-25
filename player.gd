@@ -1,50 +1,56 @@
 extends CharacterBody3D
-## Oyuncu: yuvarlak hatlı karakter (models/character.glb). Gövde, kafa, eller, ayaklar ayrı parçalar; eklem yok.
-## Birinci şahıs: fare kafayı çevirir, gövde biraz sonra yürüme yönüne döner. W her zaman bakılan yöne yürür.
-## Kendi oyuncumuzda gövde ve kafa sadece gölge olarak çizilir: aşağı bakınca eller ve ayaklar görünür.
+## Oyuncu: yuvarlak hatlı karakter (models/character.glb), 1. şahıs hareket + ayak sesleri + kamera sarsıntısı,
+## 3D hedef vurgusu, proximity sesli sohbet, bağırma dalgaları, toptancı/depo kasa alımı, satış ve yükseltmeler.
 
 const MODEL := preload("res://models/character.glb")
+const LP := preload("res://lowpoly.gd")
+const Produce := preload("res://produce.gd")
 const StallScript := preload("res://stall.gd")
-signal money_earned(amount: int, total: int)
+const VFX := preload("res://vfx.gd")
+
+signal money_earned(amount: int, total: int, tip: int)
+signal money_spent(amount: int, total: int, reason: String)
+signal open_upgrade_shop()
+
+const STARTING_MONEY := 120
 const WALK := 3.6
 const RUN := 6.8
 const JUMP := 5.2
 const GRAVITY := 14.0
 const SENS := 0.0025
-const HEAD_LIMIT := 1.3 # kafa gövdeye göre en fazla bu kadar döner (rad, ~75°)
-const EYE_Y := 1.16 # kamera yüksekliği: göz hizası
-const EYE_FWD := 0.12 # kamera kafa merkezinden bu kadar önde
-# Proximity sesli sohbet (PEAK tarzı 3D uzaklık sönümlemesi + kesintisiz jitter buffer)
+const HEAD_LIMIT := 1.3
+const EYE_Y := 1.16
+const EYE_FWD := 0.12
+# Proximity sesli sohbet
 const VOICE_BUS := "VoiceRecord"
-const VOICE_RATE := 24000 # 24 kHz mono 16-bit PCM (48 kHz'nin tam yarısı, net ses)
-const VOICE_CHUNK := 480 # 20 ms paket (960 bayt, düşük gecikme)
-const VOICE_GEN_SEC := 0.25 # AudioStreamGenerator iç tamponu (6000 örnek)
-const VOICE_PREBUF := 1440 # 60 ms jitter ön-tamponu (yalnızca konuşma başlangıcında)
-const VOICE_MAX_BUF := 4800 # 200 ms üst sınır (gecikme birikmesini önler)
-const VOICE_DB_MIN := -46.0 # bu eşiğin altı sessizlik
-const VOICE_DB_MAX := -12.0 # tam ağız açıklığı (dB)
-const VOICE_UNIT_SIZE := 3.5 # bu mesafeye kadar tam ses (m)
-const VOICE_MAX_DIST := 22.0 # bu mesafede ses tamamen kesilir (m)
-# Bağırma gücü mikrofon desibelinden: SHOUT_DB_MIN'de başlar, SHOUT_DB_MAX'ta en yüksek (1.35)
+const VOICE_RATE := 24000
+const VOICE_CHUNK := 480
+const VOICE_GEN_SEC := 0.25
+const VOICE_PREBUF := 1440
+const VOICE_MAX_BUF := 4800
+const VOICE_DB_MIN := -46.0
+const VOICE_DB_MAX := -12.0
+const VOICE_UNIT_SIZE := 3.5
+const VOICE_MAX_DIST := 22.0
+# Bağırma eşikleri
 const SHOUT_DB_MIN := -36.0
 const SHOUT_DB_MAX := -10.0
-const SHOUT_KEY_POWER := 0.6 # mikrofonsuz B tuşu: orta şiddette bağırma, gerçek yüksek ses bunu geçer
-const SHOUT_ON := 0.55 # bu güçten sonrası "bağırma" sayılır (HUD, balon)
+const SHOUT_KEY_POWER := 0.62
+const SHOUT_ON := 0.55
 const SHOUT_CALLS := ["Taze %s! %d TL!", "Gel gel! %s %d lira!", "Kaçırma! %s sadece %d TL!", "Bal gibi %s! %d TL!"]
-# Oyuncu renkleri (peer id'ye göre): saç ve tişört
 const HAIRS := [Color(0.2, 0.12, 0.07), Color(0.08, 0.06, 0.05), Color(0.75, 0.55, 0.25), Color(0.55, 0.22, 0.1),
 	Color(0.4, 0.28, 0.18), Color(0.85, 0.8, 0.7)]
 const SHIRTS := [Color(0.85, 0.2, 0.18), Color(0.2, 0.5, 0.9), Color(0.98, 0.75, 0.15), Color(0.3, 0.75, 0.35),
 	Color(0.65, 0.35, 0.85), Color(1.0, 0.5, 0.7), Color(0.15, 0.75, 0.75), Color(1.0, 0.55, 0.15)]
 
 var spawn_pos := Vector3.ZERO
-var npc := false # menü figüranı: ağ ve kontrol yok, main.gd yürütür
-var color_id := -1 # figüranlar için renk (-1: peer id'den)
+var npc := false
+var color_id := -1
 
-var rig: Node3D # gövde yönü; gövde, eller, ayaklar burada
-var head: Node3D # kafa ayrı döner: gövdeden önce fareyi izler
-var parts := {} # ad -> sarmalayıcı Node3D
-var rest := {} # ad -> modeldeki dinlenme konumu
+var rig: Node3D
+var head: Node3D
+var parts := {}
+var rest := {}
 var cam_root: Node3D
 var cam: Camera3D
 var _ray: RayCast3D
@@ -52,15 +58,33 @@ var _held_anchor: Node3D
 var _held_visual: Node3D
 var _fp_crate_anchor: Node3D
 var _fp_crate_visual: Node3D
-var money := 0
+var _hl_box: Node3D
+var _hl_mat: StandardMaterial3D
+
+# Ekonomi ve günlük istatistikler
+var money := STARTING_MONEY
+var daily_revenue := 0
+var daily_spent := 0
+var daily_fines := 0
+var daily_tips := 0
+var daily_sold := 0
+var daily_haggles := 0
+
 var held_crate := false
 var held_item := ""
 var held_count := 0
-var shout_power := 0.0 # mikrofon bağırması veya B tuşu (0..1.4)
-var _shout_lbl: Label3D # diğer oyuncuların başında çıkan pazarcı bağırması balonu
+var shout_power := 0.0
+var _shout_lbl: Label3D
+var _shout_ring_cd := 0.0
 var interact_hint := ""
+var has_target := false
 var _place_cd := 0.0
 var _place_held := false
+var _place_kick := 0.0
+var _trauma := 0.0
+var _shake_t := 0.0
+var _prev_step_half := 0
+
 var tag: Label3D
 var mouth_node: Node3D
 var mouth_rest := Vector3.ZERO
@@ -75,9 +99,9 @@ var _saccade_target := Vector2.ZERO
 var _saccade_cur := Vector2.ZERO
 
 var mic_muted := false
-var talk_level := 0.0 # 0..1 anlık ses seviyesi (dB'den)
+var talk_level := 0.0
 var talk_db := -60.0
-var talk_smooth := 0.0 # yumuşatılmış ağız açıklığı
+var talk_smooth := 0.0
 var _voice_cap: AudioEffectCapture
 var _voice_accum: PackedFloat32Array = PackedFloat32Array()
 var _voice_hold := 0.0
@@ -91,26 +115,30 @@ var _voice_pb: AudioStreamGeneratorPlayback
 var _voice_gen_cap := 0
 var _rx_buf: PackedFloat32Array = PackedFloat32Array()
 var _rx_playing := false
-var _rx_fade := 0.0 # 0..1 kliksiz fade-in zarfı
+var _rx_fade := 0.0
 var _rx_last_s := 0.0
 var _remote_talk := 0.0
 var _remote_talk_t := 0.0
 var _base_tag := ""
 
-var look_yaw := PI # kamera yönü (0: -Z'ye bakış). Modelin önü +Z: yüz yönü = look_yaw + PI
+var look_yaw := PI
 var look_pitch := 0.0
-var body_yaw := 0.0 # modelin yönü
-var turning := false # dururken kafa sınırı aşıldı, gövde toparlanıyor
+var body_yaw := 0.0
+var turning := false
 var spd := 0.0
 var air := false
-var phase := 0.0 # adım döngüsü
-var land_t := 0.0 # iniş ezilmesi (sn)
+var phase := 0.0
+var land_t := 0.0
 var bob_k := 0.0
 var net_pos := Vector3.ZERO
 
 
 func face_yaw() -> float:
 	return look_yaw + PI
+
+
+func add_trauma(amount: float) -> void:
+	_trauma = clampf(_trauma + amount, 0.0, 1.0)
 
 
 func _ready() -> void:
@@ -138,7 +166,7 @@ func _ready() -> void:
 		tag.hide()
 	elif is_multiplayer_authority():
 		tag.hide()
-		for n in ["Body", "Head"]: # kendi gövdemi görmem, gölgesi kalsın
+		for n in ["Body", "Head"]:
 			for mi in parts[n].find_children("*", "MeshInstance3D", true, false):
 				mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
 		cam_root = Node3D.new()
@@ -149,21 +177,21 @@ func _ready() -> void:
 		cam_root.add_child(cam)
 		cam.current = true
 		_ray = RayCast3D.new()
-		_ray.target_position = Vector3(0, 0, -3.4)
+		_ray.target_position = Vector3(0, 0, -3.7)
 		_ray.collide_with_areas = true
 		_ray.collide_with_bodies = false
 		_ray.collision_mask = 4
 		cam.add_child(_ray)
-		# Birinci şahısta elde tutulan kasa (ekranın alt-önünde net görünür, eksildikçe boşalır)
 		_fp_crate_anchor = Node3D.new()
 		_fp_crate_anchor.position = Vector3(0.0, -0.34, -0.58)
 		_fp_crate_anchor.rotation_degrees = Vector3(14.0, 0.0, 0.0)
 		cam.add_child(_fp_crate_anchor)
+		_build_highlight_box()
 		_setup_voice_capture()
 	else:
 		_setup_voice_playback()
 		_shout_lbl = Label3D.new()
-		_shout_lbl.position.y = 2.0
+		_shout_lbl.position.y = 2.02
 		_shout_lbl.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 		_shout_lbl.font_size = 44
 		_shout_lbl.outline_size = 12
@@ -174,7 +202,35 @@ func _ready() -> void:
 		add_child(_shout_lbl)
 
 
-## glb'deki altı parçayı sarmalayıcılara taşır; saç ve tişört rengini oyuncuya göre boyar.
+## Bakılan yuva / kasa / zil / müşteri çevresinde parlayan altın 3D seçim çerçevesi.
+func _build_highlight_box() -> void:
+	_hl_box = Node3D.new()
+	_hl_box.top_level = true
+	_hl_mat = StandardMaterial3D.new()
+	_hl_mat.albedo_color = Color(1.0, 0.88, 0.35, 0.9)
+	_hl_mat.emission_enabled = true
+	_hl_mat.emission = Color(1.0, 0.82, 0.28)
+	_hl_mat.emission_energy_multiplier = 2.0
+	_hl_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_hl_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	var t := 0.022
+	# Birim küpün 12 kenarı (scale ile hedef kutuya oturur)
+	var edge_x := LP.box(Vector3(1.0, t, t))
+	var edge_y := LP.box(Vector3(t, 1.0, t))
+	var edge_z := LP.box(Vector3(t, t, 1.0))
+	for a in [-0.5, 0.5]:
+		for b in [-0.5, 0.5]:
+			for pair in [[edge_x, Vector3(0, a, b)], [edge_y, Vector3(a, 0, b)], [edge_z, Vector3(a, b, 0)]]:
+				var mi := MeshInstance3D.new()
+				mi.mesh = pair[0]
+				mi.position = pair[1]
+				mi.material_override = _hl_mat
+				mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+				_hl_box.add_child(mi)
+	_hl_box.hide()
+	add_child(_hl_box)
+
+
 func _build_model(hair: Color, shirt: Color) -> void:
 	var src := MODEL.instantiate()
 	rig = Node3D.new()
@@ -190,10 +246,10 @@ func _build_model(hair: Color, shirt: Color) -> void:
 		w.name = n
 		rest[n] = m.position
 		m.get_parent().remove_child(m)
-		m.owner = null # glb sahnesinden koparıldı
+		m.owner = null
 		m.transform = Transform3D.IDENTITY
 		w.add_child(m)
-		if n == "Head": # kafa, kendi merkezinde döner
+		if n == "Head":
 			head.add_child(w)
 			head.position = rest[n]
 		else:
@@ -232,6 +288,9 @@ func _unhandled_input(e: InputEvent) -> void:
 			talk_db = -60.0
 			_voice_accum.clear()
 		return
+	if e.is_action_pressed("upgrade_shop"):
+		open_upgrade_shop.emit()
+		return
 	if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
 		_place_held = false
 		return
@@ -240,6 +299,8 @@ func _unhandled_input(e: InputEvent) -> void:
 		look_pitch = clampf(look_pitch - e.relative.y * SENS, -1.45, 1.35)
 	elif e.is_action_pressed("interact"):
 		_do_interact()
+	elif e.is_action_pressed("ring_bell"):
+		_do_ring_bell()
 	elif e.is_action_pressed("refuse_offer"):
 		_do_sell_to_customer(true)
 	elif e.is_action_pressed("throw_crate"):
@@ -253,7 +314,8 @@ func _unhandled_input(e: InputEvent) -> void:
 			_place_held = e.pressed
 			if e.pressed:
 				_try_place_once()
-				_place_cd = 0.24 # ilk tık sonrası basılı tutmada seri dizme gecikmesi
+				var st := _find_stall(_my_peer_id())
+				_place_cd = 0.16 if (st and st.has_upgrade("big_crate")) else 0.24
 		elif e.pressed and e.button_index == MOUSE_BUTTON_WHEEL_UP:
 			_do_adjust_price(1)
 		elif e.pressed and e.button_index == MOUSE_BUTTON_WHEEL_DOWN:
@@ -263,12 +325,25 @@ func _unhandled_input(e: InputEvent) -> void:
 func _process(dt: float) -> void:
 	if npc:
 		return
+	_tick_shout_rings(dt)
 	if is_multiplayer_authority():
 		_process_voice_capture(dt)
 		_process_interaction(dt)
 	else:
 		_process_voice_remote(dt)
 		_pump_voice_playback()
+
+
+func _tick_shout_rings(dt: float) -> void:
+	if _shout_ring_cd > 0.0:
+		_shout_ring_cd = maxf(_shout_ring_cd - dt, 0.0)
+	if shout_power >= SHOUT_ON and _shout_ring_cd <= 0.0:
+		_shout_ring_cd = 0.58
+		var st := _find_stall(_my_peer_id())
+		var has_mega: bool = st != null and st.has_upgrade("megaphone")
+		var rad := (3.2 + shout_power * 1.6) * (1.4 if has_mega else 1.0)
+		var col := Color(1.0, 0.78, 0.2) if has_mega else Color(1.0, 0.92, 0.55)
+		VFX.spawn_sound_ring(_find_world(), global_position + Vector3(0, 1.25, 0), rad, col)
 
 
 func _physics_process(dt: float) -> void:
@@ -291,9 +366,8 @@ func _local(dt: float) -> void:
 	var captured := Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
 	if captured:
 		inp = Input.get_vector("left", "right", "fwd", "back")
-	# Yön her zaman kameradan: kafa nereye bakıyorsa W oraya, gövde nereye dönük olursa olsun
 	var dir := (Basis(Vector3.UP, look_yaw) * Vector3(inp.x, 0, inp.y)).normalized()
-	var running := Input.is_action_pressed("run") and inp.y < 0.0 # sadece ileri koşulur
+	var running := Input.is_action_pressed("run") and inp.y < 0.0
 	var target := dir * (RUN if running else WALK)
 	var accel := (14.0 if target != Vector3.ZERO else 18.0) if is_on_floor() else 3.0
 	velocity.x = move_toward(velocity.x, target.x, accel * dt * WALK)
@@ -312,7 +386,9 @@ func _local(dt: float) -> void:
 	air = not is_on_floor()
 	if was_air and not air:
 		land_t = 0.22
-	# Bağırma gücü: mikrofon desibeli (yüksek bağıran daha çok müşteri çeker) veya B tuşu
+		add_trauma(0.18)
+		Sfx.play("step", -10.0, 0.85)
+		VFX.burst_dust(_find_world(), global_position + Vector3(0, 0.08, 0), Color(0.88, 0.78, 0.62), 5)
 	var manual_shout := SHOUT_KEY_POWER if (captured and Input.is_action_pressed("shout")) else 0.0
 	var mic_shout := 0.0 if mic_muted else \
 		clampf((talk_db - SHOUT_DB_MIN) / (SHOUT_DB_MAX - SHOUT_DB_MIN), 0.0, 1.0) * 1.35
@@ -321,17 +397,34 @@ func _local(dt: float) -> void:
 		sync_state.rpc(global_position, body_yaw, look_yaw, look_pitch, spd, air, shout_power)
 
 
-## Kafa sallanması: her adım basışında hafif çöküş ve yana salınım, koşarken daha güçlü; inişte sarsıntı.
 func _camera(dt: float) -> void:
 	var kr := clampf((spd - WALK) / (RUN - WALK), 0.0, 1.0)
 	bob_k = lerpf(bob_k, 0.0 if air else clampf(spd / WALK, 0.0, 1.0), minf(dt * 8.0, 1.0))
 	var amp := lerpf(0.032, 0.068, kr) * bob_k
-	# Adım fazı ile eşzamanlı: sin(phase)=0 anında ayak basar -> hafif çöküş; cos(phase) sol/sağ salınım
 	var bob := Vector3(cos(phase) * amp * 0.55, absf(sin(phase)) * amp - amp * 0.5 - land_t * 0.45, 0)
+
+	# Trauma tabanlı yumuşak kamera sarsıntısı
+	var shake_off := Vector3.ZERO
+	var shake_roll := 0.0
+	if _trauma > 0.0:
+		_trauma = maxf(_trauma - dt * 1.8, 0.0)
+		var sh := _trauma * _trauma
+		_shake_t += dt * 32.0
+		shake_off = Vector3(sin(_shake_t * 1.7) * 0.045 * sh, sin(_shake_t * 2.3) * 0.035 * sh, 0.0)
+		shake_roll = sin(_shake_t * 1.2) * 0.04 * sh
+
 	var yb := Basis(Vector3.UP, look_yaw)
-	cam_root.position = Vector3(0, EYE_Y, 0) + yb * (Vector3(0, 0, -EYE_FWD) + bob)
-	cam_root.rotation = Vector3(look_pitch, look_yaw, -cos(phase) * 0.011 * bob_k * (1.0 + kr))
-	cam.fov = lerpf(cam.fov, 78.0 + kr * 6.0, minf(dt * 6.0, 1.0)) # koşarken hafif genişler
+	cam_root.position = Vector3(0, EYE_Y, 0) + yb * (Vector3(0, 0, -EYE_FWD) + bob + shake_off)
+	cam_root.rotation = Vector3(look_pitch, look_yaw, -cos(phase) * 0.011 * bob_k * (1.0 + kr) + shake_roll)
+	cam.fov = lerpf(cam.fov, 78.0 + kr * 6.0, minf(dt * 6.0, 1.0))
+
+	# Birinci şahıs kasa salınımı ve dizme hareketi
+	if _fp_crate_anchor:
+		_place_kick = lerpf(_place_kick, 0.0, minf(dt * 14.0, 1.0))
+		var sway_x := cos(phase) * 0.014 * bob_k
+		var sway_y := absf(sin(phase)) * 0.014 * bob_k
+		_fp_crate_anchor.position = Vector3(sway_x, -0.34 - sway_y + _place_kick * 0.04, -0.58 - _place_kick * 0.09)
+		_fp_crate_anchor.rotation_degrees = Vector3(14.0 - _place_kick * 16.0, 0.0, -sway_x * 65.0)
 
 
 @rpc("authority", "unreliable_ordered")
@@ -347,7 +440,6 @@ func sync_state(p: Vector3, by: float, ly: float, lp: float, s: float, a: bool, 
 	shout_power = sp
 
 
-## Önce kafa döner. Yürürken gövde yürüme yönüne, dururken kafa sınırı aşılınca kafanın yönüne döner.
 func _turn_body(dt: float) -> void:
 	if npc or not is_multiplayer_authority():
 		rig.rotation.y = lerp_angle(rig.rotation.y, body_yaw, minf(dt * 14.0, 1.0))
@@ -365,25 +457,27 @@ func _turn_body(dt: float) -> void:
 	rig.rotation.y = body_yaw
 
 
-## Eklemsiz, hızla senkronlu animasyon. Ayak temas hızı gerçek yürüme/koşma hızına kilitlidir.
 func _animate(dt: float) -> void:
 	var t := Time.get_ticks_msec() * 0.001
-	var kw := clampf(spd / WALK, 0.0, 1.0) # yürüme ağırlığı
-	var kr := clampf((spd - WALK) / (RUN - WALK), 0.0, 1.0) # koşu ağırlığı
+	var kw := clampf(spd / WALK, 0.0, 1.0)
+	var kr := clampf((spd - WALK) / (RUN - WALK), 0.0, 1.0)
 	var idle := 1.0 - kw
 	var stride_full := lerpf(0.28, 0.42, kr)
 	var stride := stride_full * kw
 	var lift := lerpf(0.11, 0.20, kr) * kw
 	if not air and spd > 0.08:
-		# Yerdeki ayağın geriye süpürme hızı = stride_full * omega ≈ spd (kayma yok)
 		phase = wrapf(phase + dt * (spd / stride_full) * 0.94, 0.0, TAU)
+		# Adım fazıyla tam senkron ayak sesi
+		if not npc and is_multiplayer_authority() and spd > 0.65:
+			var cur_half := 0 if phase < PI else 1
+			if cur_half != _prev_step_half:
+				_prev_step_half = cur_half
+				Sfx.play("step", -14.0 + kr * 3.5, 0.96 + float(cur_half) * 0.08)
 	land_t = maxf(land_t - dt, 0.0)
 	var land := land_t / 0.22
 	var breathe := sin(t * 2.2)
-	var f := minf(dt * 18.0, 1.0) # hedeflere yumuşak yaklaşma, durum geçişlerinde sıçrama olmaz
+	var f := minf(dt * 18.0, 1.0)
 
-	# Ayaklar: -cos(c) öne/arkaya (c=0 arkada, c=PI önde), sin(c)>0 iken havada öne savrulur;
-	# sin(c)<0 iken yerde geriye iter ve hızı karakter hızıyla birebir eşleşir.
 	for side in [-1.0, 1.0]:
 		var n := "FootR" if side < 0 else "FootL"
 		var c: float = phase + (0.0 if side < 0 else PI)
@@ -401,7 +495,6 @@ func _animate(dt: float) -> void:
 		w.position = w.position.lerp(p, f)
 		w.rotation = w.rotation.lerp(r, f)
 
-	# Eller: aynı taraftaki ayağa tam ters salınır (+cos(c)); koşarken yukarıda pompalar
 	for side in [-1.0, 1.0]:
 		var n := "HandR" if side < 0 else "HandL"
 		var c: float = phase + (0.0 if side < 0 else PI)
@@ -420,7 +513,6 @@ func _animate(dt: float) -> void:
 		w.position = w.position.lerp(p, f)
 		w.rotation = w.rotation.lerp(r, f)
 
-	# Gövde: adım geçişinde yükselip basışta çöker, ters omuz burulması + yana ağırlık aktarımı
 	var body: Node3D = parts["Body"]
 	var bp: Vector3 = rest["Body"]
 	bp.y += absf(sin(phase)) * lerpf(0.04, 0.075, kr) * kw + breathe * 0.008 * idle - land * 0.07 + (0.04 if air else 0.0)
@@ -428,10 +520,9 @@ func _animate(dt: float) -> void:
 	body.rotation = body.rotation.lerp(
 		Vector3(0.06 * kw + 0.19 * kr, cos(phase) * lerpf(0.09, 0.15, kr) * kw, sin(phase) * 0.06 * kw), f)
 	var sq := 1.0 + breathe * 0.015 * idle - land * 0.12 + (0.05 if air else 0.0)
-	var side_sq := 1.0 + (1.0 - sq) * 0.5 # hacim korunsun
+	var side_sq := 1.0 + (1.0 - sq) * 0.5
 	body.scale = body.scale.lerp(Vector3(side_sq, sq, side_sq), f)
 
-	# Kafa: gövdeyle birlikte iner kalkar; yönü fareyi gövdeye göre sınırlı izler, bakışla eğilir
 	var hp: Vector3 = rest["Head"]
 	hp.y += (body.position.y - rest["Body"].y) * 1.1 + breathe * 0.01 * idle
 	head.position = head.position.lerp(hp, f)
@@ -441,7 +532,7 @@ func _animate(dt: float) -> void:
 	head.rotation.z = lerpf(head.rotation.z, -sin(phase) * 0.045 * kw, f)
 
 
-# ---------- Proximity Sesli Sohbet ve Ağız Hareketi ----------
+# ---------- Proximity Sesli Sohbet ve Ağız/Göz Animasyonu ----------
 
 func set_display_name(n: String) -> void:
 	_base_tag = n
@@ -461,7 +552,7 @@ func _setup_voice_capture() -> void:
 		bus = AudioServer.bus_count
 		AudioServer.add_bus(bus)
 		AudioServer.set_bus_name(bus, VOICE_BUS)
-		AudioServer.set_bus_mute(bus, true) # kendi sesimiz yankı yapmasın
+		AudioServer.set_bus_mute(bus, true)
 		AudioServer.add_bus_effect(bus, AudioEffectCapture.new(), 0)
 	for i in AudioServer.get_bus_effect_count(bus):
 		var ef := AudioServer.get_bus_effect(bus, i)
@@ -485,7 +576,7 @@ func _setup_voice_playback() -> void:
 	_voice_player.unit_size = VOICE_UNIT_SIZE
 	_voice_player.max_distance = VOICE_MAX_DIST
 	_voice_player.panning_strength = 1.15
-	_voice_player.volume_db = 0.0 # clipping/patlama olmaması için +0 dB temiz kazanç
+	_voice_player.volume_db = 0.0
 	_voice_player.max_db = 2.0
 	head.add_child(_voice_player)
 	_voice_player.play()
@@ -511,7 +602,6 @@ func _process_voice_capture(dt: float) -> void:
 		_voice_accum.clear()
 		_resamp_pos = 0.0
 		return
-	# 1. derece High-Pass (~90 Hz: DC/nefes uğultusu) + Low-Pass (~7.5 kHz: aliasing/parazit keser)
 	var mix_rate := maxf(AudioServer.get_mix_rate(), 16000.0)
 	var hp_a := 1.0 / (1.0 + TAU * 90.0 / mix_rate)
 	var lp_a := clampf(TAU * 7500.0 / (mix_rate + TAU * 7500.0), 0.05, 1.0)
@@ -526,7 +616,6 @@ func _process_voice_capture(dt: float) -> void:
 		_hp_prev_in = x
 		_hp_prev_out = hp
 		_lp_prev += lp_a * (hp - _lp_prev)
-		# Yumuşak limiter + headroom (0.85 tavanı: dijital patlama sıfır)
 		var y := 0.85 * tanh(_lp_prev * 1.05)
 		mono[i] = y
 		sum_sq += y * y
@@ -544,7 +633,6 @@ func _process_voice_capture(dt: float) -> void:
 		_resamp_pos = 0.0
 		_resamp_prev = mono[n - 1]
 		return
-	# Örnek atlamayan sürekli fazlı lineer resampler (önceki tamponun son örneğini korur)
 	var step := mix_rate / float(VOICE_RATE)
 	while _resamp_pos < float(n):
 		var idx := int(floor(_resamp_pos))
@@ -553,7 +641,7 @@ func _process_voice_capture(dt: float) -> void:
 		var s1 := mono[mini(idx + 1, n - 1)]
 		_voice_accum.append(lerpf(s0, s1, frac))
 		_resamp_pos += step
-	_resamp_pos -= float(n) # negatif olabilir (-1..0), sonraki çağrıda _resamp_prev ile eksiksiz devam eder
+	_resamp_pos -= float(n)
 	_resamp_prev = mono[n - 1]
 	while _voice_accum.size() >= VOICE_CHUNK:
 		var pcm := PackedByteArray()
@@ -595,7 +683,6 @@ func _pump_voice_playback() -> void:
 		return
 	if _voice_gen_cap < avail:
 		_voice_gen_cap = avail
-	# Konuşma başlangıcında yalnızca 1 kez 60 ms ön-tampon biriktir; sonra kesintisiz akıt
 	if not _rx_playing:
 		if _rx_buf.size() < VOICE_PREBUF:
 			return
@@ -605,17 +692,15 @@ func _pump_voice_playback() -> void:
 	if take > 0:
 		var out := PackedVector2Array()
 		out.resize(take)
-		var fade_step := 1.0 / 120.0 # 5 ms yumuşak fade-in
+		var fade_step := 1.0 / 120.0
 		for i in take:
 			_rx_fade = minf(_rx_fade + fade_step, 1.0)
 			var s := _rx_buf[i] * _rx_fade
 			_rx_last_s = s
 			out[i] = Vector2(s, s)
-		_voice_pb.push_buffer(out) # tek C++ çağrısıyla kesintisiz aktarım
+		_voice_pb.push_buffer(out)
 		_rx_buf = _rx_buf.slice(take)
 		return
-	# _rx_buf boş ama AudioStreamGenerator içinde hâlâ çalınan ses olabilir!
-	# Yalnızca jeneratör tamponu da neredeyse bittiğinde (< 8 ms kaldıysa) yumuşak fade-out yap.
 	var queued_in_gen := _voice_gen_cap - avail
 	if queued_in_gen <= 192:
 		var tail := mini(avail, 120)
@@ -638,7 +723,6 @@ func _process_voice_remote(dt: float) -> void:
 	_update_shout_bubble()
 
 
-## Uzaktaki oyuncu bağırırken başında tezgahındaki bir ürünü öven pazarcı lafı çıkar.
 func _update_shout_bubble() -> void:
 	if _shout_lbl == null:
 		return
@@ -646,7 +730,7 @@ func _update_shout_bubble() -> void:
 	if on and not _shout_lbl.visible:
 		_shout_lbl.text = _pick_shout_call()
 	_shout_lbl.visible = on
-	_shout_lbl.scale = Vector3.ONE * (0.85 + clampf(shout_power, 0.0, 1.35) * 0.3) # bağırma gücü büyüdükçe balon büyür
+	_shout_lbl.scale = Vector3.ONE * (0.85 + clampf(shout_power, 0.0, 1.35) * 0.3)
 
 
 func _pick_shout_call() -> String:
@@ -659,7 +743,7 @@ func _pick_shout_call() -> String:
 	if stocked.is_empty():
 		return "📢 Gel gel! Buraya!"
 	var pick: Dictionary = stocked.pick_random()
-	return "📢 " + str(SHOUT_CALLS.pick_random()) % [StallScript.ITEMS[pick["item"]]["name"], int(pick["price"])]
+	return "📢 " + str(SHOUT_CALLS.pick_random()) % [Produce.ITEMS[pick["item"]]["name"], int(pick["price"])]
 
 
 func _animate_mouth(dt: float) -> void:
@@ -667,18 +751,14 @@ func _animate_mouth(dt: float) -> void:
 		return
 	var rate := 28.0 if talk_level > talk_smooth else 14.0
 	talk_smooth = lerpf(talk_smooth, talk_level, minf(dt * rate, 1.0))
-	# B ile bağırırken de ağız açılsın; talk_smooth'a yazılmaz çünkü mic_shout ondan hesaplanıyor (geri besleme olur)
 	var open := maxf(talk_smooth, clampf(shout_power, 0.0, 1.0))
-	# Desibele göre ağız dikeyde belirgin açılır, hafif genişler ve çeneye doğru iner
 	mouth_node.scale = Vector3(1.0 + open * 0.35, 1.0 + open * 2.5, 1.0 + open * 0.4)
 	mouth_node.position = mouth_rest + Vector3(0.0, -open * 0.016, open * 0.004)
 
 
-## Canlı göz animasyonu: doğal göz kırpma, hafif bakış kaydırma (saccade) ve konuşurken göz parlaması.
 func _animate_eyes(dt: float) -> void:
 	if eye_l == null or eye_r == null:
 		return
-	# 1. Doğal göz kırpma (her 2.2 - 5.2 sn, %25 çift kırpma)
 	if _blink_t > 0.0:
 		_blink_t = maxf(_blink_t - dt, 0.0)
 	else:
@@ -692,14 +772,12 @@ func _animate_eyes(dt: float) -> void:
 	var sx := talk_pop + (1.0 - minf(sy, 1.0)) * 0.12
 	eye_l.scale = Vector3(sx, sy, 1.0)
 	eye_r.scale = Vector3(sx, sy, 1.0)
-
-	# 2. Canlı bakış kaydırma (saccade): donuk sabit bakış yerine ufak doğal göz hareketleri
 	if pupil_l and pupil_r:
 		_saccade_cd -= dt
 		if _saccade_cd <= 0.0:
 			_saccade_cd = randf_range(1.1, 3.0)
 			if randf() < 0.45:
-				_saccade_target = Vector2.ZERO # merkeze dön
+				_saccade_target = Vector2.ZERO
 			else:
 				_saccade_target = Vector2(randf_range(-0.0085, 0.0085), randf_range(-0.005, 0.006))
 		_saccade_cur = _saccade_cur.lerp(_saccade_target, minf(dt * 18.0, 1.0))
@@ -708,7 +786,7 @@ func _animate_eyes(dt: float) -> void:
 		pupil_r.position = p_off
 
 
-# ---------- Tezgah, Kasa, Fiyat Etiketi ve Müşteri Satış Etkileşimi ----------
+# ---------- Etkileşim, Hedef Vurgusu, Toptancı, Satış ve Ekonomi ----------
 
 func _my_peer_id() -> int:
 	return name.to_int()
@@ -716,6 +794,11 @@ func _my_peer_id() -> int:
 
 func _find_world() -> Node:
 	return get_parent().get_parent() if get_parent() else null
+
+
+func _find_main() -> Node:
+	var w := _find_world()
+	return w.get_parent() if w else null
 
 
 func _find_stall(owner_id: int) -> Node:
@@ -736,58 +819,128 @@ func _ray_target() -> Area3D:
 	return _ray.get_collider() as Area3D
 
 
+func _update_highlight(area: Area3D, show_hl: bool) -> void:
+	has_target = show_hl
+	if _hl_box == null:
+		return
+	if not show_hl or area == null or Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
+		_hl_box.hide()
+		return
+	_hl_box.show()
+	_hl_box.global_transform = Transform3D(area.global_transform.basis.orthonormalized(), area.global_position)
+	var sz: Vector3 = area.get_meta("hl_size", Vector3(0.7, 0.5, 0.7))
+	var pulse := 1.02 + sin(Time.get_ticks_msec() * 0.01) * 0.025
+	_hl_box.scale = sz * pulse
+
+
 func _process_interaction(dt: float) -> void:
-	# Sol tık basılı tutuluyorsa seri ürün dizme
+	var my_st := _find_stall(_my_peer_id())
 	if _place_held and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		_place_cd -= dt
 		if _place_cd <= 0.0:
+			var fast: bool = my_st != null and my_st.has_upgrade("big_crate")
 			if _try_place_once():
-				_place_cd = 0.17
+				_place_cd = 0.10 if fast else 0.17
 			else:
-				_place_cd = 0.12
-	# Bağlamsal etkileşim ipucu
+				_place_cd = 0.11
+
 	interact_hint = ""
 	var area := _ray_target()
+	var show_hl := false
 	if area == null:
+		_update_highlight(null, false)
 		if held_crate:
+			var cap: int = my_st.crate_capacity() if my_st else StallScript.CRATE_CAPACITY
 			if held_count > 0:
-				interact_hint = "Elde: %s Kasası (%d/10)  •  [Q] Fırlat" % [StallScript.ITEMS[held_item]["name"], held_count]
+				interact_hint = "Elde: %s Kasası (%d/%d)  •  [Q] Fırlat" % [Produce.ITEMS[held_item]["name"], held_count, cap]
 			else:
 				interact_hint = "Elde: Boş Kasa  •  [Q] Uzağa Fırlat"
 		return
+
 	var kind: String = str(area.get_meta("kind", ""))
 	var my_id := _my_peer_id()
+	var main := _find_main()
 	match kind:
 		"crate":
 			var owner_id: int = int(area.get_meta("stall_owner", -1))
 			var item_id: String = str(area.get_meta("item_id", ""))
-			var st := _find_stall(owner_id)
-			if st and owner_id == my_id and StallScript.ITEMS.has(item_id):
-				var nm: String = StallScript.ITEMS[item_id]["name"]
-				if st.has_supply_crate(item_id):
-					interact_hint = "[E] %s Kasası Al (10 ad.)" % nm if not held_crate else "Önce elindeki kasayı [Q] ile fırlat"
+			if owner_id == my_id and Produce.ITEMS.has(item_id):
+				show_hl = true
+				var nm: String = Produce.ITEMS[item_id]["name"]
+				var cost: int = main.get_crate_cost(my_id, item_id, false) if main else int(Produce.ITEMS[item_id]["crate_cost"])
+				var cap: int = my_st.crate_capacity() if my_st else StallScript.CRATE_CAPACITY
+				if held_crate:
+					interact_hint = "Önce elindeki kasayı [Q] ile fırlat"
+				elif cost == 0:
+					interact_hint = "[E] %s Kasası Al — ACİL VERESİYE (0 TL, %d ad.)" % [nm, cap]
 				else:
-					interact_hint = "[E] Yeni %s Kasası Getir" % nm
+					interact_hint = "[E] %s Kasası Satın Al — %d TL (%d ad.)" % [nm, cost, cap]
+		"wholesale_crate":
+			var item_id: String = str(area.get_meta("item_id", ""))
+			if Produce.ITEMS.has(item_id):
+				show_hl = true
+				var nm: String = Produce.ITEMS[item_id]["name"]
+				var cost: int = main.get_crate_cost(my_id, item_id, true) if main else int(Produce.ITEMS[item_id]["crate_cost"])
+				var cap: int = my_st.crate_capacity() if my_st else StallScript.CRATE_CAPACITY
+				if held_crate:
+					interact_hint = "Önce elindeki kasayı [Q] ile fırlat"
+				else:
+					interact_hint = "[E] Toptancıdan %s Kasası Al — %d TL (%d ad.)" % [nm, cost, cap]
 		"slot":
 			var owner_id: int = int(area.get_meta("stall_owner", -1))
 			var idx: int = int(area.get_meta("slot_idx", -1))
 			var st := _find_stall(owner_id)
 			if st and owner_id == my_id and idx >= 0 and idx < st.slots.size():
+				show_hl = true
 				var sl: Dictionary = st.slots[idx]
 				var parts_txt := PackedStringArray()
 				if held_crate and held_count > 0 and st.can_place(idx, held_item):
-					parts_txt.append("[Sol Tık] %s Diz (%d kaldı)" % [StallScript.ITEMS[held_item]["name"], held_count])
+					parts_txt.append("[Sol Tık] %s Diz (%d kaldı)" % [Produce.ITEMS[held_item]["name"], held_count])
 				elif held_crate and held_count == 0:
 					parts_txt.append("Kasa boş! [Q] Fırlat")
 				elif not held_crate and sl["count"] == 0:
-					parts_txt.append("Arkadan [E] ile kasa al")
+					parts_txt.append("Arka depodan veya Toptancıdan [E] ile kasa al")
 				if sl["item"] != "" and int(sl["count"]) > 0:
-					parts_txt.append("[Tekerlek / Z-X] Fiyat: %d TL" % int(sl["price"]))
+					var badge := _price_badge(sl["item"], int(sl["price"]))
+					parts_txt.append("[Tekerlek / Z-X] %d TL (%s)" % [int(sl["price"]), badge])
 				interact_hint = "  •  ".join(parts_txt)
+		"bell":
+			var owner_id: int = int(area.get_meta("stall_owner", -1))
+			if owner_id == my_id and my_st and my_st.has_upgrade("bell"):
+				show_hl = true
+				if my_st.bell_cd > 0.0:
+					interact_hint = "🔔 Tezgah Zili hazırlanıyor (%.0f sn)" % ceilf(my_st.bell_cd)
+				else:
+					interact_hint = "[E / F] Pirinç Zili Çal! (10 sn güçlü müşteri çekimi)"
+		"upgrade_board":
+			var owner_id: int = int(area.get_meta("stall_owner", -1))
+			if owner_id == my_id:
+				show_hl = true
+				interact_hint = "[E / U] Tezgah Geliştirmeleri (Megafon, Işıklar, Geniş Kasa, Zil)"
 		"customer":
 			var c := _find_customer(str(area.get_meta("customer_name", "")))
 			if c:
-				interact_hint = c.get_next_sell_hint(my_id)
+				var h: String = c.get_next_sell_hint(my_id)
+				if h != "":
+					show_hl = true
+					interact_hint = h
+	_update_highlight(area, show_hl)
+
+
+func _price_badge(item_id: String, price: int) -> String:
+	var w := _find_world()
+	var sg := w.get_node_or_null("Stalls") if w else null
+	var all_stalls := sg.get_children() if sg else []
+	var ev := str(w.get_meta("event_item", "")) if w else ""
+	var fp := StallScript.fair_price(item_id, all_stalls, ev)
+	var r := float(price) / maxf(fp, 1.0)
+	if float(price) > StallScript.gouge_ceiling(item_id, ev):
+		return "⚠️ Zabıta Riski!"
+	if r < 0.88:
+		return "Ucuz"
+	if r <= 1.15:
+		return "Normal"
+	return "Pahalı"
 
 
 func _do_interact() -> void:
@@ -796,21 +949,35 @@ func _do_interact() -> void:
 	if area == null:
 		return
 	var kind: String = str(area.get_meta("kind", ""))
-	if kind == "crate":
-		var owner_id: int = int(area.get_meta("stall_owner", -1))
-		var item_id: String = str(area.get_meta("item_id", ""))
-		var st := _find_stall(owner_id)
-		if st and owner_id == my_id and StallScript.ITEMS.has(item_id):
-			if st.has_supply_crate(item_id):
-				if not held_crate and st.request_take_crate(item_id):
-					set_held_crate(true, item_id, StallScript.CRATE_CAPACITY)
-			else:
-				st.request_restock_crate(item_id)
-	elif kind == "customer":
-		_do_sell_to_customer(false)
+	var main := _find_main()
+	match kind:
+		"crate":
+			var owner_id: int = int(area.get_meta("stall_owner", -1))
+			var item_id: String = str(area.get_meta("item_id", ""))
+			if owner_id == my_id and not held_crate and main:
+				main.request_buy_crate(item_id, false)
+		"wholesale_crate":
+			var item_id: String = str(area.get_meta("item_id", ""))
+			if not held_crate and main:
+				main.request_buy_crate(item_id, true)
+		"bell":
+			var owner_id: int = int(area.get_meta("stall_owner", -1))
+			if owner_id == my_id:
+				_do_ring_bell()
+		"upgrade_board":
+			var owner_id: int = int(area.get_meta("stall_owner", -1))
+			if owner_id == my_id:
+				open_upgrade_shop.emit()
+		"customer":
+			_do_sell_to_customer(false)
 
 
-## Baktığımız müşteriye 1 ürün satar. insist=true: pazarlık teklifini reddedip tam fiyatta ısrar eder (R).
+func _do_ring_bell() -> void:
+	var st := _find_stall(_my_peer_id())
+	if st and st.has_upgrade("bell") and global_position.distance_to(st.global_position) < 4.5:
+		st.request_ring_bell()
+
+
 func _do_sell_to_customer(insist: bool) -> void:
 	var area := _ray_target()
 	if area == null or str(area.get_meta("kind", "")) != "customer":
@@ -823,7 +990,7 @@ func _do_sell_to_customer(insist: bool) -> void:
 		else:
 			var res: Dictionary = c.try_sell_one_from(my_id, insist)
 			if not res.is_empty():
-				award_money(int(res["price"]))
+				award_money(int(res["price"]), int(res.get("tip", 0)), bool(res.get("haggle", false)))
 
 
 func _try_place_once() -> bool:
@@ -841,6 +1008,7 @@ func _try_place_once() -> bool:
 		return false
 	var from_p := _fp_crate_anchor.global_position if _fp_crate_anchor else _held_anchor.global_position
 	if st.request_place(idx, held_item, from_p):
+		_place_kick = 1.0
 		set_held_crate(true, held_item, held_count - 1)
 		return true
 	return false
@@ -854,6 +1022,7 @@ func _do_throw_crate() -> void:
 	var vel := fwd * 9.5 + Vector3.UP * 3.4 + velocity * 0.35
 	var item_id := held_item
 	var cnt := held_count
+	add_trauma(0.22)
 	set_held_crate(false, "", 0)
 	if Net.online():
 		rpc_throw_crate.rpc(item_id, cnt, start_p, vel)
@@ -866,11 +1035,23 @@ func rpc_throw_crate(item_id: String, count: int, start_p: Vector3, vel: Vector3
 	var w := _find_world()
 	if w == null:
 		return
+	Sfx.play_3d("crate_throw", start_p, w, -3.0)
 	var rb := RigidBody3D.new()
 	rb.mass = 1.2
+	rb.contact_monitor = true
+	rb.max_contacts_reported = 2
 	rb.position = start_p
 	rb.linear_velocity = vel
 	rb.angular_velocity = Vector3(randf_range(-8.0, 8.0), randf_range(-6.0, 6.0), randf_range(-8.0, 8.0))
+	rb.add_to_group("thrown_crates")
+	rb.set_meta("owner_id", _my_peer_id())
+	rb.set_meta("hit_done", false)
+	rb.body_entered.connect(func(_b):
+		if is_instance_valid(rb) and not bool(rb.get_meta("hit_done", false)):
+			rb.set_meta("hit_done", true)
+			Sfx.play_3d("crate_hit", rb.global_position, w, -3.0)
+			VFX.burst_dust(w, rb.global_position, Color(0.85, 0.76, 0.62), 6)
+	)
 	var cs := CollisionShape3D.new()
 	var sh := BoxShape3D.new()
 	sh.size = Vector3(0.42, 0.20, 0.34)
@@ -878,9 +1059,8 @@ func rpc_throw_crate(item_id: String, count: int, start_p: Vector3, vel: Vector3
 	rb.add_child(cs)
 	rb.add_child(StallScript.build_held_crate(item_id, count))
 	w.add_child(rb)
-	# 10 sn sonra etrafta birikmemesi için temizle
 	var tw := rb.create_tween()
-	tw.tween_interval(9.5)
+	tw.tween_interval(14.0)
 	tw.tween_property(rb, "scale", Vector3.ONE * 0.01, 0.5)
 	tw.tween_callback(rb.queue_free)
 
@@ -907,9 +1087,31 @@ func set_held_crate(has_crate: bool, item_id: String, count: int) -> void:
 
 @rpc("authority", "call_local", "reliable")
 func rpc_set_held_crate(has_crate: bool, item_id: String, count: int) -> void:
+	_apply_held_crate(has_crate, item_id, count)
+
+
+## Sunucu kasa satın alımını onayladığında oyuncuya kasa verir.
+func give_crate_synced(item_id: String, capacity: int) -> void:
+	if Net.online():
+		rpc_give_crate.rpc(item_id, capacity)
+	else:
+		rpc_give_crate(item_id, capacity)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func rpc_give_crate(item_id: String, capacity: int) -> void:
+	if Net.online() and multiplayer.get_remote_sender_id() not in [0, 1]:
+		return
+	_apply_held_crate(true, item_id, capacity)
+	Sfx.play_3d("crate_pick", global_position + Vector3(0, 0.9, 0), self, -3.0)
+	if is_multiplayer_authority() and _fp_crate_anchor:
+		_place_kick = -0.65
+
+
+func _apply_held_crate(has_crate: bool, item_id: String, count: int) -> void:
 	held_crate = has_crate
 	held_item = item_id if has_crate else ""
-	held_count = clampi(count, 0, StallScript.CRATE_CAPACITY) if has_crate else 0
+	held_count = clampi(count, 0, 14) if has_crate else 0
 	if _held_visual:
 		_held_visual.queue_free()
 		_held_visual = null
@@ -925,18 +1127,107 @@ func rpc_set_held_crate(has_crate: bool, item_id: String, count: int) -> void:
 			_held_anchor.add_child(_held_visual)
 
 
-func award_money(amount: int) -> void:
-	if amount <= 0:
+func award_money(amount: int, tip := 0, was_haggle := false) -> void:
+	if amount <= 0 and tip <= 0:
 		return
 	if Net.online():
-		rpc_add_money.rpc(amount)
+		rpc_add_money.rpc(amount, tip, was_haggle)
 	else:
-		rpc_add_money(amount)
+		rpc_add_money(amount, tip, was_haggle)
 
 
 @rpc("any_peer", "call_local", "reliable")
-func rpc_add_money(amount: int) -> void:
+func rpc_add_money(amount: int, tip := 0, was_haggle := false) -> void:
 	if Net.online() and multiplayer.get_remote_sender_id() not in [0, 1]:
-		return # yalnızca host para verebilir
-	money += amount
-	money_earned.emit(amount, money)
+		return
+	var total_gain := amount + tip
+	money += total_gain
+	daily_revenue += total_gain
+	daily_tips += tip
+	if amount > 0:
+		daily_sold += 1
+	if was_haggle:
+		daily_haggles += 1
+	money_earned.emit(total_gain, money, tip)
+
+
+func spend_money(amount: int, reason := "Kasa") -> void:
+	if amount <= 0:
+		return
+	if Net.online():
+		rpc_spend_money.rpc(amount, reason, false)
+	else:
+		rpc_spend_money(amount, reason, false)
+
+
+func apply_fine(amount: int, reason := "Zabıta Cezası") -> void:
+	var actual := mini(amount, money)
+	if Net.online():
+		rpc_spend_money.rpc(actual, reason, true)
+	else:
+		rpc_spend_money(actual, reason, true)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func rpc_spend_money(amount: int, reason: String, is_fine: bool) -> void:
+	if Net.online() and multiplayer.get_remote_sender_id() not in [0, 1]:
+		return
+	money = maxi(money - amount, 0)
+	if is_fine:
+		daily_fines += amount
+		if is_multiplayer_authority():
+			add_trauma(0.42)
+	else:
+		daily_spent += amount
+	money_spent.emit(amount, money, reason)
+
+
+func reset_daily_stats_synced() -> void:
+	if Net.online():
+		rpc_reset_daily_stats.rpc()
+	else:
+		rpc_reset_daily_stats()
+
+
+@rpc("any_peer", "call_local", "reliable")
+func rpc_reset_daily_stats() -> void:
+	if Net.online() and multiplayer.get_remote_sender_id() not in [0, 1]:
+		return
+	daily_revenue = 0
+	daily_spent = 0
+	daily_fines = 0
+	daily_tips = 0
+	daily_sold = 0
+	daily_haggles = 0
+
+
+func net_profit() -> int:
+	return daily_revenue - daily_spent - daily_fines
+
+
+func export_snapshot() -> Dictionary:
+	return {
+		"id": _my_peer_id(),
+		"pos": global_position,
+		"money": money,
+		"daily_revenue": daily_revenue,
+		"daily_spent": daily_spent,
+		"daily_fines": daily_fines,
+		"daily_tips": daily_tips,
+		"daily_sold": daily_sold,
+		"daily_haggles": daily_haggles,
+		"held_crate": held_crate,
+		"held_item": held_item,
+		"held_count": held_count,
+	}
+
+
+func apply_snapshot(d: Dictionary) -> void:
+	money = int(d.get("money", STARTING_MONEY))
+	daily_revenue = int(d.get("daily_revenue", 0))
+	daily_spent = int(d.get("daily_spent", 0))
+	daily_fines = int(d.get("daily_fines", 0))
+	daily_tips = int(d.get("daily_tips", 0))
+	daily_sold = int(d.get("daily_sold", 0))
+	daily_haggles = int(d.get("daily_haggles", 0))
+	_apply_held_crate(bool(d.get("held_crate", false)), str(d.get("held_item", "")), int(d.get("held_count", 0)))

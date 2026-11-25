@@ -35,9 +35,13 @@ Copy-Item steam_appid.txt build/
 $zip = "build/Bazar_${tag}_Windows.zip"
 Compress-Archive -Path build/Bazar.exe, build/*.dll, build/steam_appid.txt -DestinationPath $zip
 
-# 4) Commit, etiket, Release
-git add project.godot
-git commit -m "Sürüm $tag"
-git push
-gh release create $tag $zip --title $tag --notes $Notes
+# 4) Commit, etiket, Release. git uyarıları stderr'e yazar: PS 5.1'de hata sayılmasın, çıkış koduna bak.
+$ErrorActionPreference = "Continue"
+function Invoke-Step { & $args[0] $args[1..($args.Count - 1)] 2>&1 | Out-Host; if ($LASTEXITCODE) { throw "$($args -join ' ') başarısız." } }
+if (git status --porcelain project.godot) {
+    Invoke-Step git add project.godot
+    Invoke-Step git commit -m "Sürüm $tag"
+}
+Invoke-Step git push
+Invoke-Step gh release create $tag $zip --title $tag --notes $Notes
 Write-Host "Yayınlandı: https://github.com/Obuto45/bazar/releases/tag/$tag"

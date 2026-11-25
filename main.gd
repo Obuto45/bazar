@@ -36,6 +36,7 @@ func _ready() -> void:
 	Net.lobby_changed.connect(_refresh)
 	Net.left.connect(_back_to_menu)
 	Net.invited.connect(_on_invited)
+	Updater.status.connect(func(m): info.text = m)
 	multiplayer.peer_connected.connect(_on_peer_joined)
 	multiplayer.peer_disconnected.connect(_on_peer_left)
 	_set_menu_bg(true)
@@ -264,7 +265,11 @@ func _build_ui() -> void:
 
 	info = _lbl(ui, "", 15, 0.85)
 	info.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
-	info.offset_left = 80; info.offset_right = -40; info.offset_top = -60; info.offset_bottom = -24
+	info.offset_left = 80; info.offset_right = -230; info.offset_top = -60; info.offset_bottom = -24
+	var ver := _lbl(ui, "sürüm " + Updater.version(), 14, 0.55)
+	ver.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_RIGHT)
+	ver.offset_left = -200; ver.offset_right = -24; ver.offset_top = -50; ver.offset_bottom = -24
+	ver.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	invite_box = VBoxContainer.new() # gelen davet sağ üstte
 	invite_box.set_anchors_preset(Control.PRESET_TOP_RIGHT)
 	invite_box.offset_left = -380; invite_box.offset_right = -30; invite_box.offset_top = 30

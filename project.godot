@@ -10,6 +10,7 @@ run/main_scene="res://main.tscn"
 
 Net="*res://net.gd"
 Settings="*res://settings.gd"
+Updater="*res://updater.gd"
 
 [display]
 

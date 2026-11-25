@@ -617,7 +617,7 @@ func _process(dt: float) -> void:
 			voice_icon.queue_redraw()
 			voice_bar.size.x = 0.0 if muted else 52.0 * lvl
 			voice_bar.color = Color(0.95, 0.3, 0.25) if muted else (Color(1.0, 0.72, 0.2) if lvl > 0.7 else Color(0.4, 0.95, 0.5))
-			voice_lbl.text = "M: KAPALI" if muted else ("BAĞIRIYOR!" if me.shout_power > 0.55 else ("KONUŞUYOR" if lvl > 0.06 else "M: AÇIK"))
+			voice_lbl.text = "M: KAPALI" if muted else ("BAĞIRIYOR!" if me.shout_power > 0.55 else ("SES KISIK" if me.breath < 0.25 else ("KONUŞUYOR" if lvl > 0.06 else "M: AÇIK")))
 			interact_lbl.text = me.interact_hint
 			interact_lbl.visible = me.interact_hint != "" and not pause_wrap.visible
 	if world and customers and ((not Net.online()) or multiplayer.is_server()):

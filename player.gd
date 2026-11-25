@@ -25,6 +25,11 @@ const VOICE_DB_MIN := -46.0 # bu eşiğin altı sessizlik
 const VOICE_DB_MAX := -12.0 # tam ağız açıklığı (dB)
 const VOICE_UNIT_SIZE := 3.5 # bu mesafeye kadar tam ses (m)
 const VOICE_MAX_DIST := 22.0 # bu mesafede ses tamamen kesilir (m)
+# Bağırma nefesi: sürekli bağıran sesini kısar, susunca toparlanır (B'yi basılı tutup bırakmamayı cezalandırır)
+const SHOUT_ON := 0.55 # bu güçten sonrası "bağırma" sayılır (HUD, balon, nefes)
+const BREATH_DRAIN := 0.22 # tam güçte saniyede harcanan nefes (~4.5 sn kesintisiz bağırma)
+const BREATH_REGEN := 0.18 # susunca saniyede dolan nefes
+const SHOUT_CALLS := ["Taze %s! %d TL!", "Gel gel! %s %d lira!", "Kaçırma! %s sadece %d TL!", "Bal gibi %s! %d TL!"]
 # Oyuncu renkleri (peer id'ye göre): saç ve tişört
 const HAIRS := [Color(0.2, 0.12, 0.07), Color(0.08, 0.06, 0.05), Color(0.75, 0.55, 0.25), Color(0.55, 0.22, 0.1),
 	Color(0.4, 0.28, 0.18), Color(0.85, 0.8, 0.7)]
@@ -51,6 +56,8 @@ var held_crate := false
 var held_item := ""
 var held_count := 0
 var shout_power := 0.0 # mikrofon bağırması veya B tuşu (0..1.4)
+var breath := 1.0 # 0..1 bağırma nefesi; azaldıkça bağırma zayıflar
+var _shout_lbl: Label3D # diğer oyuncuların başında çıkan pazarcı bağırması balonu
 var interact_hint := ""
 var _place_cd := 0.0
 var _place_held := false
@@ -155,6 +162,16 @@ func _ready() -> void:
 		_setup_voice_capture()
 	else:
 		_setup_voice_playback()
+		_shout_lbl = Label3D.new()
+		_shout_lbl.position.y = 2.0
+		_shout_lbl.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		_shout_lbl.font_size = 44
+		_shout_lbl.outline_size = 12
+		_shout_lbl.modulate = Color(1.0, 0.85, 0.25)
+		_shout_lbl.outline_modulate = Color(0.25, 0.08, 0.02)
+		_shout_lbl.no_depth_test = true
+		_shout_lbl.hide()
+		add_child(_shout_lbl)
 
 
 ## glb'deki altı parçayı sarmalayıcılara taşır; saç ve tişört rengini oyuncuya göre boyar.
@@ -296,7 +313,13 @@ func _local(dt: float) -> void:
 	# Bağırma gücü: yüksek sesli mikrofon konuşması veya B tuşu (müşterileri tezgaha çeker)
 	var manual_shout := 1.0 if (captured and Input.is_action_pressed("shout")) else 0.0
 	var mic_shout := clampf((talk_smooth - 0.28) * 1.8, 0.0, 1.35) if not mic_muted else 0.0
-	shout_power = lerpf(shout_power, maxf(manual_shout, mic_shout), minf(dt * 10.0, 1.0))
+	var raw_shout := maxf(manual_shout, mic_shout)
+	if raw_shout >= SHOUT_ON:
+		breath = maxf(breath - raw_shout * BREATH_DRAIN * dt, 0.0)
+	else:
+		breath = minf(breath + BREATH_REGEN * dt, 1.0)
+	# Nefes bittikçe ses kısılır: boş nefeste bağırma gücü %25'e düşer
+	shout_power = lerpf(shout_power, raw_shout * (0.25 + 0.75 * breath), minf(dt * 10.0, 1.0))
 	if Net.online():
 		sync_state.rpc(global_position, body_yaw, look_yaw, look_pitch, spd, air, shout_power)
 
@@ -615,6 +638,31 @@ func _process_voice_remote(dt: float) -> void:
 	_remote_talk_t = maxf(_remote_talk_t - dt, 0.0)
 	talk_level = _remote_talk if _remote_talk_t > 0.0 else 0.0
 	_refresh_tag()
+	_update_shout_bubble()
+
+
+## Uzaktaki oyuncu bağırırken başında tezgahındaki bir ürünü öven pazarcı lafı çıkar.
+func _update_shout_bubble() -> void:
+	if _shout_lbl == null:
+		return
+	var on := shout_power >= SHOUT_ON
+	if on and not _shout_lbl.visible:
+		_shout_lbl.text = _pick_shout_call()
+	_shout_lbl.visible = on
+	_shout_lbl.scale = Vector3.ONE * (0.85 + clampf(shout_power, 0.0, 1.35) * 0.3) # bağırma gücü büyüdükçe balon büyür
+
+
+func _pick_shout_call() -> String:
+	var st := _find_stall(_my_peer_id())
+	var stocked: Array = []
+	if st:
+		for sl: Dictionary in st.slots:
+			if sl["item"] != "" and int(sl["count"]) > 0:
+				stocked.append(sl)
+	if stocked.is_empty():
+		return "📢 Gel gel! Buraya!"
+	var pick: Dictionary = stocked.pick_random()
+	return "📢 " + str(SHOUT_CALLS.pick_random()) % [StallScript.ITEMS[pick["item"]]["name"], int(pick["price"])]
 
 
 func _animate_mouth(dt: float) -> void:
@@ -622,9 +670,11 @@ func _animate_mouth(dt: float) -> void:
 		return
 	var rate := 28.0 if talk_level > talk_smooth else 14.0
 	talk_smooth = lerpf(talk_smooth, talk_level, minf(dt * rate, 1.0))
+	# B ile bağırırken de ağız açılsın; talk_smooth'a yazılmaz çünkü mic_shout ondan hesaplanıyor (geri besleme olur)
+	var open := maxf(talk_smooth, clampf(shout_power, 0.0, 1.0))
 	# Desibele göre ağız dikeyde belirgin açılır, hafif genişler ve çeneye doğru iner
-	mouth_node.scale = Vector3(1.0 + talk_smooth * 0.35, 1.0 + talk_smooth * 2.5, 1.0 + talk_smooth * 0.4)
-	mouth_node.position = mouth_rest + Vector3(0.0, -talk_smooth * 0.016, talk_smooth * 0.004)
+	mouth_node.scale = Vector3(1.0 + open * 0.35, 1.0 + open * 2.5, 1.0 + open * 0.4)
+	mouth_node.position = mouth_rest + Vector3(0.0, -open * 0.016, open * 0.004)
 
 
 ## Canlı göz animasyonu: doğal göz kırpma, hafif bakış kaydırma (saccade) ve konuşurken göz parlaması.

@@ -241,12 +241,14 @@ func _evaluate_stalls() -> void:
 		var avg_price_score := price_sum / float(matched)
 		if avg_price_score < 0.12:
 			continue # fahiş fiyata hiç uğramaz
-		# Oyuncunun bağırma gücü (mikrofon desibeli veya B tuşu) — tezgahına yakınsa geçerli
+		# Oyuncunun bağırma gücü (mikrofon desibeli veya B tuşu) — tezgahına yakınsa geçerli.
+		# Ses bağıranın ağzından yayılır: sönüm müşteri-oyuncu mesafesiyle hesaplanır.
 		var shout_score := 0.0
 		var owner := _find_player(st.owner_id)
 		if owner and owner.global_position.distance_to(st.global_position) < 4.5:
 			var sp: float = owner.shout_power
-			shout_score = clampf(sp / (1.0 + dist * 0.12), 0.0, 1.2)
+			var heard := global_position.distance_to(owner.global_position)
+			shout_score = clampf(sp / (1.0 + heard * 0.12), 0.0, 1.2)
 		# Çeşitlilik ve yakınlık bonusu
 		var variety := clampf(float(matched) / float(maxi(wants.size(), 1)), 0.0, 1.0)
 		var proximity := clampf(1.0 - dist / 15.0, 0.0, 1.0)

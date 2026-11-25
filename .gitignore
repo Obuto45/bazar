@@ -1,0 +1,15 @@
+# Godot önbelleği
+.godot/
+
+# Derleme çıktıları
+build/
+*.zip
+*.rar
+
+# Godot editörünün geçici kilit kopyaları
+~*.dll
+
+# Kişisel ayarlar
+.claude/settings.local.json
+.claude-flow/
+.swarm/

@@ -13,3 +13,4 @@ build/
 .claude/settings.local.json
 .claude-flow/
 .swarm/
+*.blend1

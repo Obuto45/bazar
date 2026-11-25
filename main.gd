@@ -51,7 +51,14 @@ func _ready() -> void:
 		else:
 			await get_tree().create_timer(0.5).timeout
 			Net.join_local()
-		await get_tree().create_timer(5.0).timeout
+		await get_tree().create_timer(3.5).timeout
+		var me = players.get_node_or_null(str(multiplayer.get_unique_id())) if players else null
+		if me and "host" in args:
+			me.look_yaw += 1.0 # kafa döner, gövde sınır içinde yerinde kalmalı
+		elif me and players.has_node("1"): # istemci host'a bakar
+			var d: Vector3 = players.get_node("1").global_position - me.global_position
+			me.look_yaw = atan2(-d.x, -d.z)
+		await get_tree().create_timer(1.5).timeout
 		get_viewport().get_texture().get_image().save_png(OS.get_user_data_dir() + "/mptest_%s.png" % ("host" if "host" in args else "join"))
 		get_tree().quit()
 		return
@@ -62,6 +69,10 @@ func _ready() -> void:
 		_on_start()
 		await get_tree().create_timer(2.0).timeout
 		get_viewport().get_texture().get_image().save_png(OS.get_user_data_dir() + "/selftest_game.png")
+		var me = players.get_node("1")
+		me.look_pitch = -1.1 # aşağı bak: eller ve ayaklar görünmeli
+		await get_tree().create_timer(0.6).timeout
+		get_viewport().get_texture().get_image().save_png(OS.get_user_data_dir() + "/selftest_down.png")
 		get_tree().quit()
 
 
@@ -431,7 +442,7 @@ func _set_menu_bg(on: bool) -> void:
 		p.color_id = i * 3 + 1
 		p.name = "Npc%d" % i
 		menu_bg.add_child(p)
-		walkers.append([p, randf_range(3.6, 5.5), randf() * TAU, randf_range(0.25, 0.4) * (1 if i % 2 == 0 else -1)])
+		walkers.append([p, randf_range(3.6, 5.5), randf() * TAU, randf_range(0.6, 0.85) * (1 if i % 2 == 0 else -1)])
 
 
 func _menu_anim(dt: float) -> void:
@@ -444,8 +455,9 @@ func _menu_anim(dt: float) -> void:
 		w[2] += w[3] * dt * 4.2 / w[1]
 		p.position = Vector3(cos(w[2]) * w[1], 0, sin(w[2]) * w[1])
 		var tangent := Vector3(-sin(w[2]), 0, cos(w[2])) * signf(w[3])
-		p.rig.rotation.y = atan2(tangent.x, tangent.z)
-		p.spd = 4.2 * absf(w[3]) * 3.0
+		p.body_yaw = atan2(tangent.x, tangent.z)
+		p.look_yaw = p.body_yaw + sin(menu_t * 0.7 + w[1]) * 0.5 - PI # kafa ara ara etrafa bakar
+		p.spd = 4.2 * absf(w[3]) # açısal hızla aynı: ayak kaymaz
 
 
 func _process(dt: float) -> void:

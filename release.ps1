@@ -24,16 +24,17 @@ $p = Get-Content project.godot -Raw -Encoding utf8
 $p = $p -replace 'config/version="[^"]*"', "config/version=`"$Version`""
 [IO.File]::WriteAllText("$PSScriptRoot\project.godot", $p)
 
-# 2) Dışa aktar
-Remove-Item build -Recurse -Force -ErrorAction SilentlyContinue
-New-Item -ItemType Directory build -Force | Out-Null
-& $godot --headless --path . --export-release "Windows Desktop" build/Bazar.exe
-if (-not (Test-Path build/Bazar.exe)) { throw "Export başarısız (export şablonları kurulu mu?)." }
-Copy-Item steam_appid.txt build/
+# 2) Dışa aktar: sürüme özel klasöre (açık duran eski exe kilitli olabilir)
+$out = "build/$tag"
+Remove-Item $out -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory $out -Force | Out-Null
+& $godot --headless --path . --export-release "Windows Desktop" "$out/Bazar.exe"
+if (-not (Test-Path "$out/Bazar.exe")) { throw "Export başarısız (export şablonları kurulu mu?)." }
+Copy-Item steam_appid.txt $out/
 
 # 3) Zip: dosya adı _Windows.zip ile bitmeli
 $zip = "build/Bazar_${tag}_Windows.zip"
-Compress-Archive -Path build/Bazar.exe, build/*.dll, build/steam_appid.txt -DestinationPath $zip -Force
+Compress-Archive -Path "$out/Bazar.exe", "$out/*.dll", "$out/steam_appid.txt" -DestinationPath $zip -Force
 
 # 4) Commit, etiket, Release. git uyarıları stderr'e yazar: PS 5.1'de hata sayılmasın, çıkış koduna bak.
 $ErrorActionPreference = "Continue"

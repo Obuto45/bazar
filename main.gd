@@ -97,6 +97,7 @@ func _setup_input() -> void:
 		"fwd": KEY_W, "back": KEY_S, "left": KEY_A, "right": KEY_D,
 		"jump": KEY_SPACE, "run": KEY_SHIFT, "mic_mute": KEY_M,
 		"interact": KEY_E, "throw_crate": KEY_Q, "price_down": KEY_Z, "price_up": KEY_X, "shout": KEY_B,
+		"refuse_offer": KEY_R,
 	}
 	for a in keys:
 		InputMap.add_action(a)
@@ -306,7 +307,7 @@ func _build_ui() -> void:
 	invite_box.offset_left = -380; invite_box.offset_right = -30; invite_box.offset_top = 30
 	ui.add_child(invite_box)
 
-	hint = _lbl(layer, "WASD yürü  •  E kasa al/sat  •  Sol Tık diz  •  Q fırlat  •  Tekerlek / Z-X fiyat  •  B/Mikrofon bağır  •  M mikrofon  •  ESC", 14, 0.78)
+	hint = _lbl(layer, "WASD yürü  •  E kasa al/sat  •  Sol Tık diz  •  Q fırlat  •  Tekerlek / Z-X fiyat  •  B/Mikrofon bağır  •  R pazarlığa olmaz de  •  M mikrofon  •  ESC", 14, 0.78)
 	hint.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
 	hint.offset_left = 20; hint.offset_top = -38; hint.offset_bottom = -12
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -617,7 +618,7 @@ func _process(dt: float) -> void:
 			voice_icon.queue_redraw()
 			voice_bar.size.x = 0.0 if muted else 52.0 * lvl
 			voice_bar.color = Color(0.95, 0.3, 0.25) if muted else (Color(1.0, 0.72, 0.2) if lvl > 0.7 else Color(0.4, 0.95, 0.5))
-			voice_lbl.text = "M: KAPALI" if muted else ("BAĞIRIYOR!" if me.shout_power > 0.55 else ("SES KISIK" if me.breath < 0.25 else ("KONUŞUYOR" if lvl > 0.06 else "M: AÇIK")))
+			voice_lbl.text = "M: KAPALI" if muted else ("BAĞIRIYOR!" if me.shout_power > 0.55 else ("KONUŞUYOR" if lvl > 0.06 else "M: AÇIK"))
 			interact_lbl.text = me.interact_hint
 			interact_lbl.visible = me.interact_hint != "" and not pause_wrap.visible
 	if world and customers and ((not Net.online()) or multiplayer.is_server()):

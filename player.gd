@@ -25,10 +25,11 @@ const VOICE_DB_MIN := -46.0 # bu eşiğin altı sessizlik
 const VOICE_DB_MAX := -12.0 # tam ağız açıklığı (dB)
 const VOICE_UNIT_SIZE := 3.5 # bu mesafeye kadar tam ses (m)
 const VOICE_MAX_DIST := 22.0 # bu mesafede ses tamamen kesilir (m)
-# Bağırma nefesi: sürekli bağıran sesini kısar, susunca toparlanır (B'yi basılı tutup bırakmamayı cezalandırır)
-const SHOUT_ON := 0.55 # bu güçten sonrası "bağırma" sayılır (HUD, balon, nefes)
-const BREATH_DRAIN := 0.22 # tam güçte saniyede harcanan nefes (~4.5 sn kesintisiz bağırma)
-const BREATH_REGEN := 0.18 # susunca saniyede dolan nefes
+# Bağırma gücü mikrofon desibelinden: SHOUT_DB_MIN'de başlar, SHOUT_DB_MAX'ta en yüksek (1.35)
+const SHOUT_DB_MIN := -36.0
+const SHOUT_DB_MAX := -10.0
+const SHOUT_KEY_POWER := 0.6 # mikrofonsuz B tuşu: orta şiddette bağırma, gerçek yüksek ses bunu geçer
+const SHOUT_ON := 0.55 # bu güçten sonrası "bağırma" sayılır (HUD, balon)
 const SHOUT_CALLS := ["Taze %s! %d TL!", "Gel gel! %s %d lira!", "Kaçırma! %s sadece %d TL!", "Bal gibi %s! %d TL!"]
 # Oyuncu renkleri (peer id'ye göre): saç ve tişört
 const HAIRS := [Color(0.2, 0.12, 0.07), Color(0.08, 0.06, 0.05), Color(0.75, 0.55, 0.25), Color(0.55, 0.22, 0.1),
@@ -56,7 +57,6 @@ var held_crate := false
 var held_item := ""
 var held_count := 0
 var shout_power := 0.0 # mikrofon bağırması veya B tuşu (0..1.4)
-var breath := 1.0 # 0..1 bağırma nefesi; azaldıkça bağırma zayıflar
 var _shout_lbl: Label3D # diğer oyuncuların başında çıkan pazarcı bağırması balonu
 var interact_hint := ""
 var _place_cd := 0.0
@@ -240,6 +240,8 @@ func _unhandled_input(e: InputEvent) -> void:
 		look_pitch = clampf(look_pitch - e.relative.y * SENS, -1.45, 1.35)
 	elif e.is_action_pressed("interact"):
 		_do_interact()
+	elif e.is_action_pressed("refuse_offer"):
+		_do_sell_to_customer(true)
 	elif e.is_action_pressed("throw_crate"):
 		_do_throw_crate()
 	elif e.is_action_pressed("price_down"):
@@ -310,16 +312,11 @@ func _local(dt: float) -> void:
 	air = not is_on_floor()
 	if was_air and not air:
 		land_t = 0.22
-	# Bağırma gücü: yüksek sesli mikrofon konuşması veya B tuşu (müşterileri tezgaha çeker)
-	var manual_shout := 1.0 if (captured and Input.is_action_pressed("shout")) else 0.0
-	var mic_shout := clampf((talk_smooth - 0.28) * 1.8, 0.0, 1.35) if not mic_muted else 0.0
-	var raw_shout := maxf(manual_shout, mic_shout)
-	if raw_shout >= SHOUT_ON:
-		breath = maxf(breath - raw_shout * BREATH_DRAIN * dt, 0.0)
-	else:
-		breath = minf(breath + BREATH_REGEN * dt, 1.0)
-	# Nefes bittikçe ses kısılır: boş nefeste bağırma gücü %25'e düşer
-	shout_power = lerpf(shout_power, raw_shout * (0.25 + 0.75 * breath), minf(dt * 10.0, 1.0))
+	# Bağırma gücü: mikrofon desibeli (yüksek bağıran daha çok müşteri çeker) veya B tuşu
+	var manual_shout := SHOUT_KEY_POWER if (captured and Input.is_action_pressed("shout")) else 0.0
+	var mic_shout := 0.0 if mic_muted else \
+		clampf((talk_db - SHOUT_DB_MIN) / (SHOUT_DB_MAX - SHOUT_DB_MIN), 0.0, 1.0) * 1.35
+	shout_power = lerpf(shout_power, maxf(manual_shout, mic_shout), minf(dt * 10.0, 1.0))
 	if Net.online():
 		sync_state.rpc(global_position, body_yaw, look_yaw, look_pitch, spd, air, shout_power)
 
@@ -810,14 +807,23 @@ func _do_interact() -> void:
 			else:
 				st.request_restock_crate(item_id)
 	elif kind == "customer":
-		var c := _find_customer(str(area.get_meta("customer_name", "")))
-		if c and c.get_next_sell_hint(my_id) != "":
-			if Net.online():
-				c.rpc_request_sell.rpc_id(1, my_id)
-			else:
-				var res: Dictionary = c.try_sell_one_from(my_id)
-				if not res.is_empty():
-					award_money(int(res["price"]))
+		_do_sell_to_customer(false)
+
+
+## Baktığımız müşteriye 1 ürün satar. insist=true: pazarlık teklifini reddedip tam fiyatta ısrar eder (R).
+func _do_sell_to_customer(insist: bool) -> void:
+	var area := _ray_target()
+	if area == null or str(area.get_meta("kind", "")) != "customer":
+		return
+	var my_id := _my_peer_id()
+	var c := _find_customer(str(area.get_meta("customer_name", "")))
+	if c and c.get_next_sell_hint(my_id) != "":
+		if Net.online():
+			c.rpc_request_sell.rpc_id(1, my_id, insist)
+		else:
+			var res: Dictionary = c.try_sell_one_from(my_id, insist)
+			if not res.is_empty():
+				award_money(int(res["price"]))
 
 
 func _try_place_once() -> bool:

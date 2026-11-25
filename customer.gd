@@ -14,6 +14,7 @@ enum State { STROLL, APPROACH, WAIT_BUY, LEAVE }
 var state: int = State.STROLL
 var color_seed := 0
 var wants: Dictionary = {} # item_id -> kalan adet (1..3 ürün çeşidi, toplam 1..4 adet)
+var offers: Dictionary = {} # item_id -> pazarlıkta teklif ettiği fiyat ("Abi bu bize 10 lira olmaz mı?")
 var target_owner_id := 0 # seçilen tezgahın sahibi peer_id
 var target_pos := Vector3.ZERO
 var exit_pos := Vector3(0, 0, 20)
@@ -131,7 +132,12 @@ func _refresh_bubble() -> void:
 	if segs.is_empty():
 		bubble.text = ""
 		return
-	if state == State.WAIT_BUY:
+	var st: Node3D = _find_stall(target_owner_id) if state == State.WAIT_BUY else null
+	var cur := _current_item(st) if st else ""
+	if offers.has(cur):
+		bubble.text = "🤔 Abi %s bize %d lira olmaz mı?" % [StallScript.ITEMS[cur]["name"], int(offers[cur])]
+		bubble.modulate = Color(1.0, 0.75, 0.45)
+	elif state == State.WAIT_BUY:
 		bubble.text = "🛒 " + ", ".join(segs)
 		bubble.modulate = Color(1.0, 0.88, 0.38)
 	else:
@@ -146,7 +152,7 @@ func _physics_process(dt: float) -> void:
 		_sync_t += dt
 		if Net.online() and _sync_t >= 0.1:
 			_sync_t = 0.0
-			rpc_sync_state.rpc(position, _body_yaw, _spd, state, target_owner_id, wants, mood_text)
+			rpc_sync_state.rpc(position, _body_yaw, _spd, state, target_owner_id, wants, offers, mood_text)
 	else:
 		position = position.lerp(_net_pos, minf(dt * 12.0, 1.0))
 		_body_yaw = lerp_angle(_body_yaw, _net_yaw, minf(dt * 12.0, 1.0))
@@ -182,6 +188,7 @@ func _tick_ai(dt: float) -> void:
 				# Tezgaha dön
 				var look_dir: Vector3 = (st as Node3D).global_position - global_position
 				_body_yaw = atan2(look_dir.x, look_dir.z)
+				_make_offers(st)
 				_refresh_bubble()
 		State.WAIT_BUY:
 			_spd = 0.0
@@ -270,41 +277,73 @@ func _evaluate_stalls() -> void:
 		_refresh_bubble()
 
 
-## Oyuncu E tuşuna basıp 1 ürün satmaya çalışır. Başarılıysa satılan (item_id, price) döner.
-func try_sell_one_from(seller_id: int) -> Dictionary:
+## Tezgaha varınca pahalı bulduğu ürünlerde pazarlık eder. Fiyat pazara göre ne kadar pahalıysa
+## pazarlık ihtimali o kadar yüksek; ucuz ürünü pazarlıksız alır.
+func _make_offers(st) -> void:
+	offers.clear()
+	var stalls := _all_stalls()
+	for k in wants:
+		if int(wants[k]) <= 0 or not st.has_item(k):
+			continue
+		var price: int = st.get_item_price(k)
+		var score := StallScript.relative_price_score(k, price, stalls)
+		if price >= 2 and score <= 1.05 and randf() < clampf(1.15 - score, 0.15, 0.85):
+			offers[k] = clampi(roundi(price * 0.8), 1, price - 1) # ~%20 indirim ister (12 -> 10)
+
+
+## Oyuncu 1 ürün satmaya çalışır. Başarılıysa satılan (item_id, price) döner.
+## insist=false (E): pazarlık varsa teklifi kabul eder, teklif fiyatından satar.
+## insist=true (R): "Olmaz abi" — müşteri fiyat makulse tam fiyattan alır, değilse küsüp gider.
+func try_sell_one_from(seller_id: int, insist := false) -> Dictionary:
 	if state != State.WAIT_BUY or target_owner_id != seller_id:
 		return {}
 	var st := _find_stall(seller_id)
-	if st == null:
+	var k := _current_item(st) if st else ""
+	if k == "":
 		return {}
-	for k in wants:
-		if int(wants[k]) > 0 and st.has_item(k):
-			var price: int = st.consume_for_sale(k)
-			if price > 0:
-				wants[k] = int(wants[k]) - 1
-				if int(wants[k]) <= 0:
-					wants.erase(k)
-				wait_timer = 22.0
-				var done := _total_wants() <= 0 or not _stall_has_any_want(st)
-				if done:
-					mood_text = "😊 Teşekkürler!"
-					state = State.LEAVE
-					target_owner_id = 0
-					target_pos = exit_pos
-				_refresh_bubble()
-				if Net.online():
-					rpc_on_sold.rpc(price, wants, state, mood_text)
-				else:
-					_spawn_floating_money(price)
-				return {"item": k, "price": price}
-	return {}
+	var offer: int = int(offers.get(k, 0))
+	if insist:
+		if offer <= 0:
+			return {}
+		offers.erase(k)
+		var chance := clampf(StallScript.relative_price_score(k, st.get_item_price(k), _all_stalls()) * 0.8, 0.1, 0.9)
+		if randf() >= chance:
+			mood_text = "😤 Pahalıymış abi..."
+			state = State.LEAVE
+			target_owner_id = 0
+			target_pos = exit_pos
+			_refresh_bubble()
+			return {}
+		offer = 0
+	var price: int = st.consume_for_sale(k)
+	if price <= 0:
+		return {}
+	if offer > 0:
+		price = mini(price, offer) # anlaşılan pazarlık fiyatı (satıcı sonradan daha da indirdiyse o)
+	wants[k] = int(wants[k]) - 1
+	if int(wants[k]) <= 0:
+		wants.erase(k)
+		offers.erase(k)
+	wait_timer = 22.0
+	var done := _total_wants() <= 0 or not _stall_has_any_want(st)
+	if done:
+		mood_text = "😊 Teşekkürler!"
+		state = State.LEAVE
+		target_owner_id = 0
+		target_pos = exit_pos
+	_refresh_bubble()
+	if Net.online():
+		rpc_on_sold.rpc(price, wants, offers, state, mood_text)
+	else:
+		_spawn_floating_money(price)
+	return {"item": k, "price": price}
 
 
 @rpc("any_peer", "call_local", "reliable")
-func rpc_request_sell(seller_id: int) -> void:
+func rpc_request_sell(seller_id: int, insist: bool) -> void:
 	if Net.online() and not multiplayer.is_server():
 		return
-	var res := try_sell_one_from(seller_id)
+	var res := try_sell_one_from(seller_id, insist)
 	if not res.is_empty():
 		var p := _find_player(seller_id)
 		if p:
@@ -312,8 +351,9 @@ func rpc_request_sell(seller_id: int) -> void:
 
 
 @rpc("authority", "call_local", "reliable")
-func rpc_on_sold(price: int, new_wants: Dictionary, new_state: int, new_mood: String) -> void:
+func rpc_on_sold(price: int, new_wants: Dictionary, new_offers: Dictionary, new_state: int, new_mood: String) -> void:
 	wants = new_wants
+	offers = new_offers
 	state = new_state
 	mood_text = new_mood
 	_refresh_bubble()
@@ -321,14 +361,15 @@ func rpc_on_sold(price: int, new_wants: Dictionary, new_state: int, new_mood: St
 
 
 @rpc("authority", "unreliable_ordered")
-func rpc_sync_state(p: Vector3, yaw: float, s: float, st: int, own: int, w: Dictionary, mood: String) -> void:
+func rpc_sync_state(p: Vector3, yaw: float, s: float, st: int, own: int, w: Dictionary, off: Dictionary, mood: String) -> void:
 	_net_pos = p
 	_net_yaw = yaw
 	_net_spd = s
-	if state != st or wants != w or mood_text != mood:
+	if state != st or wants != w or offers != off or mood_text != mood:
 		state = st
 		target_owner_id = own
 		wants = w
+		offers = off
 		mood_text = mood
 		_refresh_bubble()
 
@@ -354,12 +395,21 @@ func get_next_sell_hint(seller_id: int) -> String:
 	if state != State.WAIT_BUY or target_owner_id != seller_id:
 		return ""
 	var st := _find_stall(seller_id)
-	if st == null:
+	var k := _current_item(st) if st else ""
+	if k == "":
 		return ""
+	var nm: String = StallScript.ITEMS[k]["name"]
+	var p: int = st.get_item_price(k)
+	if offers.has(k):
+		return "[E] Olur abi: %s %d TL  •  [R] Olmaz, fiyat %d TL  •  Kalan: %d" % [nm, mini(p, int(offers[k])), p, _total_wants()]
+	return "[E] Sat: %s (%d TL)  •  Kalan: %d" % [nm, p, _total_wants()]
+
+
+## Müşterinin bu tezgahta sıradaki aldığı ürün (yoksa "").
+func _current_item(st) -> String:
 	for k in wants:
 		if int(wants[k]) > 0 and st.has_item(k):
-			var p: int = st.get_item_price(k)
-			return "[E] Sat: %s (%d TL)  •  Kalan: %d" % [StallScript.ITEMS[k]["name"], p, _total_wants()]
+			return k
 	return ""
 
 

@@ -1,4 +1,4 @@
-# Yeni sürüm yayınlar: sürümü yazar, exe'yi dışa aktarır, zip'ler, GitHub Release açar.
+﻿# Yeni sürüm yayınlar: sürümü yazar, exe'yi dışa aktarır, zip'ler, GitHub Release açar.
 # Oyunu açan herkes bu sürümü otomatik indirir (updater.gd).
 # Kullanım:  .\release.ps1 0.2 "Değişiklik notları"
 # Godot başka yerdeyse önce:  $env:GODOT = "C:\...\Godot_..._console.exe"
@@ -26,14 +26,14 @@ $p = $p -replace 'config/version="[^"]*"', "config/version=`"$Version`""
 
 # 2) Dışa aktar
 Remove-Item build -Recurse -Force -ErrorAction SilentlyContinue
-New-Item -ItemType Directory build | Out-Null
+New-Item -ItemType Directory build -Force | Out-Null
 & $godot --headless --path . --export-release "Windows Desktop" build/Bazar.exe
 if (-not (Test-Path build/Bazar.exe)) { throw "Export başarısız (export şablonları kurulu mu?)." }
 Copy-Item steam_appid.txt build/
 
 # 3) Zip: dosya adı _Windows.zip ile bitmeli
 $zip = "build/Bazar_${tag}_Windows.zip"
-Compress-Archive -Path build/Bazar.exe, build/*.dll, build/steam_appid.txt -DestinationPath $zip
+Compress-Archive -Path build/Bazar.exe, build/*.dll, build/steam_appid.txt -DestinationPath $zip -Force
 
 # 4) Commit, etiket, Release. git uyarıları stderr'e yazar: PS 5.1'de hata sayılmasın, çıkış koduna bak.
 $ErrorActionPreference = "Continue"

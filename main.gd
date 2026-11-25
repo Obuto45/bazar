@@ -41,6 +41,19 @@ func _ready() -> void:
 	_set_menu_bg(true)
 	_show_page("main")
 	_refresh()
+	var args := OS.get_cmdline_user_args()
+	if "--mptest" in args: # iki pencereli ağ testi: biri --mptest host, öteki --mptest join; 6 sn sonra kare kaydeder
+		if "host" in args:
+			Net.host_local()
+			await get_tree().create_timer(2.5).timeout
+			_on_start()
+		else:
+			await get_tree().create_timer(0.5).timeout
+			Net.join_local()
+		await get_tree().create_timer(5.0).timeout
+		get_viewport().get_texture().get_image().save_png(OS.get_user_data_dir() + "/mptest_%s.png" % ("host" if "host" in args else "join"))
+		get_tree().quit()
+		return
 	if "--selftest" in OS.get_cmdline_user_args(): # hızlı kontrol: menü + pazar karesi kaydeder, çıkar
 		await get_tree().create_timer(1.5).timeout
 		get_viewport().get_texture().get_image().save_png(OS.get_user_data_dir() + "/selftest_menu.png")
@@ -486,7 +499,7 @@ func _spawn(id: int) -> void:
 	var p: CharacterBody3D = PlayerScript.new()
 	p.name = str(id)
 	p.set_multiplayer_authority(id)
-	p.spawn_pos = SPAWNS[players.get_child_count() % SPAWNS.size()]
+	p.spawn_pos = SPAWNS[id % SPAWNS.size()] # her makinede aynı nokta
 	players.add_child(p)
 
 
@@ -494,8 +507,9 @@ func _spawn(id: int) -> void:
 func _on_peer_joined(id: int) -> void:
 	if not multiplayer.is_server() or world == null:
 		return
+	var w := world
 	await get_tree().create_timer(0.5).timeout # adı kaydolsun
-	if world == null or not id in multiplayer.get_peers():
+	if world != w or not id in multiplayer.get_peers():
 		return
 	start_game.rpc_id(id, _player_ids())
 	add_player.rpc(id)
@@ -510,6 +524,7 @@ func _on_peer_left(id: int) -> void:
 	if players:
 		var n := players.get_node_or_null(str(id))
 		if n:
+			players.remove_child(n) # isim hemen boşalsın, yeniden katılırsa oluşabilsin
 			n.queue_free()
 
 

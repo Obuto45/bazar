@@ -30,6 +30,7 @@ var spd := 0.0 # yatay hız (animasyon için, uzaktakilerde ağdan gelir)
 var air := false
 var net_pos := Vector3.ZERO
 var net_yaw := 0.0
+var sync_wait := 1.0 # shortcut: diğerleri düğümümü kurana dek sync atma; yavaş ağda hâlâ birkaç "node not found" olabilir, gerekirse host onaylı "hazır" RPC'sine geç
 
 
 func _ready() -> void:
@@ -147,7 +148,9 @@ func _local(dt: float) -> void:
 	air = not is_on_floor()
 	if spd > 0.3:
 		rig.rotation.y = lerp_angle(rig.rotation.y, atan2(velocity.x, velocity.z), minf(dt * 12.0, 1.0))
-	sync_state.rpc(global_position, rig.rotation.y, spd, air)
+	sync_wait -= dt
+	if sync_wait <= 0.0:
+		sync_state.rpc(global_position, rig.rotation.y, spd, air)
 
 
 @rpc("authority", "unreliable_ordered")

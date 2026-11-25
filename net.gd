@@ -28,7 +28,7 @@ func _ready() -> void:
 	else:
 		push_warning("Steam başlatılamadı: %s" % r)
 	multiplayer.peer_connected.connect(func(_id): lobby_changed.emit())
-	multiplayer.peer_disconnected.connect(func(id): names.erase(id); lobby_changed.emit())
+	multiplayer.peer_disconnected.connect(_on_peer_left)
 	multiplayer.connected_to_server.connect(_on_connected)
 	multiplayer.connection_failed.connect(func(): status.emit("Bağlantı başarısız."); leave())
 	multiplayer.server_disconnected.connect(func(): status.emit("Host ayrıldı."); leave())
@@ -161,6 +161,13 @@ func leave() -> void:
 	multiplayer.multiplayer_peer = OfflineMultiplayerPeer.new()
 	names.clear()
 	left.emit()
+
+
+func _on_peer_left(id: int) -> void:
+	names.erase(id)
+	if multiplayer.is_server():
+		sync_names.rpc(names) # istemcilerin listesi de güncellensin
+	lobby_changed.emit()
 
 
 func _on_connected() -> void:

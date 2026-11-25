@@ -18,7 +18,8 @@ Oyun her açılışta yeni sürüm var mı bakar; varsa kendini günceller ve ye
 Değişiklikleri commit et, sonra:
 
 ```powershell
-.elease.ps1 0.2 "Değişiklik notları"
+.
+elease.ps1 0.2 "Değişiklik notları"
 ```
 
 Betik sürümü `project.godot`'a yazar, exe'yi dışa aktarır, `Bazar_v0.2_Windows.zip` yapar, push eder ve GitHub Release açar. Godot 4.7.2 export şablonları kurulu olmalı. Godot PATH'te değilse önce `$env:GODOT` ile console exe yolunu ver.

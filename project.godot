@@ -12,6 +12,10 @@ Net="*res://net.gd"
 Settings="*res://settings.gd"
 Updater="*res://updater.gd"
 
+[audio]
+
+driver/enable_input=true
+
 [display]
 
 window/size/viewport_width=1280

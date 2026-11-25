@@ -3,6 +3,8 @@ extends Node3D
 
 const PlayerScript := preload("res://player.gd")
 const BazaarScript := preload("res://bazaar.gd")
+const StallScript := preload("res://stall.gd")
+const CustomerScript := preload("res://customer.gd")
 const SPAWNS := [Vector3(0, 0.2, 6), Vector3(2, 0.2, 6), Vector3(-2, 0.2, 6), Vector3(0, 0.2, -6),
 	Vector3(2, 0.2, -6), Vector3(-2, 0.2, -6), Vector3(6, 0.2, 0), Vector3(-6, 0.2, 0)]
 const GOLD := Color(1.0, 0.74, 0.3)
@@ -20,9 +22,23 @@ var invite_box: VBoxContainer
 var pause_wrap: ColorRect
 var vol_lbl: Label
 var hint: Label
+var voice_hud: PanelContainer
+var voice_icon: Control
+var voice_bar: ColorRect
+var voice_lbl: Label
+var money_hud: PanelContainer
+var money_lbl: Label
+var money_pop: Label
+var crosshair: ColorRect
+var interact_lbl: Label
 var ingame_box: VBoxContainer
 var world: Node3D
 var players: Node3D
+var stalls: Node3D
+var customers: Node3D
+var _stall_count := 0
+var _cust_seq := 0
+var _cust_cd := 1.5
 var menu_bg: Node3D
 var menu_cam: Camera3D
 var walkers := [] # menüde çeşme etrafında yürüyen figüranlar: [düğüm, yarıçap, açı, hız]
@@ -77,7 +93,11 @@ func _ready() -> void:
 
 
 func _setup_input() -> void:
-	var keys := {"fwd": KEY_W, "back": KEY_S, "left": KEY_A, "right": KEY_D, "jump": KEY_SPACE, "run": KEY_SHIFT}
+	var keys := {
+		"fwd": KEY_W, "back": KEY_S, "left": KEY_A, "right": KEY_D,
+		"jump": KEY_SPACE, "run": KEY_SHIFT, "mic_mute": KEY_M,
+		"interact": KEY_E, "throw_crate": KEY_Q, "price_down": KEY_Z, "price_up": KEY_X, "shout": KEY_B,
+	}
 	for a in keys:
 		InputMap.add_action(a)
 		var ev := InputEventKey.new()
@@ -286,12 +306,130 @@ func _build_ui() -> void:
 	invite_box.offset_left = -380; invite_box.offset_right = -30; invite_box.offset_top = 30
 	ui.add_child(invite_box)
 
-	hint = _lbl(layer, "WASD yürü  •  Shift koş  •  Boşluk zıpla  •  Fare bak  •  ESC menü", 15, 0.7)
+	hint = _lbl(layer, "WASD yürü  •  E kasa al/sat  •  Sol Tık diz  •  Q fırlat  •  Tekerlek / Z-X fiyat  •  B/Mikrofon bağır  •  M mikrofon  •  ESC", 14, 0.78)
 	hint.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
-	hint.offset_left = 20; hint.offset_top = -40; hint.offset_bottom = -14
+	hint.offset_left = 20; hint.offset_top = -38; hint.offset_bottom = -12
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hint.hide()
+	_build_voice_hud(layer, theme)
+	_build_market_hud(layer, theme)
 	_build_pause(layer, theme)
+
+
+## Ekranın sağ tarafında sesli konuşma simgesi ve canlı dB seviye göstergesi.
+class MicIcon extends Control:
+	var level := 0.0
+	var muted := false
+
+	func _draw() -> void:
+		var c := size * 0.5
+		var col := Color(0.95, 0.3, 0.25) if muted else (Color(0.42, 0.96, 0.52) if level > 0.05 else Color(1.0, 0.92, 0.78, 0.85))
+		# Konuşurken dış ses halkası (dB ile büyür)
+		if not muted and level > 0.04:
+			draw_arc(c + Vector2(0, -3), 16.0 + level * 8.0, 0, TAU, 28, Color(col.r, col.g, col.b, 0.35 + level * 0.45), 2.5, true)
+		# Mikrofon kapsülü
+		draw_circle(c + Vector2(0, -10), 6.5, col)
+		draw_rect(Rect2(c + Vector2(-6.5, -10), Vector2(13.0, 10.0)), col)
+		draw_circle(c + Vector2(0, 0), 6.5, col)
+		# U-çerçeve ve ayak
+		draw_arc(c + Vector2(0, -1), 11.5, 0.15, PI - 0.15, 18, col, 2.5, true)
+		draw_line(c + Vector2(0, 10.5), c + Vector2(0, 16.0), col, 2.5, true)
+		draw_line(c + Vector2(-7.0, 16.0), c + Vector2(7.0, 16.0), col, 2.5, true)
+		# Susturulmuşsa çapraz çizgi
+		if muted:
+			draw_line(c + Vector2(-14, -14), c + Vector2(14, 14), Color(1.0, 0.28, 0.22), 3.2, true)
+
+
+func _build_voice_hud(layer: CanvasLayer, theme: Theme) -> void:
+	voice_hud = PanelContainer.new()
+	voice_hud.theme = theme
+	var box := _sb(Color(0.08, 0.05, 0.04, 0.82), 14, 10)
+	box.set_border_width_all(2)
+	box.border_color = Color(GOLD, 0.5)
+	voice_hud.add_theme_stylebox_override("panel", box)
+	voice_hud.set_anchors_preset(Control.PRESET_CENTER_RIGHT)
+	voice_hud.offset_left = -94; voice_hud.offset_right = -20
+	voice_hud.offset_top = -56; voice_hud.offset_bottom = 56
+	voice_hud.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	layer.add_child(voice_hud)
+	var v := VBoxContainer.new()
+	v.alignment = BoxContainer.ALIGNMENT_CENTER
+	v.add_theme_constant_override("separation", 6)
+	voice_hud.add_child(v)
+	voice_icon = MicIcon.new()
+	voice_icon.custom_minimum_size = Vector2(52, 46)
+	v.add_child(voice_icon)
+	var meter_bg := ColorRect.new()
+	meter_bg.custom_minimum_size = Vector2(52, 7)
+	meter_bg.color = Color(0.2, 0.15, 0.12, 0.9)
+	v.add_child(meter_bg)
+	voice_bar = ColorRect.new()
+	voice_bar.color = Color(0.4, 0.95, 0.5)
+	voice_bar.size = Vector2(0, 7)
+	meter_bg.add_child(voice_bar)
+	voice_lbl = _lbl(v, "M: AÇIK", 12, 0.85)
+	voice_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	voice_hud.hide()
+
+
+## Sağ üst Para UI + ekran ortası nişangah ve etkileşim ipucu.
+func _build_market_hud(layer: CanvasLayer, theme: Theme) -> void:
+	money_hud = PanelContainer.new()
+	money_hud.theme = theme
+	var box := _sb(Color(0.08, 0.05, 0.04, 0.85), 14, 12)
+	box.set_border_width_all(2)
+	box.border_color = Color(GOLD, 0.7)
+	money_hud.add_theme_stylebox_override("panel", box)
+	money_hud.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	money_hud.offset_left = -210; money_hud.offset_right = -20
+	money_hud.offset_top = 20; money_hud.offset_bottom = 74
+	money_hud.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	layer.add_child(money_hud)
+	money_lbl = _lbl(money_hud, "0 TL", 26, 1.0)
+	money_lbl.add_theme_font_override("font", _font(900))
+	money_lbl.add_theme_color_override("font_color", GOLD)
+	money_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	money_hud.hide()
+
+	money_pop = _lbl(layer, "", 24, 1.0)
+	money_pop.add_theme_font_override("font", _font(900))
+	money_pop.add_theme_color_override("font_color", Color(0.45, 1.0, 0.55))
+	money_pop.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	money_pop.offset_left = -210; money_pop.offset_right = -24
+	money_pop.offset_top = 78; money_pop.offset_bottom = 112
+	money_pop.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	money_pop.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	money_pop.hide()
+
+	crosshair = ColorRect.new()
+	crosshair.color = Color(1.0, 0.96, 0.88, 0.85)
+	crosshair.set_anchors_preset(Control.PRESET_CENTER)
+	crosshair.offset_left = -3; crosshair.offset_right = 3
+	crosshair.offset_top = -3; crosshair.offset_bottom = 3
+	crosshair.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	layer.add_child(crosshair)
+	crosshair.hide()
+
+	interact_lbl = _lbl(layer, "", 18, 0.95)
+	interact_lbl.set_anchors_preset(Control.PRESET_CENTER)
+	interact_lbl.offset_left = -320; interact_lbl.offset_right = 320
+	interact_lbl.offset_top = 22; interact_lbl.offset_bottom = 56
+	interact_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	interact_lbl.add_theme_color_override("font_color", Color(1.0, 0.95, 0.78))
+	interact_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	interact_lbl.hide()
+
+
+func _on_money_earned(amount: int, total: int) -> void:
+	money_lbl.text = "%d TL" % total
+	money_pop.text = "+%d TL" % amount
+	money_pop.modulate.a = 1.0
+	money_pop.offset_top = 82
+	money_pop.show()
+	var tw := create_tween().set_parallel()
+	tw.tween_property(money_pop, "offset_top", 56.0, 0.9).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tw.tween_property(money_pop, "modulate:a", 0.0, 0.9).set_delay(0.25)
+	tw.chain().tween_callback(money_pop.hide)
 
 
 ## Ayarlar / duraklat paneli: menüde ayarlar, oyunda ayrıca devam ve lobiye dön.
@@ -412,9 +550,15 @@ func _refresh() -> void:
 	start_btn.disabled = not (Net.online() and multiplayer.is_server())
 	start_btn.text = "▶  Pazarı Aç" if not Net.online() or multiplayer.is_server() else "Host pazarı açacak..."
 	host_btn.disabled = Net.lobby_id != 0
-	if players: # geç gelen adlar isim etiketlerine yansısın
+	if players: # geç gelen adlar isim etiketlerine ve tezgah tabelalarına yansısın
 		for p in players.get_children():
-			p.tag.text = Net.display_name(p.name.to_int())
+			var pid := p.name.to_int()
+			var dn := Net.display_name(pid)
+			p.set_display_name(dn)
+			if stalls:
+				var st := stalls.get_node_or_null("Stall_%d" % pid)
+				if st:
+					st.set_owner_display_name(dn)
 	if Net.online() and world == null and page == "main":
 		_show_page("lobby")
 
@@ -463,6 +607,21 @@ func _menu_anim(dt: float) -> void:
 func _process(dt: float) -> void:
 	if menu_bg:
 		_menu_anim(dt)
+	if world and players and voice_hud.visible:
+		var me := players.get_node_or_null(str(multiplayer.get_unique_id()))
+		if me:
+			var lvl: float = me.talk_smooth
+			var muted: bool = me.mic_muted
+			voice_icon.level = lvl
+			voice_icon.muted = muted
+			voice_icon.queue_redraw()
+			voice_bar.size.x = 0.0 if muted else 52.0 * lvl
+			voice_bar.color = Color(0.95, 0.3, 0.25) if muted else (Color(1.0, 0.72, 0.2) if lvl > 0.7 else Color(0.4, 0.95, 0.5))
+			voice_lbl.text = "M: KAPALI" if muted else ("BAĞIRIYOR!" if me.shout_power > 0.55 else ("KONUŞUYOR" if lvl > 0.06 else "M: AÇIK"))
+			interact_lbl.text = me.interact_hint
+			interact_lbl.visible = me.interact_hint != "" and not pause_wrap.visible
+	if world and customers and ((not Net.online()) or multiplayer.is_server()):
+		_tick_customers(dt)
 
 
 func _unhandled_input(e: InputEvent) -> void:
@@ -499,25 +658,87 @@ func start_game(ids: Array) -> void:
 	world = Node3D.new()
 	world.name = "World"
 	add_child(world)
-	world.add_child(BazaarScript.new())
+	var bz := BazaarScript.new()
+	bz.interactive = true
+	world.add_child(bz)
+	stalls = Node3D.new()
+	stalls.name = "Stalls"
+	world.add_child(stalls)
+	customers = Node3D.new()
+	customers.name = "Customers"
+	world.add_child(customers)
 	players = Node3D.new()
 	players.name = "Players"
 	world.add_child(players)
+	_stall_count = 0
+	_cust_seq = 0
+	_cust_cd = 1.5
 	for id in ids:
 		_spawn(id)
 	ui.hide()
 	hint.show()
+	voice_hud.show()
+	money_lbl.text = "0 TL"
+	money_hud.show()
+	crosshair.show()
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 
 func _spawn(id: int) -> void:
 	if players == null or players.has_node(str(id)):
 		return
+	# Her oyuncuya kendine ait bir tezgah (başta boş, arkasında depo kasaları)
+	var spot_idx := _stall_count % BazaarScript.PLAYER_STALL_SPOTS.size()
+	_stall_count += 1
+	var spot: Array = BazaarScript.PLAYER_STALL_SPOTS[spot_idx]
+	var st := StallScript.new()
+	st.setup(id, Net.display_name(id), id)
+	st.position = spot[0]
+	st.rotation.y = spot[1]
+	stalls.add_child(st)
+
 	var p: CharacterBody3D = PlayerScript.new()
 	p.name = str(id)
 	p.set_multiplayer_authority(id)
-	p.spawn_pos = SPAWNS[id % SPAWNS.size()] # her makinede aynı nokta
+	p.spawn_pos = st.owner_spawn_pos()
+	p.look_yaw = spot[1] + PI # tezgahın önüne (caddeye) bakarak başla
 	players.add_child(p)
+	if p.is_multiplayer_authority():
+		p.money_earned.connect(_on_money_earned)
+
+
+func _tick_customers(dt: float) -> void:
+	_cust_cd -= dt
+	if _cust_cd > 0.0 or customers.get_child_count() >= 7:
+		return
+	_cust_cd = randf_range(3.0, 5.2)
+	_cust_seq += 1
+	var from_north := randf() < 0.5
+	var x_lane := randf_range(-2.6, 2.6)
+	var start_p := Vector3(x_lane, 0.0, -19.5 if from_north else 19.5)
+	var exit_p := Vector3(randf_range(-2.4, 2.4), 0.0, 19.5 if from_north else -19.5)
+	# 1 ila 3 farklı ürün çeşidi, her birinden 1-2 adet
+	var item_pool := StallScript.ITEM_ORDER.duplicate()
+	item_pool.shuffle()
+	var n_types := 1 if randf() < 0.45 else (2 if randf() < 0.8 else 3)
+	var wants := {}
+	for i in n_types:
+		wants[item_pool[i]] = randi_range(1, 2)
+	var cname := "Cust_%d" % _cust_seq
+	var seed_val := randi_range(1, 9999)
+	if Net.online():
+		rpc_spawn_customer.rpc(cname, seed_val, start_p, exit_p, wants)
+	else:
+		rpc_spawn_customer(cname, seed_val, start_p, exit_p, wants)
+
+
+@rpc("authority", "call_local", "reliable")
+func rpc_spawn_customer(cname: String, seed_val: int, start_p: Vector3, exit_p: Vector3, wants: Dictionary) -> void:
+	if customers == null or customers.has_node(cname):
+		return
+	var c := CustomerScript.new()
+	c.init_customer(cname, seed_val, start_p, exit_p, wants)
+	customers.add_child(c)
 
 
 ## Pazar açıkken gelen arkadaş: ona pazarı aç, herkese yeni oyuncuyu ekle.
@@ -551,12 +772,19 @@ func _clear_world() -> void:
 		world.queue_free()
 	world = null
 	players = null
+	stalls = null
+	customers = null
 
 
 func _back_to_menu() -> void:
 	_clear_world()
 	pause_wrap.hide()
 	hint.hide()
+	voice_hud.hide()
+	money_hud.hide()
+	money_pop.hide()
+	crosshair.hide()
+	interact_lbl.hide()
 	ui.show()
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	if menu_bg == null:

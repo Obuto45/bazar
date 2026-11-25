@@ -4,6 +4,17 @@ extends Node3D
 
 const LP := preload("res://lowpoly.gd")
 const HALF := 22.0 # pazar alanının yarı genişliği (m)
+# Ana cadde boyunca 8 oyuncu tezgahı konumu: [konum, yaw] (ön yüz +Z caddeye bakar)
+const PLAYER_STALL_SPOTS := [
+	[Vector3(-5.8, 0, -9.0), PI / 2],
+	[Vector3(5.8, 0, -9.0), -PI / 2],
+	[Vector3(-5.8, 0, 9.0), PI / 2],
+	[Vector3(5.8, 0, 9.0), -PI / 2],
+	[Vector3(-5.8, 0, -15.0), PI / 2],
+	[Vector3(5.8, 0, -15.0), -PI / 2],
+	[Vector3(-5.8, 0, 15.0), PI / 2],
+	[Vector3(5.8, 0, 15.0), -PI / 2],
+]
 const AWNINGS := [Color(0.85, 0.25, 0.2), Color(0.95, 0.75, 0.25), Color(0.25, 0.55, 0.75), Color(0.4, 0.65, 0.35),
 	Color(0.75, 0.4, 0.65), Color(0.95, 0.55, 0.2)]
 const GOODS := [Color(0.9, 0.2, 0.15), Color(1.0, 0.6, 0.1), Color(0.95, 0.85, 0.2), Color(0.45, 0.75, 0.2),
@@ -11,6 +22,7 @@ const GOODS := [Color(0.9, 0.2, 0.15), Color(1.0, 0.6, 0.1), Color(0.95, 0.85, 0
 const WOOD := Color(0.55, 0.37, 0.22)
 const STONE := Color(0.72, 0.66, 0.56)
 
+var interactive := false # oyun açıkken ana cadde tezgahları oyunculara ayrılır
 var rng := RandomNumberGenerator.new()
 
 
@@ -19,10 +31,10 @@ func _ready() -> void:
 	_env()
 	_ground()
 	_fountain(Vector3.ZERO)
-	# Ana cadde iki yanında tezgahlar (cadde Z ekseni boyunca)
-	for z in [-15.0, -9.0, 9.0, 15.0]:
-		_stall(Vector3(-6.5, 0, z), PI / 2)
-		_stall(Vector3(6.5, 0, z), -PI / 2)
+	# Menüde dekoratif ana cadde tezgahları; oyunda bunlar oyuncu tezgahları (stall.gd) olur
+	if not interactive:
+		for spot in PLAYER_STALL_SPOTS:
+			_stall(spot[0], spot[1])
 	# Meydanın yanlarında (çeşmeye dönük)
 	for x in [-14.0, 14.0]:
 		for z in [-4.0, 4.0]:

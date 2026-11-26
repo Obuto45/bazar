@@ -734,9 +734,8 @@ def build_hirsiz():
     delete_mats(head, ["Hat", "HatDetail"])
     head_hair_op(head, v, brow="Brow", mustache=None, cap=None, side=None, brow_scale=1.2, brow_tilt=-0.5)
     v.mat("Brow", (0.12, 0.09, 0.07), rough=0.9)
-    # sıfır numara tıraş: kafatasına yapışık, tene yakın gölge (Hair)
-    hair_cap(v, head, (0.66, 0.5, 0.42), front=-0.05, up=0.6, low=-0.15, R=(0.294, 0.294, 0.296), at=(0, 0.004, 0.004))
-    v.mats["Hair"].node_tree.nodes["Principled BSDF"].inputs["Roughness"].default_value = 1.0
+    # tas kafa: saç yok, parlak kafa derisi
+    v.mats["Skin"].node_tree.nodes["Principled BSDF"].inputs["Roughness"].default_value = 0.38
     # sakal gölgesi (çene)
     add_sphere(head, v.mat("Stubble", (0.72, 0.56, 0.47), rough=1.0), (0.19, 0.2, 0.12), Vector((0, -0.085, -0.19)), seg=24, rings=12,
                cut=lambda d: d.y > -0.3 or d.z > -0.05)

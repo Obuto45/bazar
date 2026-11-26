@@ -108,7 +108,6 @@ func _build_visual() -> void:
 		# siyah mont ve spor ayakkabı modelin kendi renginde kalır
 		cols.erase("Shirt")
 		cols.erase("Shoe")
-		cols["Hair"] = skin.darkened(0.22)
 		cols["Stubble"] = skin.darkened(0.14)
 	for n in PART_NAMES:
 		var m: Node3D = src.find_child(n, true, false)

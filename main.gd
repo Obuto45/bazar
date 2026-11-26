@@ -583,7 +583,7 @@ func _build_ui() -> void:
 
 	info = _lbl(ui, "", 15, 0.85)
 	info.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
-	info.offset_left = 80; info.offset_right = -230; info.offset_top = -60; info.offset_bottom = -24
+	info.offset_left = 590; info.offset_right = -340; # menü panelinin sağında; Geri butonuyla çakışmasın info.offset_top = -60; info.offset_bottom = -24
 	var ver := _lbl(ui, "sürüm " + Updater.version() + "  •  Büyük Pazar", 14, 0.55)
 	ver.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_RIGHT)
 	ver.offset_left = -320; ver.offset_right = -24; ver.offset_top = -50; ver.offset_bottom = -24
@@ -2907,17 +2907,19 @@ func _refresh_quests_panel() -> void:
 		bar.color = GOOD if done else (BAD if failed else Color(1.0, 0.7, 0.28))
 
 
-## Para geliri geldiğinde yerel istatistikler: satış, ürün, teyze, kapkaççı ödülü.
+## thief.gd rpc_on_caught her peer'da çağırır; yakalayan bensem görev sayacı artar.
+func on_thief_caught_by(catcher_id: int) -> void:
+	var my_id := multiplayer.get_unique_id() if Net.online() else 1
+	if catcher_id != my_id:
+		return
+	qstats["catches"] = int(qstats.get("catches", 0)) + 1
+	show_toast("🕵️ Kapkaççıyı yakaladın! Pazarın kahramanı!", GOOD)
+	_last_stock = _stock_map(_my_stall())
+
+
+## Para geliri geldiğinde yerel istatistikler: satış, ürün, teyze.
 func _track_income(sale: int, tip: int) -> void:
 	if sale <= 0 and tip <= 0:
-		return
-	var now := Time.get_ticks_msec() / 1000.0
-	var bounty := (sale >= 25 and sale <= 35 and tip == 0) or (sale <= 0 and tip >= 25 and tip <= 35)
-	if bounty and now - _last_thief_look < 2.5:
-		_last_thief_look = -100.0
-		qstats["catches"] = int(qstats.get("catches", 0)) + 1
-		show_toast("🕵️ Kapkaççıyı yakaladın! Pazarın kahramanı!", GOOD)
-		_last_stock = _stock_map(_my_stall())
 		return
 	qstats["earned"] = int(qstats.get("earned", 0)) + sale + tip
 	qstats["tips"] = int(qstats.get("tips", 0)) + tip

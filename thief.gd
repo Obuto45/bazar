@@ -467,6 +467,11 @@ func rpc_on_caught(catcher_id: int, had_item: bool, by_zabita: bool) -> void:
 	thief_state = TState.CAUGHT
 	_stun_t = 1.8
 	carried_item = ""
+	var main_node := get_parent()
+	while main_node and not main_node.has_method("on_thief_caught_by"):
+		main_node = main_node.get_parent()
+	if main_node:
+		main_node.on_thief_caught_by(catcher_id)
 	if _area:
 		_area.collision_layer = 0
 	if _carry_root:

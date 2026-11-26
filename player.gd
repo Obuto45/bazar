@@ -8,10 +8,11 @@ const Produce := preload("res://produce.gd")
 const StallScript := preload("res://stall.gd")
 const Items := preload("res://items.gd")
 const VFX := preload("res://vfx.gd")
+const Shops := preload("res://shops.gd")
 
 signal money_earned(amount: int, total: int, tip: int)
 signal money_spent(amount: int, total: int, reason: String)
-signal open_shop()
+signal open_shop(shop_id: String)
 signal inventory_changed()
 signal combo_changed(n: int)
 
@@ -582,9 +583,6 @@ func _unhandled_input(e: InputEvent) -> void:
 			talk_level = 0.0
 			talk_db = -60.0
 			_voice_accum.clear()
-		return
-	if e.is_action_pressed("open_shop") or e.is_action_pressed("upgrade_shop"):
-		open_shop.emit()
 		return
 	if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
 		_place_held = false
@@ -1889,6 +1887,13 @@ func _find_world() -> Node:
 	return get_parent().get_parent() if get_parent() else null
 
 
+func _day_progress() -> float:
+	var main := _find_main()
+	if main and main.has_method("_day_prog"):
+		return float(main.call("_day_prog"))
+	return 0.4
+
+
 func _find_main() -> Node:
 	var w := _find_world()
 	return w.get_parent() if w else null
@@ -2034,6 +2039,16 @@ func _process_interaction(dt: float) -> void:
 					parts_txt.append("[Tekerlek / Z-X] %d TL (%s)" % [int(sl["price"]), badge])
 					parts_txt.append(_freshness_hint(float(sl.get("fresh", 1.0))))
 				interact_hint = "  •  ".join(parts_txt)
+		"shop":
+			var sid := str(area.get_meta("shop_id", ""))
+			if Shops.SHOPS.has(sid):
+				show_hl = true
+				var prog := _day_progress()
+				var nm := Shops.display_sign(sid, prog)
+				if Shops.is_open(sid, prog):
+					interact_hint = "%s %s  •  [E] Alışveriş" % [str(Shops.SHOPS[sid]["icon"]), nm]
+				else:
+					interact_hint = "🔒 %s kapalı  •  %s" % [nm, Shops.closed_text(sid, prog)]
 		"thief":
 			show_hl = true
 			interact_hint = "[E] Kapkaççıyı yakala!" if _catch_cd <= 0.0 else "🏃 Kapkaççı kaçıyor!"
@@ -2054,7 +2069,7 @@ func _process_interaction(dt: float) -> void:
 			var owner_id: int = int(area.get_meta("stall_owner", -1))
 			if owner_id == my_id:
 				show_hl = true
-				interact_hint = "[E / P] Pazarcı Dükkanı (Sigara, Puro, Megafon, Bıçak, Radyo & Tezgah)"
+				interact_hint = "🏪 Sigara, çay, megafon ve tezgah geliştirmeleri arka sokaktaki dükkanlarda"
 		"customer":
 			var c := _find_customer(str(area.get_meta("customer_name", "")))
 			if c:
@@ -2081,7 +2096,7 @@ func _freshness_hint(f: float) -> String:
 		elif has_inventory_item("spray"):
 			txt += " — 💦 fısfısla"
 		else:
-			txt += " — 💦 Fısfıs al [P]"
+			txt += " — 💦 Fısfıs Market'te"
 	return txt
 
 
@@ -2143,10 +2158,8 @@ func _do_interact() -> void:
 			var owner_id: int = int(area.get_meta("stall_owner", -1))
 			if owner_id == my_id:
 				_do_ring_bell()
-		"upgrade_board":
-			var owner_id: int = int(area.get_meta("stall_owner", -1))
-			if owner_id == my_id:
-				open_shop.emit()
+		"shop":
+			open_shop.emit(str(area.get_meta("shop_id", "")))
 		"customer":
 			_do_sell_to_customer(false)
 		"thief":

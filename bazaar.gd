@@ -10,6 +10,7 @@ const LP := preload("res://lowpoly.gd")
 const Produce := preload("res://produce.gd")
 const VFX := preload("res://vfx.gd")
 const AmbientScript := preload("res://ambient.gd")
+const Shops := preload("res://shops.gd")
 
 const HALF_X := 14.5
 const HALF_Z := 21.5
@@ -43,8 +44,11 @@ const WALL_COLS := [
 	Color(0.95, 0.90, 0.80), Color(0.88, 0.72, 0.64), Color(0.80, 0.84, 0.90),
 	Color(0.96, 0.82, 0.58), Color(0.86, 0.80, 0.86),
 ]
-const SHOP_NAMES := ["BAKKAL", "BERBER", "FIRIN", "ECZANE", "KASAP", "ÇİÇEKÇİ",
-	"KIRTASİYE", "BÜFE", "TERZİ", "NALBUR", "KIRAATHANE", "BÖREKÇİ"]
+## Sokak cepheleri sırası: önce batı (x=-16) kuzeyden güneye, sonra doğu (x=+16) kuzeyden güneye, sonra kapı arkaları.
+## Sık uğranan dükkanlar (Tekel, Fırın, Kıraathane, Market, Nalbur) pazarın ortasına yakın. Gerçek dükkanlar: shops.gd.
+const SHOP_NAMES := ["BERBER", "FIRIN", "TEKEL BAYİ", "KIRAATHANE", "KASAP", "ECZANE",
+	"TERZİ", "MARKET", "NALBUR", "TELEFONCU", "ÇİÇEKÇİ", "BÖREKÇİ",
+	"KIRTASİYE", "BÜFE", "BAKKAL", "KUAFÖR"]
 const SHUTTER_COLS := [Color(0.18, 0.36, 0.62), Color(0.62, 0.16, 0.14), Color(0.16, 0.46, 0.28),
 	Color(0.85, 0.62, 0.12), Color(0.34, 0.34, 0.38)]
 const CLOTH_COLS := [Color(0.92, 0.92, 0.9), Color(0.85, 0.2, 0.2), Color(0.22, 0.4, 0.78),
@@ -160,6 +164,7 @@ var _puddles: Array[MeshInstance3D] = []
 var _flag_mats: Array[ShaderMaterial] = []
 var _rain: Node3D
 var _ambient: Node3D
+var _shop_doors := {} # shop_id -> {"shutter": Node3D, "area": Area3D, "open": bool}
 var _day_progress := 0.38
 var _applied_p := -9.0
 var _anim_t := 0.0
@@ -300,6 +305,7 @@ func _process(dt: float) -> void:
 
 func set_day_progress(p: float) -> void:
 	_day_progress = clampf(p, 0.0, 1.0)
+	_update_shop_shutters()
 	# Sky radyansını boşuna yenilememek için küçük adımlarda güncelle
 	if absf(_day_progress - _applied_p) >= 0.0025 or _day_progress <= 0.0 or _day_progress >= 1.0:
 		_apply_visuals()
@@ -881,6 +887,9 @@ func _apartment(b, glass, lit, signs, fc: Vector3, o: Vector3, w: float, d: floa
 			b.box(Vector3(1.15, 0.03, shop_w / float(stripes) + 0.01), Vector3(0.6, 2.55, zb), cc, Vector3(0, 0, -0.38), 0.12)
 			b.box(Vector3(0.02, 0.2, shop_w / float(stripes) + 0.01), Vector3(1.13, 2.24, zb), cc, Vector3.ZERO, 0.5)
 		_shop_extras(b, signs, fr, shop, shop_b, shop_w)
+		var sid := Shops.id_for_sign(shop)
+		if sid != "" and not _shop_doors.has(sid):
+			_build_shop_door(sid, fr, shop_b, shop_w)
 	else:
 		for k in 2:
 			var zz := shop_b - shop_w * 0.25 + float(k) * shop_w * 0.5
@@ -1019,6 +1028,60 @@ func _pot_plant(b, p: Vector3, flowers: bool) -> void:
 			b.sphere(0.05, p + Vector3(cos(a) * 0.13, 0.58, sin(a) * 0.13), fc, 5, 3)
 
 
+## Gerçek dükkanın kapısı: bakıp [E] ile panel açılan alan + kapalıyken inen tam kepenk.
+func _build_shop_door(sid: String, fr: Transform3D, sb: float, sw: float) -> void:
+	var shutter := MeshInstance3D.new()
+	shutter.name = "Kepenk_" + sid
+	shutter.mesh = LP.box(Vector3(0.1, 2.1, sw - 0.24))
+	var sm := StandardMaterial3D.new()
+	sm.albedo_color = Color(0.62, 0.63, 0.66)
+	sm.metallic = 0.55
+	sm.roughness = 0.5
+	shutter.material_override = sm
+	shutter.transform = fr * Transform3D(Basis.IDENTITY, Vector3(0.13, 1.15, sb))
+	add_child(shutter)
+	shutter.visible = false
+	for k in 9:
+		var rib := MeshInstance3D.new()
+		rib.mesh = LP.box(Vector3(0.03, 0.025, sw - 0.26))
+		rib.material_override = sm
+		rib.position = Vector3(0.065, -0.95 + float(k) * 0.24, 0.0)
+		shutter.add_child(rib)
+	var area := Area3D.new()
+	area.name = "ShopDoor_" + sid
+	area.collision_layer = 4
+	area.collision_mask = 0
+	area.monitoring = false
+	area.set_meta("kind", "shop")
+	area.set_meta("shop_id", sid)
+	area.set_meta("hl_size", Vector3(0.3, 2.3, sw - 0.3))
+	var cs := CollisionShape3D.new()
+	var bx := BoxShape3D.new()
+	bx.size = Vector3(1.6, 2.4, sw - 0.3)
+	cs.shape = bx
+	area.add_child(cs)
+	area.transform = fr * Transform3D(Basis.IDENTITY, Vector3(0.75, 1.25, sb))
+	add_child(area)
+	_shop_doors[sid] = {"shutter": shutter, "area": area, "open": true}
+
+
+func _update_shop_shutters() -> void:
+	for sid in _shop_doors:
+		var d: Dictionary = _shop_doors[sid]
+		var op := Shops.is_open(sid, _day_progress)
+		if op != bool(d["open"]):
+			d["open"] = op
+			(d["shutter"] as Node3D).visible = not op
+
+
+func is_shop_open(sid: String) -> bool:
+	return Shops.is_open(sid, _day_progress)
+
+
+func day_progress() -> float:
+	return _day_progress
+
+
 func _shop_extras(b, signs, fr: Transform3D, shop: String, sb: float, sw: float) -> void:
 	match shop:
 		"BERBER":
@@ -1044,7 +1107,7 @@ func _shop_extras(b, signs, fr: Transform3D, shop: String, sb: float, sw: float)
 				e.modulate = Color(1, 1, 1)
 				e.transform = fr * Transform3D(Basis(Vector3.UP, 0.0 if s > 0 else PI), Vector3(0.6, 3.1, sb + sw * 0.5 + 0.6 + s * 0.06))
 				add_child(e)
-		"BAKKAL", "BÜFE":
+		"BAKKAL", "BÜFE", "MARKET", "TEKEL BAYİ":
 			# Dışarıda kasalar ve su şişeleri, gazete standı
 			b.box(Vector3(0.5, 0.6, 1.2), Vector3(0.45, 0.3, sb - sw * 0.3), Color(0.5, 0.36, 0.22))
 			for k in 8:

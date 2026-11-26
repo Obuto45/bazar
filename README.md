@@ -34,7 +34,7 @@ Oyun her açılışta yeni sürüm var mı bakar; varsa kendini günceller ve ye
 | **B** veya mikrofon | bağır (müşteri çek) |
 | **R** | pazarlığa "olmaz" de / radyoyu geri al |
 | **F** | tezgah zili |
-| **P** | Pazarcı Dükkanı |
+| **E** (dükkan kapısına bakarak) | arka sokaktaki dükkandan alışveriş |
 | **Tab** | skor tablosu |
 | **M** | mikrofon aç/kapa |
 | **H** | rehber adımını geç |
@@ -60,7 +60,8 @@ Oyun içinde alttaki ipucu satırı duruma göre değişir (kasa elde, tezgah bo
 
 - **Gerçekçi Türk Semt Pazarı:** Dokulu asfalt cadde, kaldırım bordürleri, demir iskele üstü mavi/yeşil/çizgili brandalar, sallanan ampuller, plastik hal kasaları, Türk mahalle apartmanları ve Kuzey/Güney Giriş-Çıkış kapıları.
 - **Ford Transit Toptancı ("GARDAŞLAR SEBZE MEYVE"):** Havalı korna çalarak Kuzey Kapısından pazara girer, dörtlülerini yakıp park eder, 7 çeşit taze meyve/sebze kasası tedarik eder (`Domates, Elma, Soğan, Portakal, Patlıcan, Muz, Karpuz`), süresi dolunca korna çalıp Güney Kapısından çıkar ve yeni fırsat fiyatlarıyla geri gelir! Kabine `[E]` ile korna çaldırabilirsin.
-- **Kişisel Envanter (`1–6`) & Pazarcı Dükkanı (`P`):** Meyve kasaları elde taşınır, envantere girmez. Her pazarcı 1 paket **Sigara** ile başlar. Kazandığın parayla `P` mağazasından alabileceklerin:
+- **Arka Sokaktaki Dükkanlar:** Pazarın iki yanındaki gerçek dükkanların kapısına bakıp `[E]` ile alışveriş yapılır; her dükkanın açılış saati vardır (kapalıyken kepenk iner). **Tekel Bayi** (sigara, puro; öğlen açılır), **Fırın** (simit; akşam kapanır), **Kıraathane** (çay), **Market** (meyve bıçağı, su fısfısı), **Nalbur** (tezgah geliştirmeleri; akşam pazarında kapanır), **Telefoncu** (megafon, radyo), **Eczane** (akşam nöbetçi, %50 pahalı), **Berber**, **Terzi**. Dükkana gitmek tezgahı sahipsiz bırakmak demek!
+- **Kişisel Envanter (`1–6`):** Meyve kasaları elde taşınır, envantere girmez. Her pazarcı 1 paket **Sigara** ile başlar. Dükkanlardan alabileceklerin:
   - **🚬 Sigara Paketi (15 TL):** Sol tıkla nefes çek; ucu korlanır, yanarak kısalır ve 3D duman çıkarır.
   - **🪵 Küba Purosu (45 TL):** Kalın altın bantlı, uzun yanan, yoğun dumanlı puro + Ağır Abi prestiji.
   - **📢 El Megafonu (75 TL):** Mikrofon/bağırma dB'ini +12 dB (1.85x) yükseltir; daha çok bağıran pazarcı müşterileri kendine çeker!
@@ -75,9 +76,10 @@ Oyun içinde alttaki ipucu satırı duruma göre değişir (kasa elde, tezgah bo
 |---|---|
 | `net.gd` | Steam lobi, davet, SteamMultiplayerPeer, ENet yedeği (autoload `Net`) |
 | `sfx.gd` | Prosedürel SFX, Türk kamyonet havalı kornası, Hicaz Arabesk müzik ve ambiyans (autoload `Sfx`) |
-| `main.gd` | Menü, kariyer kaydı, `P` Dükkanı, HUD (görevler, kombo, itibar, rehber), gün döngüsü, hava, kapkaççı, zorluk, MP senkronu |
+| `main.gd` | Menü, kariyer kaydı, dükkan paneli, HUD (görevler, kombo, itibar, rehber), gün döngüsü, hava, kapkaççı, zorluk, MP senkronu |
 | `player.gd` | Envanter (`1–6`), sigara/puro/megafon/bıçak/radyo mekaniği, bağırma, düşük sarsıntı, koşma FOV |
 | `items.gd` | Kişisel envanter eşyaları kataloğu ve 3D modelleri |
+| `shops.gd` | Arka sokaktaki dükkanlar: tabela, ürünler, açılış saatleri |
 | `wholesaler.gd` | Sürüşlü Ford Transit Toptancı AI, dörtlüler, havalı korna ve 7 çeşit kasa tedariği |
 | `stall.gd` | Dokulu oyuncu tezgahı, çift taraflı fiyat etiketi, terazi, tezgah radyosu ve 3D yükseltmeler |
 | `produce.gd` | 7 meyve/sebze kataloğu ve özgün low-poly 3D modeller |

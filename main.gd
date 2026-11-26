@@ -1,6 +1,6 @@
 extends Node3D
 ## Menü (TEK OYNA solo + çoklu lobi), Pazar Günü, sürüşlü Ford Transit Toptancı, iki kapılı sakin NPC + kalabalık dalgaları,
-## P Pazarcı Dükkanı (Sigara, Puro, Megafon, Bıçak, Radyo + Tezgah Geliştirmeleri), Envanter Hotbar (1-6) ve koşma hız çizgileri.
+## Arka sokaktaki dükkanlar (Tekel, Fırın, Kıraathane, Market, Nalbur, Telefoncu...; bkz. shops.gd), Envanter Hotbar (1-6) ve koşma hız çizgileri.
 
 const PlayerScript := preload("res://player.gd")
 const BazaarScript := preload("res://bazaar.gd")
@@ -10,6 +10,7 @@ const InspectorScript := preload("res://inspector.gd")
 const WholesalerScript := preload("res://wholesaler.gd")
 const Produce := preload("res://produce.gd")
 const Items := preload("res://items.gd")
+const Shops := preload("res://shops.gd")
 
 const DAY_DURATION := 300.0
 const GOLD := Color(1.0, 0.74, 0.3)
@@ -42,7 +43,8 @@ const MENU_TIPS := [
 	"İpucu: Arka arkaya hızlı satış kombo yapar; kombo 3'ten sonra kazanç artar.",
 	"İpucu: Yağmurlu günlerde müşteri azdır ama acelecidir.",
 	"İpucu: Kapkaççı görürsen ona bak ve [E] ile yakala: 30 TL ödül!",
-	"İpucu: Bayatlayan ürünü 💦 Su Fısfısı ile tazele, müşteri kaçmasın.",
+	"İpucu: Bayatlayan ürünü 💦 Su Fısfısı ile tazele; Market'te satılıyor.",
+	"İpucu: Arka sokaktaki dükkanların saatleri var: Fırın akşam kapanır, Tekel öğlen açılır.",
 	"İpucu: Zabıta fahiş fiyata ve yerdeki kasalara ceza keser.",
 	"İpucu: Mikrofona bağırmak [B] tuşundan daha uzağa ulaşır!",
 ]
@@ -53,7 +55,7 @@ E  kasa al / sat / yakala / korna
 Sol Tık  ürün diz (basılı tut) / eşya kullan
 Q  kasayı fırlat   •   Tekerlek / Z-X  fiyat
 B / Mikrofon  bağır   •   R  pazarlığa "olmaz"
-F  tezgah zili   •   P  Pazarcı Dükkanı
+F  tezgah zili   •   Dükkan kapısına bak + E  alışveriş
 Tab  skor tablosu   •   M  mikrofon aç/kapa
 H  rehber adımını geç   •   ESC  menü"""
 
@@ -107,6 +109,12 @@ var shop_wrap: ColorRect
 var shop_wallet_lbl: Label
 var shop_item_btns: Dictionary = {}
 var upgrade_rows: Dictionary = {}
+var shop_item_rows: Dictionary = {} # item_id -> satır paneli (dükkana göre gizlenir)
+var shop_title_lbl: Label
+var shop_left_col: Control
+var shop_right_col: Control
+var shop_empty_lbl: Label
+var current_shop := ""
 var scoreboard_wrap: ColorRect
 var scoreboard_list: VBoxContainer
 var summary_wrap: ColorRect
@@ -289,7 +297,7 @@ func _setup_input() -> void:
 		"fwd": KEY_W, "back": KEY_S, "left": KEY_A, "right": KEY_D,
 		"jump": KEY_SPACE, "run": KEY_SHIFT, "mic_mute": KEY_M,
 		"interact": KEY_E, "throw_crate": KEY_Q, "price_down": KEY_Z, "price_up": KEY_X, "shout": KEY_B,
-		"refuse_offer": KEY_R, "upgrade_shop": KEY_U, "open_shop": KEY_P, "ring_bell": KEY_F, "scoreboard": KEY_TAB,
+		"refuse_offer": KEY_R, "ring_bell": KEY_F, "scoreboard": KEY_TAB,
 		"tutorial_skip": KEY_H,
 	}
 	for a in keys:
@@ -992,7 +1000,8 @@ func _build_shop_panel(layer: CanvasLayer, theme: Theme) -> void:
 	root_v.add_theme_constant_override("separation", 10)
 	panel.add_child(root_v)
 
-	_logo(root_v, "PAZARCI DÜKKANI", 34).horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	shop_title_lbl = _logo(root_v, "DÜKKAN", 34)
+	shop_title_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	shop_wallet_lbl = _lbl(root_v, "Cüzdanın: 120 TL", 18, 1.0)
 	shop_wallet_lbl.add_theme_color_override("font_color", GOLD)
 	shop_wallet_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -1006,6 +1015,7 @@ func _build_shop_panel(layer: CanvasLayer, theme: Theme) -> void:
 	left_col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	left_col.add_theme_constant_override("separation", 6)
 	cols.add_child(left_col)
+	shop_left_col = left_col
 	var lh := _lbl(left_col, "🎒 KİŞİSEL EŞYALAR (Envanter 1–8)", 18, 1.0)
 	lh.add_theme_color_override("font_color", Color(0.62, 0.92, 1.0))
 	var left_scroll := ScrollContainer.new()
@@ -1038,12 +1048,14 @@ func _build_shop_panel(layer: CanvasLayer, theme: Theme) -> void:
 		var btn := _btn(hb, "%d TL" % int(info_i["cost"]), _on_buy_item.bind(iid), 32)
 		btn.custom_minimum_size.x = 96
 		shop_item_btns[iid] = btn
+		shop_item_rows[iid] = rp
 
 	# Sağ Sütun: Tezgah Geliştirmeleri
 	var right_v := VBoxContainer.new()
 	right_v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	right_v.add_theme_constant_override("separation", 8)
 	cols.add_child(right_v)
+	shop_right_col = right_v
 	var rh := _lbl(right_v, "⭐ TEZGAH GELİŞTİRMELERİ", 19, 1.0)
 	rh.add_theme_color_override("font_color", GOLD)
 	for key in StallScript.UPGRADE_ORDER:
@@ -1065,9 +1077,11 @@ func _build_shop_panel(layer: CanvasLayer, theme: Theme) -> void:
 		var dl := _lbl(tx, str(info_u["desc"]), 13, 0.78)
 		var btn := _btn(hb, "%d TL" % int(info_u["cost"]), _on_buy_upgrade.bind(key), 40)
 		btn.custom_minimum_size.x = 112
-		upgrade_rows[key] = [btn, dl]
+		upgrade_rows[key] = [btn, dl, rp]
 
-	_btn(root_v, "Kapat  [P / ESC]", _close_shop, 42)
+	shop_empty_lbl = _lbl(root_v, "🚧 Bu dükkan çok yakında açılıyor!", 18, 0.9)
+	shop_empty_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_btn(root_v, "Kapat  [ESC]", _close_shop, 42)
 	shop_wrap.hide()
 
 
@@ -1271,20 +1285,42 @@ func _animate_money_pop() -> void:
 	tw.chain().tween_callback(money_pop.hide)
 
 
-func _toggle_shop() -> void:
-	if world == null or day_ended or pause_wrap.visible:
+func _day_prog() -> float:
+	return clampf(day_time / DAY_DURATION, 0.0, 1.0)
+
+
+## Oyuncu bir dükkanın kapısında [E]'ye bastı: açıksa o dükkanın paneli açılır.
+func open_shop(shop_id: String) -> void:
+	if world == null or day_ended or pause_wrap.visible or not Shops.SHOPS.has(shop_id):
 		return
 	if shop_wrap.visible:
 		_close_shop()
-	else:
-		_refresh_shop_panel()
-		shop_wrap.show()
-		_pop_in(shop_wrap)
-		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+		return
+	var prog := _day_prog()
+	if not Shops.is_open(shop_id, prog):
+		show_toast("🔒 %s kapalı — %s" % [Shops.display_name(shop_id, prog), Shops.closed_text(shop_id, prog)], Color(1.0, 0.7, 0.4))
+		return
+	current_shop = shop_id
+	var info: Dictionary = Shops.SHOPS[shop_id]
+	shop_title_lbl.text = "%s %s" % [str(info["icon"]), Shops.display_sign(shop_id, prog)]
+	var items: Array = info["items"]
+	var ups: Array = info["upgrades"]
+	for iid in shop_item_rows:
+		(shop_item_rows[iid] as Control).visible = iid in items
+	for key in upgrade_rows:
+		(upgrade_rows[key][2] as Control).visible = key in ups
+	shop_left_col.visible = not items.is_empty()
+	shop_right_col.visible = not ups.is_empty()
+	shop_empty_lbl.visible = items.is_empty() and ups.is_empty()
+	_refresh_shop_panel()
+	shop_wrap.show()
+	_pop_in(shop_wrap)
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 
 func _close_shop() -> void:
 	shop_wrap.hide()
+	current_shop = ""
 	if world and not pause_wrap.visible and not day_ended:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
@@ -1298,10 +1334,11 @@ func _refresh_shop_panel() -> void:
 	if me == null or st == null:
 		return
 	shop_wallet_lbl.text = "Cüzdanın: %d TL" % int(me.money)
+	var mult := Shops.price_mult(current_shop, _day_prog()) if current_shop != "" else 1.0
 	for iid in shop_item_btns:
 		var btn: Button = shop_item_btns[iid]
 		var info_i: Dictionary = Items.CATALOG[iid]
-		var cost: int = int(info_i["cost"])
+		var cost: int = int(ceil(float(info_i["cost"]) * mult))
 		var cons: bool = bool(info_i["consumable"])
 		var owned: bool = me.has_inventory_item(iid) or (iid == "radyo" and st.has_radio)
 		if not cons and owned:
@@ -1323,16 +1360,25 @@ func _refresh_shop_panel() -> void:
 
 func _on_buy_item(item_id: String) -> void:
 	if Net.online():
-		rpc_request_buy_item.rpc_id(1, item_id)
+		rpc_request_buy_item.rpc_id(1, item_id, current_shop)
 	else:
-		rpc_request_buy_item(item_id)
+		rpc_request_buy_item(item_id, current_shop)
+
+
+## Host doğrular: dükkan açık mı, bu dükkan bunu satıyor mu.
+func _shop_sells(shop_id: String, list_key: String, what: String) -> bool:
+	if not Shops.SHOPS.has(shop_id) or not Shops.is_open(shop_id, _day_prog()):
+		return false
+	return what in (Shops.SHOPS[shop_id][list_key] as Array)
 
 
 @rpc("any_peer", "call_local", "reliable")
-func rpc_request_buy_item(item_id: String) -> void:
+func rpc_request_buy_item(item_id: String, shop_id := "") -> void:
 	if Net.online() and not multiplayer.is_server():
 		return
 	if not Items.CATALOG.has(item_id) or players == null or stalls == null:
+		return
+	if not _shop_sells(shop_id, "items", item_id):
 		return
 	var pid := multiplayer.get_remote_sender_id() if Net.online() else 1
 	if pid == 0:
@@ -1345,7 +1391,7 @@ func rpc_request_buy_item(item_id: String) -> void:
 	var cons: bool = bool(info_i["consumable"])
 	if not cons and (p.has_inventory_item(item_id) or (item_id == "radyo" and st.has_radio)):
 		return
-	var cost: int = int(info_i["cost"])
+	var cost: int = int(ceil(float(info_i["cost"]) * Shops.price_mult(shop_id, _day_prog())))
 	if int(p.money) < cost:
 		_notify_peer(pid, "Yetersiz bakiye! (%d TL gerekli)" % cost, Color(1.0, 0.45, 0.4))
 		return
@@ -1357,16 +1403,18 @@ func rpc_request_buy_item(item_id: String) -> void:
 
 func _on_buy_upgrade(key: String) -> void:
 	if Net.online():
-		rpc_request_buy_upgrade.rpc_id(1, key)
+		rpc_request_buy_upgrade.rpc_id(1, key, current_shop)
 	else:
-		rpc_request_buy_upgrade(key)
+		rpc_request_buy_upgrade(key, current_shop)
 
 
 @rpc("any_peer", "call_local", "reliable")
-func rpc_request_buy_upgrade(key: String) -> void:
+func rpc_request_buy_upgrade(key: String, shop_id := "") -> void:
 	if Net.online() and not multiplayer.is_server():
 		return
 	if not StallScript.UPGRADES.has(key) or players == null or stalls == null:
+		return
+	if not _shop_sells(shop_id, "upgrades", key):
 		return
 	var pid := multiplayer.get_remote_sender_id() if Net.online() else 1
 	if pid == 0:
@@ -2163,7 +2211,7 @@ func _spawn(id: int, spot_idx := -1) -> void:
 	if p.is_multiplayer_authority():
 		p.money_earned.connect(_on_money_earned)
 		p.money_spent.connect(_on_money_spent)
-		p.open_shop.connect(_toggle_shop)
+		p.open_shop.connect(open_shop)
 		p.inventory_changed.connect(_refresh_hotbar)
 		if p.has_signal("combo_changed"):
 			p.connect("combo_changed", _on_combo_changed)
@@ -2423,7 +2471,7 @@ const TUT_STEPS := [
 	["price", "🏷️ Fiyatı ayarla: rafa bakıp [Tekerlek] çevir ya da [Z] / [X] bas. Adil fiyat = mutlu teyze!"],
 	["shout", "📣 Müşteri çek: [B] tuşunu basılı tut ya da mikrofona bağır — \"Taze domateees!\""],
 	["sell", "🤝 Tezgahına gelen müşteriye bak ve [E] ile sat. Ucuz teklife [R] ile \"olmaz\" diyebilirsin."],
-	["spray", "💦 [P] Dükkandan Su Fısfısı al, tezgahına bakıp [Sol Tık] ile ürünlerini tazele."],
+	["spray", "💦 Arka sokaktaki MARKET'in kapısına bakıp [E] ile Su Fısfısı al, tezgahına bakıp [Sol Tık] ile tazele."],
 ]
 
 
@@ -3172,8 +3220,8 @@ func _context_hint(me: Node, st: Node) -> String:
 	if st and st.has_method("get_item_freshness"):
 		for it in _stock_map(st):
 			if float(st.call("get_item_freshness", it)) < 0.45:
-				return "🥀 Ürünlerin bayatlıyor! 💦 Su Fısfısı ile tazele ([P] Dükkan)"
-	return "[P] Dükkan   •   [Tab] Skor   •   [B] Bağır   •   [ESC] Tuşlar & Ayarlar"
+				return "🥀 Ürünlerin bayatlıyor! 💦 Su Fısfısı ile tazele (Market'ten al)"
+	return "🏪 Dükkanlar arka sokakta   •   [Tab] Skor   •   [B] Bağır   •   [ESC] Tuşlar & Ayarlar"
 
 
 # ---------- İlk açılış rehberi ----------

@@ -6,7 +6,7 @@ const MODEL := preload("res://models/character.glb")
 const LP := preload("res://lowpoly.gd")
 const VFX := preload("res://vfx.gd")
 
-enum Mode { PATROL, CHASE }
+enum Mode { PATROL, CHASE, CHASE_THIEF }
 
 const FINE_GOUGE := 25
 const FINE_LITTER := 15
@@ -14,6 +14,10 @@ const FINE_ASSAULT := 50
 const CLEAN_REWARD := 10
 const WALK_SPEED := 2.75
 const CHASE_SPEED := 5.9
+const THIEF_SIGHT := 16.0
+const PATROL_LINES := ["👮 Fiyat etiketleri yerinde mi?", "👮 Teraziler kontrol edilecek!", "👮 Kaldırım işgali yasak!",
+	"👮 Fişinizi kesmeyi unutmayın!", "👮 Pazar düzenli olacak!", "👮 Bağırmak serbest, kazık yasak!",
+	"👮 Kasalar yere atılmayacak!", "👮 Hayırlı işler esnaf!", "👮 Çürük mal satan yandı!"]
 
 var mode: int = Mode.PATROL
 var chase_peer_id := 0
@@ -29,6 +33,13 @@ var _net_pos := Vector3.ZERO
 var _net_yaw := 0.0
 var _net_spd := 0.0
 var _sync_t := 0.0
+var _chase_thief: Node3D
+var _thief_scan_t := 0.0
+var _line_t := 3.0
+var _line_idx := 0
+var _verdict_hold := 0.0
+var _whistle_t := 0.0
+var _whistle: Node3D
 
 var rig: Node3D
 var head: Node3D
@@ -58,6 +69,7 @@ func start_chase(target_attacker: int) -> void:
 	if bubble:
 		bubble.text = _bubble_text
 		bubble.modulate = Color(1.0, 0.35, 0.28)
+	_whistle_t = 1.0
 	Sfx.play_3d("whistle", global_position + Vector3(0, 1.4, 0), self, 1.0, 1.12, 42.0)
 
 
@@ -67,12 +79,15 @@ func _ready() -> void:
 	bubble.text = _bubble_text
 	bubble.position = Vector3(0, 2.02, 0)
 	bubble.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-	bubble.font_size = 38
-	bubble.outline_size = 11
+	bubble.font_size = 44
+	bubble.pixel_size = 0.0042
+	bubble.outline_size = 14
 	bubble.modulate = Color(1.0, 0.35, 0.28) if mode == Mode.CHASE else Color(0.58, 0.85, 1.0)
 	bubble.outline_modulate = Color(0.05, 0.08, 0.18)
 	bubble.no_depth_test = true
+	bubble.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(bubble)
+	_whistle_t = 1.0
 	Sfx.play_3d("whistle", global_position + Vector3(0, 1.4, 0), self, 0.0, 1.05, 40.0)
 
 
@@ -91,6 +106,17 @@ func _build_visual() -> void:
 		m.owner = null
 		m.transform = Transform3D.IDENTITY
 		w.add_child(m)
+		if n == "Head" and m is MeshInstance3D:
+			# GLB'deki kasketi at, yerine resmi zabıta şapkası gelecek
+			var src_mesh := (m as MeshInstance3D).mesh
+			var am := ArrayMesh.new()
+			for i in src_mesh.get_surface_count():
+				var mt := src_mesh.surface_get_material(i)
+				if mt and mt.resource_name in ["Hat", "HatDetail"]:
+					continue
+				am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, src_mesh.surface_get_arrays(i))
+				am.surface_set_material(am.get_surface_count() - 1, mt)
+			(m as MeshInstance3D).mesh = am
 		if n == "Head":
 			head.add_child(w)
 			head.position = rest[n]
@@ -104,15 +130,42 @@ func _build_visual() -> void:
 		for mi: MeshInstance3D in meshes:
 			for i in mi.mesh.get_surface_count():
 				var mat := mi.mesh.surface_get_material(i) as BaseMaterial3D
-				if mat and mat.resource_name == "Shirt":
+				var recol := {"Shirt": Color(0.11, 0.2, 0.42), "Pants": Color(0.08, 0.12, 0.24), "Hair": Color(0.08, 0.06, 0.05),
+					"Shoe": Color(0.06, 0.06, 0.07)}
+				if mat and recol.has(mat.resource_name):
 					var c := mat.duplicate() as BaseMaterial3D
-					c.albedo_color = Color(0.11, 0.22, 0.46)
+					c.albedo_color = recol[mat.resource_name]
 					mi.set_surface_override_material(i, c)
 	src.free()
 	var h := parts["Head"] as Node3D
-	LP.add(h, LP.cyl(0.30, 0.25, 0.16, 10), Vector3(0, 0.29, 0), Color(0.09, 0.17, 0.38))
-	LP.add(h, LP.box(Vector3(0.30, 0.035, 0.22)), Vector3(0, 0.22, 0.25), Color(0.06, 0.08, 0.14))
-	LP.add(h, LP.cyl(0.055, 0.055, 0.03, 6), Vector3(0, 0.28, 0.28), Color(1.0, 0.82, 0.2), Vector3(PI / 2, 0, 0), 0.22, 0.85)
+	# Resmi zabıta şapkası: kısa saç + lacivert tepe + siperlik + altın arma
+	LP.add(h, LP.ellipsoid(0.335, 0.2, 0.34, 10, 5), Vector3(0, 0.15, -0.03), Color(0.08, 0.06, 0.05))
+	LP.add(h, LP.cyl(0.36, 0.33, 0.14, 12), Vector3(0, 0.3, -0.01), Color(0.09, 0.16, 0.36))
+	LP.add(h, LP.cyl(0.335, 0.335, 0.05, 12), Vector3(0, 0.25, -0.01), Color(0.05, 0.06, 0.1))
+	LP.add(h, LP.box(Vector3(0.36, 0.03, 0.2)), Vector3(0, 0.23, 0.36), Color(0.04, 0.05, 0.08), Vector3(0.25, 0, 0), 0.3)
+	LP.add(h, LP.cyl(0.06, 0.06, 0.03, 8), Vector3(0, 0.31, 0.33), Color(1.0, 0.82, 0.2), Vector3(PI / 2 - 0.15, 0, 0), 0.22, 0.85)
+	# Gövde: kemer, tokası, omuzlukta reflektör, sırtta ZABITA yazısı
+	var b := parts["Body"] as Node3D
+	LP.add(b, LP.cyl(0.255, 0.255, 0.06, 12), Vector3(0, -0.06, 0), Color(0.05, 0.05, 0.06))
+	LP.add(b, LP.box(Vector3(0.08, 0.06, 0.03)), Vector3(0, -0.06, 0.25), Color(0.95, 0.8, 0.25), Vector3.ZERO, 0.25, 0.85)
+	LP.add(b, LP.box(Vector3(0.5, 0.04, 0.47)), Vector3(0, 0.1, 0), Color(0.95, 0.85, 0.2), Vector3.ZERO, 0.4)
+	var back := Label3D.new()
+	back.text = "ZABITA"
+	back.font_size = 40
+	back.pixel_size = 0.0042
+	back.outline_size = 6
+	back.modulate = Color(1.0, 0.95, 0.75)
+	back.outline_modulate = Color(0.05, 0.08, 0.18)
+	back.position = Vector3(0, 0.02, -0.25)
+	back.rotation = Vector3(0, PI, 0)
+	back.double_sided = false
+	back.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	b.add_child(back)
+	# Düdük (sağ elde, çalarken ağza gider)
+	_whistle = Node3D.new()
+	_whistle.position = Vector3(0, 0.05, 0.08)
+	(parts["HandR"] as Node3D).add_child(_whistle)
+	LP.add(_whistle, LP.cyl(0.025, 0.03, 0.08, 6), Vector3.ZERO, Color(0.85, 0.85, 0.88), Vector3(PI / 2, 0, 0), 0.25, 0.8)
 	var hl := parts["HandL"] as Node3D
 	LP.add(hl, LP.box(Vector3(0.18, 0.24, 0.03)), Vector3(0, 0.02, 0.10), Color(0.45, 0.28, 0.14), Vector3(-0.3, 0, 0))
 	LP.add(hl, LP.box(Vector3(0.14, 0.19, 0.035)), Vector3(0, 0.02, 0.105), Color(0.98, 0.96, 0.9), Vector3(-0.3, 0, 0))
@@ -124,8 +177,12 @@ func _physics_process(dt: float) -> void:
 	if is_host:
 		if mode == Mode.CHASE:
 			_tick_chase(dt)
+		elif mode == Mode.CHASE_THIEF:
+			_tick_chase_thief(dt)
 		else:
 			_tick_patrol(dt)
+			_scan_for_thieves(dt)
+			_tick_patrol_lines(dt)
 		_sync_t += dt
 		if Net.online() and _sync_t >= 0.09:
 			_sync_t = 0.0
@@ -137,6 +194,101 @@ func _physics_process(dt: float) -> void:
 	rig.rotation.y = _body_yaw
 	head.rotation.y = lerp_angle(head.rotation.y, _body_yaw, minf(dt * 10.0, 1.0))
 	_animate_walk(dt)
+
+
+func _process(_dt: float) -> void:
+	# Uzaktan okunur balon: kameraya uzaklıkla büyür
+	if bubble == null:
+		return
+	var cam := get_viewport().get_camera_3d()
+	if cam:
+		var d := cam.global_position.distance_to(bubble.global_position)
+		var s := clampf(d / 7.0, 1.0, 2.3) / maxf(scale.x, 0.5)
+		bubble.scale = Vector3(s, s, s)
+
+
+func _set_bubble(t: String) -> void:
+	_bubble_text = t
+	if bubble:
+		bubble.text = t
+
+
+## Devriyede ara ara replik (host; rpc_sync ile istemcilere gider).
+func _tick_patrol_lines(dt: float) -> void:
+	if _verdict_hold > 0.0:
+		_verdict_hold -= dt
+		return
+	_line_t -= dt
+	if _line_t <= 0.0:
+		_line_t = randf_range(4.0, 6.5)
+		_line_idx = (_line_idx + 1 + randi() % 3) % PATROL_LINES.size()
+		_set_bubble(PATROL_LINES[_line_idx])
+		if bubble:
+			bubble.modulate = Color(0.58, 0.85, 1.0)
+
+
+## Yakındaki kaçan kapkaççıyı görürse düdük çalıp peşine düşer.
+func _scan_for_thieves(dt: float) -> void:
+	_thief_scan_t -= dt
+	if _thief_scan_t > 0.0:
+		return
+	_thief_scan_t = 0.4
+	var tg := get_parent().get_node_or_null("Thieves") if get_parent() else null
+	if tg == null:
+		return
+	for th in tg.get_children():
+		if not (th is Node3D) or not th.has_method("is_carrying") or not th.is_carrying():
+			continue
+		if th.has_method("is_catchable") and not th.is_catchable():
+			continue
+		if (th as Node3D).global_position.distance_to(global_position) < THIEF_SIGHT:
+			_chase_thief = th
+			mode = Mode.CHASE_THIEF
+			_chase_timeout = 12.0
+			_pause_t = 0.0
+			_verdict_hold = 0.0
+			if Net.online():
+				rpc_thief_alarm.rpc()
+			else:
+				rpc_thief_alarm()
+			return
+
+
+@rpc("authority", "call_local", "reliable")
+func rpc_thief_alarm() -> void:
+	_set_bubble("🚨 DUR! KAPKAÇÇI! YAKALAYIN!")
+	if bubble:
+		bubble.modulate = Color(1.0, 0.35, 0.28)
+	_whistle_t = 1.2
+	Sfx.play_3d("whistle", global_position + Vector3(0, 1.4, 0), self, 1.0, 1.15, 44.0)
+
+
+func _tick_chase_thief(dt: float) -> void:
+	_chase_timeout -= dt
+	var th := _chase_thief
+	if th == null or not is_instance_valid(th) or not th.is_inside_tree() or _chase_timeout <= 0.0 \
+			or (th.has_method("is_catchable") and not th.is_catchable()):
+		_chase_thief = null
+		mode = Mode.PATROL
+		_set_bubble("👮 Kaçtı... Bir dahakine!")
+		_verdict_hold = 2.5
+		return
+	var diff := Vector3(th.global_position.x - position.x, 0.0, th.global_position.z - position.z)
+	var dist := diff.length()
+	if dist < 1.5:
+		var had: bool = th.is_carrying()
+		if th.has_method("zabita_catch"):
+			th.zabita_catch()
+		_chase_thief = null
+		mode = Mode.PATROL
+		_pause_t = 2.0
+		_verdict_hold = 3.0
+		_announce("👮 KAPKAÇÇI YAKALANDI! %s" % ("Mal sahibine döndü!" if had else ""), th.global_position - Vector3(0, 0.6, 0), true)
+		return
+	var dir := diff / maxf(dist, 0.001)
+	position += dir * minf(CHASE_SPEED * dt, dist)
+	_body_yaw = lerp_angle(_body_yaw, atan2(dir.x, dir.z), minf(dt * 10.0, 1.0))
+	_spd = CHASE_SPEED
 
 
 func _tick_chase(dt: float) -> void:
@@ -227,7 +379,11 @@ func _inspect_nearby_stalls() -> void:
 						_announce("🚨 SOKAK KİRLİLİĞİ! -%d TL" % FINE_LITTER, st.global_position, false)
 						return
 			if st.total_stock() >= 3:
-				owner.award_money(CLEAN_REWARD, 0, false)
+				# Satış sayılmayan ödül (yeni imzada is_sale=false; kombo/satış sayacını etkilemez)
+				if owner.get_method_argument_count("award_money") >= 4:
+					owner.award_money(CLEAN_REWARD, 0, false, false)
+				else:
+					owner.award_money(0, CLEAN_REWARD, false)
 				_announce("👍 TEMİZ ESNAF! +%d TL" % CLEAN_REWARD, st.global_position, true)
 			else:
 				_bubble_text = "👮 Denetim devam ediyor..."
@@ -246,6 +402,8 @@ func _announce(msg: String, stall_pos: Vector3, good: bool) -> void:
 @rpc("authority", "call_local", "reliable")
 func rpc_verdict(msg: String, stall_pos: Vector3, good: bool) -> void:
 	_bubble_text = msg
+	_verdict_hold = 3.0
+	_whistle_t = 0.0 if good else 0.9
 	if bubble:
 		bubble.text = msg
 		bubble.modulate = Color(0.52, 1.0, 0.58) if good else Color(1.0, 0.35, 0.28)
@@ -272,6 +430,8 @@ func rpc_sync(p: Vector3, yaw: float, s: float, txt: String) -> void:
 
 
 func _animate_walk(dt: float) -> void:
+	if _whistle_t > 0.0:
+		_whistle_t = maxf(_whistle_t - dt, 0.0)
 	var kw := clampf(_spd / 2.8, 0.0, 1.6)
 	var stride := 0.28 * minf(kw, 1.35)
 	var lift := 0.11 * minf(kw, 1.35)
@@ -286,6 +446,8 @@ func _animate_walk(dt: float) -> void:
 		parts[fn].position = parts[fn].position.lerp(fp, f)
 		parts[fn].rotation = parts[fn].rotation.lerp(Vector3(-sin(c) * 0.48 * minf(kw, 1.2), 0, 0), f)
 		var hp: Vector3 = rest[hn] + Vector3(0, maxf(0.0, cos(c)) * 0.05 * kw, cos(c) * 0.26 * minf(kw, 1.3))
+		if hn == "HandR" and _whistle_t > 0.0:
+			hp = Vector3(-0.08, 0.98, 0.3) # düdüğü ağzına götürür
 		parts[hn].position = parts[hn].position.lerp(hp, f)
 		parts[hn].rotation = parts[hn].rotation.lerp(Vector3(-cos(c) * 0.55 * minf(kw, 1.3), 0, 0), f)
 	var bp: Vector3 = rest["Body"] + Vector3(0, absf(sin(_phase)) * 0.04 * minf(kw, 1.2), 0)

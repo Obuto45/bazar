@@ -28,7 +28,9 @@ $p = $p -replace 'config/version="[^"]*"', "config/version=`"$Version`""
 $out = "build/$tag"
 Remove-Item $out -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory $out -Force | Out-Null
-& $godot --headless --path . --export-release "Windows Desktop" "$out/Bazar.exe"
+$ErrorActionPreference = "Continue" # Godot uyarıları stderr'e yazar: PS 5.1'de hata sayılmasın
+& $godot --headless --path . --export-release "Windows Desktop" "$out/Bazar.exe" 2>&1 | Out-Host
+$ErrorActionPreference = "Stop"
 if (-not (Test-Path "$out/Bazar.exe")) { throw "Export başarısız (export şablonları kurulu mu?)." }
 Copy-Item steam_appid.txt $out/
 

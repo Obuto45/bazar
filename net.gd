@@ -129,21 +129,29 @@ func _on_lobby_joined(id: int, _perm: int, _locked: bool, response: int) -> void
 
 # --- Tek PC testi (ENet) ---
 
+## Yerel test portu: varsayılan 7777; paralel testler için `-- port=7791` ile değiştirilebilir.
+func local_port() -> int:
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("port=") and a.substr(5).is_valid_int():
+			return clampi(a.substr(5).to_int(), 1024, 65535)
+	return LOCAL_PORT
+
+
 func host_local() -> void:
 	leave()
 	var p := ENetMultiplayerPeer.new()
-	if p.create_server(LOCAL_PORT, MAX_PLAYERS) != OK:
-		status.emit("Port %d açılamadı." % LOCAL_PORT)
+	if p.create_server(local_port(), MAX_PLAYERS) != OK:
+		status.emit("Port %d açılamadı." % local_port())
 		return
 	multiplayer.multiplayer_peer = p
 	_register_self()
-	status.emit("Yerel host açık (port %d)." % LOCAL_PORT)
+	status.emit("Yerel host açık (port %d)." % local_port())
 
 
 func join_local() -> void:
 	leave()
 	var p := ENetMultiplayerPeer.new()
-	if p.create_client("127.0.0.1", LOCAL_PORT) != OK:
+	if p.create_client("127.0.0.1", local_port()) != OK:
 		status.emit("İstemci oluşturulamadı.")
 		return
 	multiplayer.multiplayer_peer = p

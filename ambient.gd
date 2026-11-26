@@ -6,6 +6,8 @@ extends Node3D
 
 const LP := preload("res://lowpoly.gd")
 const VFX := preload("res://vfx.gd")
+const CHAR_SIMITCI := preload("res://models/char_simitci.glb")
+const CHAR_CAYCI := preload("res://models/char_cayci.glb")
 
 const PIGEON_SHADER := """
 shader_type spatial;
@@ -46,10 +48,10 @@ const CAT_COLS := [
 enum PState { GROUND, FLY_UP, PERCHED, RETURN }
 
 const VENDOR_OFFERS := {
-	"cay": {"price": 5, "hint": "[E] 🍵 Çay al — 5 TL  (40 sn bağırma +%25)",
-		"ask": "Abi çay ister misin?\nTavşan kanı, 5 lira!", "thanks": "Afiyet olsun abi!", "bye": "Sonra uğrarım abi!"},
-	"simit": {"price": 10, "hint": "[E] 🥯 Simit al — 10 TL  (40 sn %15 hızlı yürü)",
-		"ask": "Sıcak simit abi?\nÇıtır çıtır, 10 lira!", "thanks": "Bereket versin abi!", "bye": "Kolay gelsin abi!"},
+	"cay": {"price": 5, "hint": "[E] 🍵 İnce belli çay al — 5 TL  (eline al & yudumla!)",
+		"ask": "Abi çay ister misin?\nTavşan kanı, 5 lira!", "thanks": "Afiyet olsun abi, sıcak iç!", "bye": "Sonra uğrarım abi!"},
+	"simit": {"price": 10, "hint": "[E] 🥯 Sıcak simit al — 10 TL  (eline al & ısır!)",
+		"ask": "Sıcak simit abi?\nÇıtır çıtır, 10 lira!", "thanks": "Bereket versin abi, çıtır çıtır!", "bye": "Kolay gelsin abi!"},
 }
 
 var bazaar: Node3D
@@ -412,64 +414,72 @@ func _tick_pigeons(dt: float) -> void:
 func _make_person(kind: String) -> Dictionary:
 	var root := Node3D.new()
 	add_child(root)
-	var skin := Color(0.86, 0.66, 0.5)
-	var shirt := Color(0.92, 0.9, 0.85) if kind == "cay" else Color(0.55, 0.32, 0.24)
-	var pants := Color(0.2, 0.2, 0.24)
-	var b := LP.batch()
-	b.box(Vector3(0.36, 0.5, 0.22), Vector3(0, 1.17, 0), shirt)
-	b.box(Vector3(0.34, 0.12, 0.2), Vector3(0, 0.88, 0), pants)
-	b.sphere(0.13, Vector3(0, 1.58, 0), skin, 8, 5)
-	b.box(Vector3(0.1, 0.03, 0.03), Vector3(0, 1.53, -0.125), Color(0.15, 0.1, 0.08)) # bıyık
-	b.sphere(0.018, Vector3(-0.045, 1.6, -0.12), Color(0.1, 0.1, 0.1), 4, 2)
-	b.sphere(0.018, Vector3(0.045, 1.6, -0.12), Color(0.1, 0.1, 0.1), 4, 2)
+	# Blender modeli (char_simitci / char_cayci): yüzer eller/ayaklar. Model +Z'ye bakar,
+	# yürüyüş kodu -Z'ye baktığı için 180° çevrilir. Body+Head "body" düğümünde (sallanma),
+	# eller kol pivotlarında, ayaklar bacak pivotlarında: eski bacak/kol salınımı aynen çalışır.
+	var src: Node3D = (CHAR_SIMITCI if kind == "simit" else CHAR_CAYCI).instantiate()
+	var flip := Basis(Vector3.UP, PI)
+	var body := Node3D.new()
+	body.name = "Figure"
+	root.add_child(body)
+	var take := func(n: String) -> Node3D:
+		var m: Node3D = src.find_child(n, true, false)
+		var pos := flip * m.position
+		m.get_parent().remove_child(m)
+		m.owner = null
+		m.transform = Transform3D(flip, Vector3.ZERO)
+		m.set_meta("rest", pos)
+		return m
+	for n in ["Body", "Head"]:
+		var m: Node3D = take.call(n)
+		body.add_child(m)
+		m.position = m.get_meta("rest")
 	if kind == "simit":
-		b.cyl(0.14, 0.14, 0.06, Vector3(0, 1.7, 0), Color(0.3, 0.3, 0.32), Vector3.ZERO, 8) # kasket
-		b.box(Vector3(0.16, 0.02, 0.08), Vector3(0, 1.69, -0.14), Color(0.28, 0.28, 0.3))
-		# Başta simit tablası
-		b.cyl(0.07, 0.07, 0.04, Vector3(0, 1.75, 0), Color(0.9, 0.9, 0.88), Vector3.ZERO, 8)
-		b.cyl(0.42, 0.42, 0.03, Vector3(0, 1.78, 0), Color(0.55, 0.38, 0.22), Vector3.ZERO, 12)
+		# Baştaki halka bezin üstünde simit tablası
+		var b := LP.batch()
+		b.cyl(0.42, 0.42, 0.03, Vector3(0, 1.53, 0), Color(0.55, 0.38, 0.22), Vector3.ZERO, 12)
 		for k in 9:
 			var a := float(k) * TAU / 9.0
 			var r := 0.28 if k < 8 else 0.0
-			b.ellipsoid(Vector3(0.09, 0.03, 0.09), Vector3(cos(a) * r, 1.82 + (0.04 if k == 8 else 0.0), sin(a) * r), Color(0.72, 0.42, 0.18), Vector3.ZERO, 7, 3)
-	else:
-		b.box(Vector3(0.34, 0.42, 0.02), Vector3(0, 1.0, -0.12), Color(0.85, 0.85, 0.82)) # önlük
-		b.ellipsoid(Vector3(0.12, 0.05, 0.12), Vector3(0, 1.69, 0), Color(0.18, 0.15, 0.12), Vector3.ZERO, 7, 3) # saç
-	var body := _mesh_node(root, b)
+			b.ellipsoid(Vector3(0.09, 0.03, 0.09), Vector3(cos(a) * r, 1.57 + (0.04 if k == 8 else 0.0), sin(a) * r), Color(0.72, 0.42, 0.18), Vector3.ZERO, 7, 3)
+		_mesh_node(body, b)
 	var legs: Array[Node3D] = []
-	for s in [-1.0, 1.0]:
+	for fn in ["FootL", "FootR"]:
+		var f: Node3D = take.call(fn)
+		var fp: Vector3 = f.get_meta("rest")
 		var leg := Node3D.new()
-		leg.position = Vector3(s * 0.09, 0.84, 0)
+		leg.position = Vector3(fp.x, 0.6, fp.z)
 		root.add_child(leg)
-		var lb := LP.batch()
-		lb.box(Vector3(0.13, 0.8, 0.14), Vector3(0, -0.4, 0), pants)
-		lb.box(Vector3(0.14, 0.07, 0.24), Vector3(0, -0.8, -0.04), Color(0.12, 0.1, 0.08))
-		_mesh_node(leg, lb)
+		leg.add_child(f)
+		f.position = Vector3(0, fp.y - 0.6, 0)
 		legs.append(leg)
 	var arms: Array[Node3D] = []
-	for s in [-1.0, 1.0]:
+	for hn in ["HandL", "HandR"]:
+		var hnd: Node3D = take.call(hn)
+		var hp: Vector3 = hnd.get_meta("rest")
 		var arm := Node3D.new()
-		arm.position = Vector3(s * 0.23, 1.38, 0)
+		arm.position = Vector3(hp.x, hp.y + 0.58, hp.z)
 		root.add_child(arm)
-		var ab := LP.batch()
-		ab.box(Vector3(0.1, 0.56, 0.11), Vector3(0, -0.27, 0), shirt)
-		ab.sphere(0.055, Vector3(0, -0.58, 0), skin, 6, 3)
-		if kind == "cay" and s > 0:
+		arm.add_child(hnd)
+		hnd.position = Vector3(0, -0.58, 0)
+		if kind == "cay" and hn == "HandR":
 			# Askılı çay tepsisi
+			var ab := LP.batch()
 			ab.rod(Vector3(0, -0.6, 0), Vector3(0.0, -0.75, -0.18), 0.008, Color(0.75, 0.75, 0.78))
 			ab.rod(Vector3(0, -0.6, 0), Vector3(0.0, -0.75, 0.18), 0.008, Color(0.75, 0.75, 0.78))
 			ab.cyl(0.2, 0.2, 0.015, Vector3(0, -0.76, 0), Color(0.8, 0.78, 0.74), Vector3.ZERO, 12)
 			for k in 4:
 				var a := float(k) * TAU / 4.0 + 0.4
 				ab.cyl(0.024, 0.018, 0.075, Vector3(cos(a) * 0.11, -0.71, sin(a) * 0.11), Color(0.68, 0.2, 0.06), Vector3.ZERO, 6)
-		_mesh_node(arm, ab)
+			_mesh_node(arm, ab)
 		arms.append(arm)
+	src.free()
 	var lbl := Label3D.new()
 	lbl.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	lbl.font_size = 30
 	lbl.outline_size = 8
 	lbl.modulate = Color(1.0, 0.95, 0.8)
-	lbl.position = Vector3(0, 2.25 if kind == "simit" else 2.05, 0)
+	lbl.position = Vector3(0, 1.95 if kind == "simit" else 1.75, 0)
 	lbl.visible = false
 	root.add_child(lbl)
 	# Oyuncunun [E] ile satın alabildiği teklif alanı (player.gd "vendor")

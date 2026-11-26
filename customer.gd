@@ -7,7 +7,11 @@ extends Node3D
 ## - Bekleme animasyonları (etrafa bakma, telefon, ayak vurma, saat, ürün yoklama), yağmurda şemsiye,
 ##   beden/kıyafet/şapka/gözlük/çanta/pazar arabası çeşitliliği.
 
-const MODEL := preload("res://models/character.glb")
+const MODEL_MAN := preload("res://models/char_musteri_erkek.glb")
+const MODEL_WOMAN := preload("res://models/char_musteri_kadin.glb")
+const MODEL_TEYZE := preload("res://models/char_teyze.glb")
+const MODEL_EMEKLI := preload("res://models/char_emekli.glb")
+const MODEL_KID := preload("res://models/char_cocuk.glb")
 const LP := preload("res://lowpoly.gd")
 const Produce := preload("res://produce.gd")
 const StallScript := preload("res://stall.gd")
@@ -409,9 +413,9 @@ func _pal(arr: Array, salt: int) -> Variant:
 # ---------------------------------------------------------------- görseller
 
 ## GLB karakterini parça parça (Body/Head/eller/ayaklar) kurar, renkleri boyar.
-func _build_figure(into_rig: Node3D, into_head: Node3D, cols: Dictionary, head_exclude: Array,
+func _build_figure(model: PackedScene, into_rig: Node3D, into_head: Node3D, cols: Dictionary, head_exclude: Array,
 		out_parts: Dictionary, out_rest: Dictionary) -> void:
-	var src := MODEL.instantiate()
+	var src := model.instantiate()
 	for n in PART_NAMES:
 		var m: Node3D = src.find_child(n, true, false)
 		var w := Node3D.new()
@@ -474,21 +478,30 @@ func _build_visual() -> void:
 			pass
 		_:
 			keep_hat = not _fem and (v % 5) < 2
+	# Kadın saç stili: 0 = başörtülü (modelin saçı atılır), 2 = topuz, 3 = at kuyruğu
+	var fem_style := v % 4
+	if archetype == Archetype.VIP:
+		fem_style = 1
+	var scarf := _fem and (fem_style == 0 or (archetype == Archetype.AILE and v % 3 == 0))
 	if _fem:
-		keep_hair = false
 		keep_hat = false
+		keep_hair = not scarf
 	elif not keep_hat and (v % 7) == 3:
-		keep_hair = false # sinekkaydı tıraşlı genç
+		keep_hair = false # sinekkaydı tıraşlı genç: bıyıksız
 	var excl := []
 	if not keep_hat:
 		excl.append_array(["Hat", "HatDetail"])
 	if not keep_hair:
-		excl.append("Hair")
+		excl.append("Hair" if _fem else "Mustache")
 	var cols := {
 		"Skin": skin, "Lid": skin.darkened(0.06), "SkinLid": skin.darkened(0.03),
-		"Hair": hair, "Shirt": shirt, "Pants": pants, "Hat": hat_c, "HatDetail": hat_c.darkened(0.2),
+		"Hair": hair, "Mustache": hair, "Brow": hair.darkened(0.15), "Shirt": shirt, "Pants": pants,
+		"Hat": hat_c, "HatDetail": hat_c.darkened(0.2),
 	}
-	_build_figure(rig, head, cols, excl, parts, rest)
+	var model: PackedScene = MODEL_WOMAN if _fem else MODEL_MAN
+	if archetype == Archetype.EMEKLI:
+		model = MODEL_EMEKLI
+	_build_figure(model, rig, head, cols, excl, parts, rest)
 
 	# Beden çeşitliliği: tombul/zayıf, uzun/kısa
 	var wfac := 0.9 + float(absi(color_seed * 17) % 7) * 0.05
@@ -506,23 +519,15 @@ func _build_visual() -> void:
 		parts[n].position = rest[n]
 
 	var h := parts["Head"] as Node3D
-	# Saç / başörtüsü / şapka
+	# Saç / başörtüsü / şapka (saç modelde; burada yalnızca ekler)
 	if _fem:
-		var style := v % 4
-		if archetype == Archetype.VIP:
-			style = 1
-		if style == 0 or (archetype == Archetype.AILE and v % 3 == 0):
+		if scarf:
 			_add_headscarf(h, _pal(SCARF_COLORS, 6), 1.36)
-		else:
-			_add(h, "hair_capf", func(): return LP.ellipsoid(0.36, 0.25, 0.36, 10, 6), Vector3(0, 0.07, -0.07), hair)
-			_add(h, "hair_back", func(): return LP.ellipsoid(0.35, 0.36, 0.2, 9, 5), Vector3(0, -0.1, -0.2), hair)
-			_add(h, "hair_fringe", func(): return LP.ellipsoid(0.2, 0.06, 0.08, 7, 4), Vector3(0.1, 0.25, 0.22), hair, Vector3(0, 0, 0.35))
-			if style == 2:
-				_add(h, "hair_bun", func(): return LP.sphere(0.13, 8, 5), Vector3(0, 0.3, -0.24), hair)
-			elif style == 3:
-				_add(h, "hair_tail", func(): return LP.ellipsoid(0.09, 0.2, 0.09, 6, 4), Vector3(0, -0.12, -0.38), hair, Vector3(0.5, 0, 0))
+		elif fem_style == 2:
+			_add(h, "hair_bun", func(): return LP.sphere(0.13, 8, 5), Vector3(0, 0.3, -0.24), hair)
+		elif fem_style == 3:
+			_add(h, "hair_tail", func(): return LP.ellipsoid(0.09, 0.2, 0.09, 6, 4), Vector3(0, -0.12, -0.38), hair, Vector3(0.5, 0, 0))
 	elif not keep_hat:
-		_add(h, "hair_short", func(): return LP.ellipsoid(0.335, 0.2, 0.34, 10, 5), Vector3(0, 0.15, -0.03), hair)
 		if archetype == Archetype.NORMAL and v % 4 == 1:
 			# ters kep
 			var cap_c: Color = _pal(SHIRTS, 9)
@@ -545,12 +550,11 @@ func _build_visual() -> void:
 			_add(h, "band", func(): return LP.torus(0.31, 0.36, 12, 5), Vector3(0, 0.16, 0), Color(1.0, 0.76, 0.14))
 			_add_phone()
 		Archetype.EMEKLI:
-			_add_glasses(h, false)
-			# baston
+			# gözlük ve kamburluk modelde; baston
 			var hl := parts["HandL"] as Node3D
 			_add(hl, "cane", func(): return LP.cyl(0.018, 0.018, 0.56, 5), Vector3(0, -0.26, 0.02), Color(0.36, 0.22, 0.12))
 			_add(hl, "cane_top", func(): return LP.torus(0.03, 0.05, 8, 4), Vector3(0, 0.02, 0.06), Color(0.36, 0.22, 0.12), Vector3(0, PI / 2, 0))
-			_lean_base = 0.1
+			_lean_base = 0.04
 			_stride_len = 0.2
 		Archetype.AILE:
 			_build_kid()
@@ -675,17 +679,16 @@ func _build_trolley(t_col: Color) -> void:
 func _build_kid() -> void:
 	_kid = Node3D.new()
 	_kid.position = Vector3(0.66, 0.0, 0.08)
-	_kid.scale = Vector3(0.56, 0.56, 0.56)
+	_kid.scale = Vector3(0.62, 0.62, 0.62)
 	rig.add_child(_kid)
 	var kv := absi(color_seed * 5 + 1)
 	var kid_shirt: Color = [Color(1.0, 0.82, 0.2), Color(0.95, 0.35, 0.55), Color(0.3, 0.75, 0.95), Color(0.45, 0.85, 0.4)][kv % 4]
 	var kid_skin: Color = _pal(SKINS, 1)
 	var kid_hair: Color = _pal(HAIRS, 12)
 	var cols := {"Skin": kid_skin, "Lid": kid_skin.darkened(0.06), "SkinLid": kid_skin.darkened(0.03),
-		"Shirt": kid_shirt, "Pants": Color(0.25, 0.35, 0.6), "Hair": kid_hair}
-	_build_figure(_kid, null, cols, ["Hat", "HatDetail", "Hair"], _kid_parts, _kid_rest)
+		"Shirt": kid_shirt, "Pants": Color(0.25, 0.35, 0.6), "Hair": kid_hair, "Brow": kid_hair.darkened(0.1)}
+	_build_figure(MODEL_KID, _kid, null, cols, [], _kid_parts, _kid_rest)
 	var kh := _kid_parts["Head"] as Node3D
-	_add(kh, "hair_cap", func(): return LP.ellipsoid(0.345, 0.24, 0.35, 10, 6), Vector3(0, 0.12, -0.04), kid_hair)
 	if kv % 2 == 0:
 		# iki yandan örgülü kız çocuğu
 		for sx: float in [-0.3, 0.3]:
@@ -713,71 +716,21 @@ func _build_teyze_visual() -> void:
 	var skin_col: Color = [Color(0.93, 0.78, 0.66), Color(0.86, 0.68, 0.54), Color(0.96, 0.84, 0.74)][absi(color_seed) % 3]
 	var wfac := 1.0 + float(absi(color_seed * 3) % 4) * 0.06 # teyzeler biraz tombul olur
 
-	# Gövde: uzun etek + yumuşak teyze hırkası + desenli önlük
-	var body_w := Node3D.new(); body_w.name = "Body"
-	rest["Body"] = Vector3(0, 0.50, 0)
-	body_w.position = rest["Body"]
-	body_w.scale = Vector3(wfac, 1.0, wfac)
-	_add(body_w, "ty_skirt", func(): return LP.cyl(0.22, 0.30, 0.42, 9), Vector3(0, -0.14, 0), skirt_col)
-	_add(body_w, "ty_cardi", func(): return LP.ellipsoid(0.25, 0.24, 0.23, 9, 5), Vector3(0, 0.14, 0), cardigan_col)
-	var apron_c := Color(0.96, 0.94, 0.88) if color_seed % 3 != 0 else Color(0.98, 0.86, 0.9)
-	_add(body_w, "ty_apron", func(): return LP.box(Vector3(0.22, 0.36, 0.04)), Vector3(0, -0.02, 0.22), apron_c)
-	# hırkadaki çiçek desenleri
-	for i in 3:
-		var fx := -0.12 + float(i) * 0.12
-		_add(body_w, "ty_flower", func(): return LP.sphere(0.028, 5, 3), Vector3(fx, 0.2 - float(i % 2) * 0.07, 0.205 + absf(fx) * -0.25),
-			[Color(1.0, 0.95, 0.4), Color(1.0, 0.6, 0.75), Color(0.95, 0.95, 0.98)][(i + color_seed) % 3])
-	rig.add_child(body_w)
-	parts["Body"] = body_w
-
-	# Kafa: güler yüz + başörtüsü (yemeni) + altın gözlük + al yanaklar!
-	var head_w := Node3D.new(); head_w.name = "Head"
-	rest["Head"] = Vector3(0, 1.06, 0)
-	head.position = rest["Head"]
-	head.add_child(head_w)
-	parts["Head"] = head_w
-	_add(head_w, "ty_face", func(): return LP.sphere(0.25, 9, 6), Vector3.ZERO, skin_col, Vector3.ZERO, 0.82)
-	_add(head_w, "ty_scarf", func(): return LP.ellipsoid(0.28, 0.26, 0.28, 9, 6), Vector3(0, 0.04, -0.04), scarf_col)
-	_add(head_w, "ty_scarf2", func(): return LP.cyl(0.24, 0.28, 0.22, 8), Vector3(0, -0.14, -0.12), scarf_col.darkened(0.08))
-	_add(head_w, "ty_scarf3", func(): return LP.torus(0.21, 0.26, 10, 5), Vector3(0, 0.02, 0.08), scarf_col.lightened(0.14), Vector3(PI / 2, 0, 0))
-	# yemeni oyaları
-	for i in 5:
-		var a := -0.9 + float(i) * 0.45
-		_add(head_w, "ty_oya", func(): return LP.sphere(0.025, 4, 3), Vector3(sin(a) * 0.26, 0.02 + cos(a) * 0.24, 0.11), Color(0.98, 0.95, 0.85))
-	var glasses := absi(color_seed) % 4 != 3
-	for sx: float in [-0.085, 0.085]:
-		_add(head_w, "ty_eye", func(): return LP.sphere(0.036, 6, 4), Vector3(sx, 0.03, 0.225), Color.WHITE, Vector3.ZERO, 0.2)
-		_add(head_w, "ty_pupil", func(): return LP.sphere(0.020, 6, 4), Vector3(sx, 0.03, 0.252), Color(0.1, 0.08, 0.07), Vector3.ZERO, 0.1)
-		if glasses:
-			_add(head_w, "ty_glass", func(): return LP.torus(0.044, 0.053, 10, 4), Vector3(sx, 0.03, 0.255), Color(0.88, 0.72, 0.22), Vector3(PI / 2, 0, 0), 0.25, 0.85)
-		_add(head_w, "ty_cheek", func(): return LP.sphere(0.034, 5, 3), Vector3(sx * 1.45, -0.04, 0.215), Color(0.95, 0.56, 0.56))
-	if glasses:
-		_add(head_w, "ty_bridge", func(): return LP.box(Vector3(0.06, 0.012, 0.012)), Vector3(0, 0.03, 0.255), Color(0.88, 0.72, 0.22), Vector3.ZERO, 0.25, 0.85)
-	_add(head_w, "ty_nose", func(): return LP.sphere(0.032, 5, 3), Vector3(0, -0.02, 0.255), skin_col.darkened(0.05))
-	_add(head_w, "ty_smile", func(): return LP.box(Vector3(0.085, 0.022, 0.02)), Vector3(0, -0.10, 0.242), Color(0.76, 0.28, 0.30))
-
-	# Eller ve ayaklar
-	for side: float in [-1.0, 1.0]:
-		var fn := "FootR" if side < 0 else "FootL"
-		var hn := "HandR" if side < 0 else "HandL"
-		var fw := Node3D.new(); fw.name = fn
-		rest[fn] = Vector3(side * 0.13, 0.10, 0)
-		fw.position = rest[fn]
-		_add(fw, "ty_foot", func(): return LP.ellipsoid(0.08, 0.055, 0.12, 6, 4), Vector3.ZERO, Color(0.24, 0.18, 0.16))
-		rig.add_child(fw)
-		parts[fn] = fw
-		var hw := Node3D.new(); hw.name = hn
-		rest[hn] = Vector3(side * (0.31 + wfac * 0.03), 0.54, 0.05)
-		hw.position = rest[hn]
-		_add(hw, "ty_hand", func(): return LP.sphere(0.068, 6, 4), Vector3.ZERO, skin_col)
-		rig.add_child(hw)
-		parts[hn] = hw
+	# Model: yemeni + oyalar, al yanak, hırka, uzun etek, çiçekli önlük (char_teyze.glb)
+	var cols := {"Skin": skin_col, "Lid": skin_col.darkened(0.06), "SkinLid": skin_col.darkened(0.03),
+		"Hat": scarf_col, "Shirt": cardigan_col, "Pants": skirt_col}
+	var excl := [] if absi(color_seed) % 4 != 3 else ["Glasses"] # her teyze gözlüklü değil
+	_build_figure(MODEL_TEYZE, rig, head, cols, excl, parts, rest)
+	(parts["Body"] as Node3D).scale = Vector3(wfac, 1.0, wfac)
+	for hn in ["HandL", "HandR"]:
+		rest[hn] = Vector3(rest[hn].x * (0.7 + wfac * 0.3), rest[hn].y, rest[hn].z)
+		(parts[hn] as Node3D).position = rest[hn]
 
 	_build_trolley(Color(0.76, 0.18, 0.24) if (color_seed % 2 == 0) else Color(0.18, 0.38, 0.66))
 	_sway_amt = 0.1 # teyze yürüyüşü: hafif paytak
 	_stride_len = 0.22
 	scale = Vector3(0.96, 0.96, 0.96)
-	_bubble_base_y = 1.62 + float(absi(color_seed) % 3) * 0.12
+	_bubble_base_y = 1.78 + float(absi(color_seed) % 3) * 0.12
 
 
 func _build_umbrella() -> void:
@@ -1542,6 +1495,8 @@ func _evaluate_stalls(only_louder_override: bool) -> void:
 			charm += 0.18 if archetype != Archetype.EMEKLI else 0.3 # amca arabeske bayılır
 		if owner and owner.has_method("has_prestige_aura") and owner.has_prestige_aura():
 			charm += 0.18 if archetype == Archetype.VIP else 0.10
+		elif owner and owner.has_method("has_calm_aura") and owner.has_calm_aura():
+			charm += 0.07
 
 		var variety := clampf(float(matched) / float(maxi(wants.size(), 1)), 0.0, 1.0)
 		var proximity := clampf(1.0 - dist / hearing_range, 0.0, 1.0)

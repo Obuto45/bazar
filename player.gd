@@ -2,7 +2,7 @@ extends CharacterBody3D
 ## Oyuncu: kişisel envanter (1-6; meyve kasaları ASLA envantere girmez), sigara/puro yanma + duman,
 ## el megafonu (+dB bağırma), meyve bıçağı saldırısı, Arabesk radyo, azaltılmış sarsıntı ve koşma efekti.
 
-const MODEL := preload("res://models/character.glb")
+const MODEL := preload("res://models/char_pazarci.glb")
 const LP := preload("res://lowpoly.gd")
 const Produce := preload("res://produce.gd")
 const StallScript := preload("res://stall.gd")

@@ -2,7 +2,7 @@ extends Node3D
 ## Pazar Zabıtası AI: normal devriyede fahiş fiyat (-25 TL) ve sokak kirliliğine (-15 TL) ceza keser;
 ## bir pazarcı meyve bıçağıyla diğerine saldırırsa ACİL MÜDAHALE moduna geçip koşarak saldırganı yakalar (-50 TL & bıçağa el koyar)!
 
-const MODEL := preload("res://models/character.glb")
+const MODEL := preload("res://models/char_zabita.glb")
 const LP := preload("res://lowpoly.gd")
 const VFX := preload("res://vfx.gd")
 
@@ -106,17 +106,6 @@ func _build_visual() -> void:
 		m.owner = null
 		m.transform = Transform3D.IDENTITY
 		w.add_child(m)
-		if n == "Head" and m is MeshInstance3D:
-			# GLB'deki kasketi at, yerine resmi zabıta şapkası gelecek
-			var src_mesh := (m as MeshInstance3D).mesh
-			var am := ArrayMesh.new()
-			for i in src_mesh.get_surface_count():
-				var mt := src_mesh.surface_get_material(i)
-				if mt and mt.resource_name in ["Hat", "HatDetail"]:
-					continue
-				am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, src_mesh.surface_get_arrays(i))
-				am.surface_set_material(am.get_surface_count() - 1, mt)
-			(m as MeshInstance3D).mesh = am
 		if n == "Head":
 			head.add_child(w)
 			head.position = rest[n]
@@ -137,18 +126,9 @@ func _build_visual() -> void:
 					c.albedo_color = recol[mat.resource_name]
 					mi.set_surface_override_material(i, c)
 	src.free()
-	var h := parts["Head"] as Node3D
-	# Resmi zabıta şapkası: kısa saç + lacivert tepe + siperlik + altın arma
-	LP.add(h, LP.ellipsoid(0.335, 0.2, 0.34, 10, 5), Vector3(0, 0.15, -0.03), Color(0.08, 0.06, 0.05))
-	LP.add(h, LP.cyl(0.36, 0.33, 0.14, 12), Vector3(0, 0.3, -0.01), Color(0.09, 0.16, 0.36))
-	LP.add(h, LP.cyl(0.335, 0.335, 0.05, 12), Vector3(0, 0.25, -0.01), Color(0.05, 0.06, 0.1))
-	LP.add(h, LP.box(Vector3(0.36, 0.03, 0.2)), Vector3(0, 0.23, 0.36), Color(0.04, 0.05, 0.08), Vector3(0.25, 0, 0), 0.3)
-	LP.add(h, LP.cyl(0.06, 0.06, 0.03, 8), Vector3(0, 0.31, 0.33), Color(1.0, 0.82, 0.2), Vector3(PI / 2 - 0.15, 0, 0), 0.22, 0.85)
-	# Gövde: kemer, tokası, omuzlukta reflektör, sırtta ZABITA yazısı
+	# Resmi zabıta şapkası, apoletler, kemer ve altın toka modelde (char_zabita.glb)
+	# Gövde: sırtta ZABITA yazısı
 	var b := parts["Body"] as Node3D
-	LP.add(b, LP.cyl(0.255, 0.255, 0.06, 12), Vector3(0, -0.06, 0), Color(0.05, 0.05, 0.06))
-	LP.add(b, LP.box(Vector3(0.08, 0.06, 0.03)), Vector3(0, -0.06, 0.25), Color(0.95, 0.8, 0.25), Vector3.ZERO, 0.25, 0.85)
-	LP.add(b, LP.box(Vector3(0.5, 0.04, 0.47)), Vector3(0, 0.1, 0), Color(0.95, 0.85, 0.2), Vector3.ZERO, 0.4)
 	var back := Label3D.new()
 	back.text = "ZABITA"
 	back.font_size = 40

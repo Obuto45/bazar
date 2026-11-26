@@ -5,7 +5,7 @@ extends Node3D
 
 signal caught(catcher_id: int, item_id: String)
 
-const MODEL := preload("res://models/character.glb")
+const MODEL := preload("res://models/char_kapkac.glb")
 const LP := preload("res://lowpoly.gd")
 const Produce := preload("res://produce.gd")
 const VFX := preload("res://vfx.gd")
@@ -110,16 +110,6 @@ func _build_visual() -> void:
 		m.owner = null
 		m.transform = Transform3D.IDENTITY
 		w.add_child(m)
-		if n == "Head" and m is MeshInstance3D:
-			var src_mesh := (m as MeshInstance3D).mesh
-			var am := ArrayMesh.new()
-			for i in src_mesh.get_surface_count():
-				var mt := src_mesh.surface_get_material(i)
-				if mt and mt.resource_name in ["Hat", "HatDetail", "Hair"]:
-					continue
-				am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, src_mesh.surface_get_arrays(i))
-				am.surface_set_material(am.get_surface_count() - 1, mt)
-			(m as MeshInstance3D).mesh = am
 		rig.add_child(w)
 		w.position = rest[n]
 		parts[n] = w
@@ -134,18 +124,9 @@ func _build_visual() -> void:
 					c.albedo_color = cols[mat.resource_name]
 					mi.set_surface_override_material(i, c)
 	src.free()
-	var h := parts["Head"] as Node3D
-	# Kapüşon: kafayı saran kabuk + yüz çevresinde kalın kenar
-	LP.add(h, LP.ellipsoid(0.39, 0.37, 0.36, 10, 6), Vector3(0, 0.05, -0.1), hoodie)
-	LP.add(h, LP.torus(0.27, 0.36, 12, 5), Vector3(0, 0.03, 0.17), hoodie.darkened(0.15), Vector3(PI / 2, 0, 0))
-	LP.add(h, LP.cyl(0.006, 0.006, 0.22, 3), Vector3(-0.1, -0.24, 0.26), Color(0.92, 0.92, 0.92))
-	LP.add(h, LP.cyl(0.006, 0.006, 0.22, 3), Vector3(0.1, -0.24, 0.26), Color(0.92, 0.92, 0.92))
-	# Yaramaz bakış: çatık kaşlar
-	for sx: float in [-0.094, 0.094]:
-		LP.add(h, LP.box(Vector3(0.1, 0.022, 0.02)), Vector3(sx, 0.12, 0.31), Color(0.15, 0.1, 0.08), Vector3(0, 0, 0.35 * signf(sx)))
-	# Kanguru cebi + sırttaki çuval
+	# Kapüşon (Shirt = hoodie rengi), ipler, çatık kaşlar ve çiller modelde (char_kapkac.glb)
+	# Sırttaki çuval (kanguru cebi modelde)
 	var b := parts["Body"] as Node3D
-	LP.add(b, LP.box(Vector3(0.26, 0.12, 0.04)), Vector3(0, -0.02, 0.23), hoodie.darkened(0.2))
 	LP.add(b, LP.ellipsoid(0.17, 0.2, 0.12, 7, 4), Vector3(0, 0.08, -0.27), Color(0.68, 0.56, 0.38))
 	_carry_root = Node3D.new()
 	_carry_root.position = Vector3(0, 0.12, 0.06)

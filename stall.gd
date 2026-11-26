@@ -41,9 +41,18 @@ const UPGRADES := {
 }
 const UPGRADE_ORDER := ["megaphone", "lights", "big_crate", "bell"]
 const SLOT_XS := [-1.2, -0.4, 0.4, 1.2]
+const SUPPLY_XS := [-1.45, -0.87, -0.29, 0.29, 0.87, 1.45]
 const MAX_SLOT_COUNT := 10
 const CRATE_CAPACITY := 10
 const GOUGE_RATIO := 1.75
+# Tazelik: el sürülmemiş bir yuva 300 sn'lik pazar gününün sonunda ~0.35'e iner (ürünün "shelf" çarpanıyla).
+const FRESH_DECAY := 0.65 / 300.0
+const FRESH_SYNC_SEC := 1.0
+const ROTTEN := 0.45
+const SPRAY_AMOUNT := 0.35
+const REP_MAX := 5.0
+const PILE_W := 0.68
+const PILE_D := 0.58
 
 var owner_id := 0
 var owner_name := ""
@@ -77,6 +86,23 @@ var _bell_mesh: Node3D
 var _light_bulbs: Array[StandardMaterial3D] = []
 var _anim_t := 0.0
 
+# İtibar (0..5 yıldız, host yetkili) ve tazelik görselleri
+var reputation := 2.5
+var _rep_label: Label3D
+var _fresh_sync_t := 0.0
+var _fresh_vis_t := 0.0
+var _stink_cd := 1.0
+var _slot_piles: Array = [] # her yuva için {"item", "root", "xf"} veya {}
+var _slot_tags: Array[Node3D] = []
+var _slot_price_labels: Array[Label3D] = []
+var _slot_back_price_labels: Array[Label3D] = []
+var _slot_overlays: Array[StandardMaterial3D] = []
+var _slot_fresh_bars: Array[MeshInstance3D] = []
+var _slot_fresh_mats: Array[StandardMaterial3D] = []
+var _slot_flies: Array[Node3D] = []
+var last_sale_pos := Vector3.ZERO
+var last_sale_ms := -100000
+
 
 func setup(p_owner_id: int, p_owner_name: String, color_idx: int, p_spot_idx := 0) -> void:
 	owner_id = p_owner_id
@@ -89,7 +115,7 @@ func setup(p_owner_id: int, p_owner_name: String, color_idx: int, p_spot_idx := 
 func _ready() -> void:
 	slots.clear()
 	for i in 4:
-		slots.append({"item": "", "count": 0, "price": 10})
+		slots.append({"item": "", "count": 0, "price": 10, "fresh": 1.0})
 	_build_geometry()
 	_build_slots()
 	_build_supply_crates()
@@ -117,6 +143,102 @@ func _process(dt: float) -> void:
 			_radio_note_cd = 1.15
 			if _radio_node:
 				VFX.spawn_music_note(self, _radio_node.global_position + Vector3(0, 0.28, 0))
+	_tick_freshness(dt)
+	_animate_flies()
+
+
+func _is_host() -> bool:
+	return not Net.online() or multiplayer.is_server()
+
+
+func _day_paused() -> bool:
+	var m := get_parent().get_parent().get_parent() if get_parent() and get_parent().get_parent() else null
+	return m != null and "day_ended" in m and bool(m.day_ended)
+
+
+## Tüm eşler tazeliği yerelde akıcı düşürür; host her ~1 sn'de yetkili değerleri yayınlar.
+func _tick_freshness(dt: float) -> void:
+	if not _day_paused():
+		for i in slots.size():
+			var s := slots[i]
+			if str(s["item"]) == "" or int(s["count"]) <= 0:
+				continue
+			var shelf := float(ITEMS.get(s["item"], {}).get("shelf", 1.0))
+			s["fresh"] = maxf(float(s.get("fresh", 1.0)) - FRESH_DECAY * shelf * dt, 0.0)
+	if _is_host() and Net.online():
+		_fresh_sync_t += dt
+		if _fresh_sync_t >= FRESH_SYNC_SEC:
+			_fresh_sync_t = 0.0
+			rpc_sync_freshness.rpc(_fresh_values(), false)
+	_fresh_vis_t -= dt
+	if _fresh_vis_t <= 0.0:
+		_fresh_vis_t = 0.2
+		for i in slots.size():
+			_apply_fresh_visual(i)
+	# Çürüyen yuvalardan ara sıra yeşilimsi koku bulutu
+	_stink_cd -= dt
+	if _stink_cd <= 0.0:
+		_stink_cd = randf_range(1.2, 2.2)
+		for i in slots.size():
+			var s := slots[i]
+			if int(s["count"]) > 0 and float(s.get("fresh", 1.0)) < ROTTEN and randf() < 0.6:
+				VFX.burst_dust(self, _slot_visuals[i].global_position + Vector3(randf_range(-0.2, 0.2), 0.32, 0.0), Color(0.56, 0.62, 0.24), 3)
+
+
+func _fresh_values() -> PackedFloat32Array:
+	var arr := PackedFloat32Array()
+	for s in slots:
+		arr.append(float(s.get("fresh", 1.0)))
+	return arr
+
+
+@rpc("any_peer", "call_local", "reliable")
+func rpc_sync_freshness(vals: PackedFloat32Array, sparkle := false) -> void:
+	if Net.online() and multiplayer.get_remote_sender_id() not in [0, 1]:
+		return
+	for i in mini(vals.size(), slots.size()):
+		slots[i]["fresh"] = clampf(vals[i], 0.0, 1.0)
+		_apply_fresh_visual(i)
+	if sparkle:
+		_spray_fx()
+
+
+## Tazelik görseli: ürün kararır/büzülür, etiket altındaki bar yeşilden kırmızıya döner, çürüyünce sinek uçuşur.
+func _apply_fresh_visual(idx: int) -> void:
+	if idx >= _slot_overlays.size():
+		return
+	var s := slots[idx]
+	var f := float(s.get("fresh", 1.0))
+	var stocked := str(s["item"]) != "" and int(s["count"]) > 0
+	var ov := _slot_overlays[idx]
+	ov.albedo_color.a = clampf((0.92 - f) * 0.78, 0.0, 0.62)
+	var pile: Dictionary = _slot_piles[idx]
+	if not pile.is_empty() and is_instance_valid(pile["root"]):
+		var k := lerpf(0.88, 1.0, clampf(f / 0.8, 0.0, 1.0))
+		(pile["root"] as Node3D).scale = Vector3(k, k * lerpf(0.86, 1.0, clampf(f / 0.8, 0.0, 1.0)), k)
+	var bar := _slot_fresh_bars[idx]
+	bar.visible = stocked
+	bar.scale.x = maxf(f, 0.02)
+	bar.position.x = -0.135 * (1.0 - maxf(f, 0.02))
+	var bc := Color(0.92, 0.2, 0.14).lerp(Color(1.0, 0.8, 0.16), clampf(f / 0.55, 0.0, 1.0))
+	if f > 0.55:
+		bc = Color(1.0, 0.8, 0.16).lerp(Color(0.3, 0.9, 0.3), clampf((f - 0.55) / 0.35, 0.0, 1.0))
+	_slot_fresh_mats[idx].albedo_color = bc
+	_slot_fresh_mats[idx].emission = bc
+	_slot_flies[idx].visible = stocked and f < ROTTEN
+
+
+func _animate_flies() -> void:
+	for i in _slot_flies.size():
+		var fl := _slot_flies[i]
+		if not fl.visible:
+			continue
+		var t := _anim_t * 3.2 + float(i) * 1.7
+		var k := 0
+		for c in fl.get_children():
+			var ph := t * (1.0 + float(k) * 0.23) + float(k) * 2.1
+			(c as Node3D).position = Vector3(cos(ph) * 0.2, 0.08 + sin(ph * 2.3) * 0.06, sin(ph * 1.3) * 0.16)
+			k += 1
 
 
 func max_slot_count() -> int:
@@ -167,6 +289,16 @@ func _build_geometry() -> void:
 	_sign_label.outline_size = 8
 	_sign_label.modulate = Color(1.0, 0.96, 0.84)
 	add_child(_sign_label)
+
+	# İtibar yıldızları: tabelanın üstünde, uzaktan okunur altın yıldızlar
+	_rep_label = Label3D.new()
+	_rep_label.position = Vector3(0, 2.42, 1.2)
+	_rep_label.font_size = 40
+	_rep_label.pixel_size = 0.0042
+	_rep_label.outline_size = 10
+	_rep_label.outline_modulate = Color(0.22, 0.12, 0.02)
+	add_child(_rep_label)
+	_refresh_rep_label()
 
 
 func _build_scale() -> void:
@@ -358,41 +490,88 @@ func _build_slots() -> void:
 	_slot_labels.clear()
 	_slot_back_labels.clear()
 	_slot_tag_mats.clear()
+	_slot_piles.clear()
+	_slot_tags.clear()
+	_slot_price_labels.clear()
+	_slot_back_price_labels.clear()
+	_slot_overlays.clear()
+	_slot_fresh_bars.clear()
+	_slot_fresh_mats.clear()
+	_slot_flies.clear()
 	var crate_cols := [Color(0.12, 0.44, 0.82), Color(0.18, 0.56, 0.26), Color(0.84, 0.24, 0.18), Color(0.88, 0.66, 0.14)]
+	var fly_mesh := LP.sphere(0.012, 4, 3)
+	var fly_mat := LP.mat(Color(0.05, 0.05, 0.06), 0.4)
+	var bar_mesh := LP.box(Vector3(0.27, 0.018, 0.016))
 	for i in 4:
 		var sx: float = SLOT_XS[i]
 		var cc: Color = crate_cols[i % crate_cols.size()]
+		# Plastik pazar kasası tepsisi (alçak kenarlı: yığın taşar gibi görünsün)
 		LP.add(self, LP.box(Vector3(0.72, 0.04, 0.66)), Vector3(sx, 0.59, 0.24), cc.darkened(0.22), Vector3.ZERO, 0.55)
 		LP.add(self, LP.box(Vector3(0.74, 0.07, 0.04)), Vector3(sx, 0.62, 0.56), cc, Vector3.ZERO, 0.52)
 		LP.add(self, LP.box(Vector3(0.74, 0.07, 0.04)), Vector3(sx, 0.62, -0.08), cc, Vector3.ZERO, 0.52)
+		LP.add(self, LP.box(Vector3(0.04, 0.07, 0.64)), Vector3(sx - 0.35, 0.62, 0.24), cc.darkened(0.08), Vector3.ZERO, 0.52)
+		LP.add(self, LP.box(Vector3(0.04, 0.07, 0.64)), Vector3(sx + 0.35, 0.62, 0.24), cc.darkened(0.08), Vector3.ZERO, 0.52)
 		var vis := Node3D.new()
 		vis.position = Vector3(sx, 0.61, 0.24)
 		add_child(vis)
 		_slot_visuals.append(vis)
-		LP.add(self, LP.cyl(0.011, 0.013, 0.17, 5), Vector3(sx, 0.68, 0.61), WOOD.darkened(0.3))
-		var tag_mi := LP.add(self, LP.box(Vector3(0.46, 0.20, 0.02)), Vector3(sx, 0.79, 0.61), Color(0.98, 0.95, 0.84))
+		_slot_piles.append({})
+
+		var ov := StandardMaterial3D.new()
+		ov.albedo_color = Color(0.24, 0.17, 0.06, 0.0)
+		ov.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		ov.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_slot_overlays.append(ov)
+
+		# Çürüyünce vızıldayan sinekler
+		var flies := Node3D.new()
+		flies.position = Vector3(0, 0.3, 0)
+		for k in 4:
+			var fmi := MeshInstance3D.new()
+			fmi.mesh = fly_mesh
+			fmi.material_override = fly_mat
+			fmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			flies.add_child(fmi)
+		flies.hide()
+		vis.add_child(flies)
+		_slot_flies.append(flies)
+
+		# Pazar usulü fiyat kartonu: ürüne saplanmış çubukta, hafif geriye yatık
+		LP.add(self, LP.cyl(0.009, 0.011, 0.12, 5), Vector3(sx + 0.2, 0.64, 0.6), WOOD.darkened(0.3))
+		var tag := Node3D.new()
+		tag.position = Vector3(sx + 0.2, 0.74, 0.6)
+		tag.rotation.x = -0.32
+		add_child(tag)
+		_slot_tags.append(tag)
+		# Koyu çerçeve kartonun içinde kalır (yalnızca kenarı görünür) — yüzeylerde z-fighting olmaz
+		LP.add(tag, LP.box(Vector3(0.33, 0.185, 0.012)), Vector3.ZERO, Color(0.2, 0.14, 0.08))
+		var tag_mi := LP.add(tag, LP.box(Vector3(0.31, 0.165, 0.018)), Vector3.ZERO, Color(0.98, 0.95, 0.84))
 		_slot_tag_mats.append(tag_mi.material_override as StandardMaterial3D)
-		var lbl := Label3D.new()
-		lbl.position = Vector3(sx, 0.79, 0.625)
-		lbl.font_size = 24
-		lbl.pixel_size = 0.0030
-		lbl.outline_size = 5
-		lbl.double_sided = false
-		lbl.modulate = Color(0.12, 0.08, 0.05)
-		lbl.outline_modulate = Color(1.0, 0.97, 0.88)
-		add_child(lbl)
+		var lbl := _make_tag_label(tag, Vector3(0, 0.05, 0.0115), 15, false)
 		_slot_labels.append(lbl)
-		var blbl := Label3D.new()
-		blbl.position = Vector3(sx, 0.79, 0.595)
-		blbl.rotation.y = PI
-		blbl.font_size = 24
-		blbl.pixel_size = 0.0030
-		blbl.outline_size = 5
-		blbl.double_sided = false
-		blbl.modulate = Color(0.12, 0.08, 0.05)
-		blbl.outline_modulate = Color(1.0, 0.97, 0.88)
-		add_child(blbl)
+		var plbl := _make_tag_label(tag, Vector3(0, -0.022, 0.0115), 34, false)
+		_slot_price_labels.append(plbl)
+		var blbl := _make_tag_label(tag, Vector3(0, 0.05, -0.0115), 15, true)
 		_slot_back_labels.append(blbl)
+		var bplbl := _make_tag_label(tag, Vector3(0, -0.022, -0.0115), 34, true)
+		_slot_back_price_labels.append(bplbl)
+		# Tazelik barı (karton altında, iki yüzden de görünür)
+		LP.add(tag, LP.box(Vector3(0.29, 0.026, 0.012)), Vector3(0, -0.108, 0), Color(0.12, 0.1, 0.08))
+		var fm := StandardMaterial3D.new()
+		fm.albedo_color = Color(0.3, 0.9, 0.3)
+		fm.emission_enabled = true
+		fm.emission = Color(0.3, 0.9, 0.3)
+		fm.emission_energy_multiplier = 0.45
+		fm.roughness = 0.5
+		var bar := MeshInstance3D.new()
+		bar.mesh = bar_mesh
+		bar.material_override = fm
+		bar.position = Vector3(0, -0.108, 0)
+		bar.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		tag.add_child(bar)
+		_slot_fresh_bars.append(bar)
+		_slot_fresh_mats.append(fm)
+
 		var area := Area3D.new()
 		area.name = "SlotArea_%d" % i
 		area.collision_layer = 4
@@ -404,42 +583,64 @@ func _build_slots() -> void:
 		area.position = Vector3(sx, 0.76, 0.30)
 		var cs := CollisionShape3D.new()
 		var sh := BoxShape3D.new()
-		sh.size = Vector3(0.74, 0.52, 0.82)
+		sh.size = Vector3(0.78, 0.6, 0.86)
 		cs.shape = sh
 		area.add_child(cs)
 		add_child(area)
 		_refresh_slot_visual(i)
 
 
+func _make_tag_label(parent: Node3D, pos: Vector3, fsize: int, back: bool) -> Label3D:
+	var l := Label3D.new()
+	l.position = pos
+	if back:
+		l.rotation.y = PI
+	l.font_size = fsize
+	l.pixel_size = 0.0022
+	l.outline_size = 4 if fsize < 30 else 6
+	l.double_sided = false
+	l.modulate = Color(0.12, 0.08, 0.05)
+	l.outline_modulate = Color(1.0, 0.97, 0.88)
+	parent.add_child(l)
+	return l
+
+
 func _build_supply_crates() -> void:
 	crate_available.clear()
 	_crate_visuals.clear()
 	_crate_labels.clear()
-	var crate_cols := [Color(0.86, 0.22, 0.18), Color(0.18, 0.58, 0.26), Color(0.88, 0.68, 0.14), Color(0.12, 0.46, 0.84)]
+	var crate_cols := [Color(0.86, 0.22, 0.18), Color(0.18, 0.58, 0.26), Color(0.88, 0.68, 0.14),
+		Color(0.12, 0.46, 0.84), Color(0.16, 0.5, 0.3), Color(0.94, 0.5, 0.12)]
 	for i in BASIC_ORDER.size():
 		var item_id: String = BASIC_ORDER[i]
 		var info: Dictionary = ITEMS[item_id]
 		crate_available[item_id] = true
-		var cx: float = SLOT_XS[i]
+		var cx: float = SUPPLY_XS[i % SUPPLY_XS.size()]
 		var spot := Node3D.new()
 		spot.position = Vector3(cx, 0.0, -1.28)
+		spot.rotation.y = (float(i % 3) - 1.0) * 0.05
 		add_child(spot)
-		LP.add(spot, LP.box(Vector3(0.68, 0.03, 0.58)), Vector3(0, 0.015, 0), WOOD.darkened(0.38))
+		LP.add(spot, LP.box(Vector3(0.54, 0.03, 0.5)), Vector3(0, 0.015, 0), WOOD.darkened(0.38))
 		var c := Node3D.new()
 		spot.add_child(c)
 		var cc: Color = crate_cols[i % crate_cols.size()]
-		LP.add(c, LP.box(Vector3(0.60, 0.30, 0.50)), Vector3(0, 0.16, 0), cc, Vector3.ZERO, 0.52)
-		LP.add(c, LP.box(Vector3(0.64, 0.04, 0.54)), Vector3(0, 0.31, 0), cc.darkened(0.22), Vector3.ZERO, 0.5)
-		for j in 8:
-			Produce.build_mesh(c, item_id, _crate_item_pos(j, 0.16, 0.12, 0.34), 0.072)
+		LP.add(c, LP.box(Vector3(0.5, 0.26, 0.44)), Vector3(0, 0.15, 0), cc, Vector3.ZERO, 0.52)
+		LP.add(c, LP.box(Vector3(0.53, 0.04, 0.47)), Vector3(0, 0.28, 0), cc.darkened(0.22), Vector3.ZERO, 0.5)
+		LP.add(c, LP.box(Vector3(0.2, 0.05, 0.02)), Vector3(0, 0.2, 0.225), cc.darkened(0.45))
+		Produce.build_crate_fill(c, item_id, Vector3(0, 0.295, 0), 0.44, 0.38, 0.8, 2, i + spot_idx * 7)
 		_crate_visuals[item_id] = c
 		var lbl := Label3D.new()
 		lbl.text = "%s\n%d TL" % [info["name"], int(info["crate_cost"])]
-		lbl.position = Vector3(0, 0.62, 0)
+		lbl.position = Vector3(0, 0.58 if i % 2 == 0 else 0.74, 0)
 		lbl.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-		lbl.font_size = 21
+		lbl.font_size = 18
+		lbl.pixel_size = 0.0028
 		lbl.outline_size = 6
 		lbl.modulate = Color(1.0, 0.96, 0.85)
+		# Yalnızca tezgah sahibinin yakınından okunur; müşteri tarafında kalabalık yapmaz
+		lbl.visibility_range_end = 2.9
+		lbl.visibility_range_end_margin = 0.4
+		lbl.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
 		spot.add_child(lbl)
 		_crate_labels[item_id] = lbl
 		var area := Area3D.new()
@@ -449,16 +650,17 @@ func _build_supply_crates() -> void:
 		area.set_meta("kind", "crate")
 		area.set_meta("stall_owner", owner_id)
 		area.set_meta("item_id", item_id)
-		area.set_meta("hl_size", Vector3(0.66, 0.42, 0.56))
-		area.position = Vector3(0, 0.32, 0)
+		area.set_meta("hl_size", Vector3(0.54, 0.4, 0.48))
+		area.position = Vector3(0, 0.3, 0)
 		var cs := CollisionShape3D.new()
 		var sh := BoxShape3D.new()
-		sh.size = Vector3(0.72, 0.68, 0.64)
+		sh.size = Vector3(0.56, 0.66, 0.56)
 		cs.shape = sh
 		area.add_child(cs)
 		spot.add_child(area)
 
 
+## Eski API (tekil ürün yerleşimi) — geriye uyumluluk için korunur.
 static func _crate_item_pos(j: int, sx: float, sz: float, y0: float) -> Vector3:
 	if j < 6:
 		return Vector3(-sx + float(j % 3) * sx, y0, -sz * 0.6 + float(int(j / 3)) * (sz * 1.2))
@@ -482,24 +684,30 @@ static func _slot_item_local_pos(j: int) -> Vector3:
 	return Vector3(-0.07 + float(k3) * 0.14, 0.38, 0.0)
 
 
-static func build_held_crate(item_id: String, count: int) -> Node3D:
+## Elde/fırlatılan plastik pazar kasası: içinde stokla orantılı küçülen bir ürün yığını.
+static func build_held_crate(item_id: String, count: int, capacity := 0) -> Node3D:
 	var n := Node3D.new()
 	# Renkli plastik Türk pazar kasası
 	var cc := Color(0.12, 0.46, 0.84)
-	if item_id in ["domates", "elma"]:
-		cc = Color(0.84, 0.22, 0.18) if item_id == "domates" else Color(0.18, 0.58, 0.26)
-	elif item_id in ["karpuz", "patlican"]:
+	if item_id in ["domates", "elma", "cilek"]:
+		cc = Color(0.84, 0.22, 0.18) if item_id != "elma" else Color(0.18, 0.58, 0.26)
+	elif item_id in ["karpuz", "patlican", "salatalik", "biber"]:
 		cc = Color(0.16, 0.56, 0.24)
-	elif item_id in ["muz", "sogan", "portakal"]:
+	elif item_id in ["muz", "sogan", "portakal", "limon"]:
 		cc = Color(0.90, 0.66, 0.12)
 	LP.add(n, LP.box(Vector3(0.42, 0.03, 0.34)), Vector3(0, -0.09, 0), cc.darkened(0.2), Vector3.ZERO, 0.55)
 	LP.add(n, LP.box(Vector3(0.42, 0.18, 0.03)), Vector3(0, 0.0, 0.155), cc, Vector3.ZERO, 0.52)
 	LP.add(n, LP.box(Vector3(0.42, 0.18, 0.03)), Vector3(0, 0.0, -0.155), cc, Vector3.ZERO, 0.52)
 	LP.add(n, LP.box(Vector3(0.03, 0.18, 0.30)), Vector3(-0.195, 0.0, 0), cc.lightened(0.05), Vector3.ZERO, 0.52)
 	LP.add(n, LP.box(Vector3(0.03, 0.18, 0.30)), Vector3(0.195, 0.0, 0), cc.lightened(0.05), Vector3.ZERO, 0.52)
-	if item_id != "" and ITEMS.has(item_id):
-		for j in clampi(count, 0, 14):
-			Produce.build_mesh(n, item_id, _crate_item_pos(j, 0.11, 0.08, -0.02), 0.052)
+	# Tutma delikleri (koyu kulp yuvaları)
+	for sx: float in [-1.0, 1.0]:
+		LP.add(n, LP.box(Vector3(0.012, 0.035, 0.11)), Vector3(sx * 0.212, 0.045, 0), cc.darkened(0.55))
+	if item_id != "" and ITEMS.has(item_id) and count > 0:
+		var xf := Produce.pile_layout(item_id, 0.36, 0.28, 3, 0.62, 3)
+		var cap := maxi(capacity if capacity > 0 else CRATE_CAPACITY, count)
+		var pile := Produce.build_pile(n, item_id, xf, Produce.pile_visible_for(count, cap, xf.size()))
+		pile.position = Vector3(0, -0.075, 0)
 	return n
 
 
@@ -517,33 +725,121 @@ func owner_spawn_pos() -> Vector3:
 	return to_global(Vector3(0.0, 0.15, -0.55))
 
 
+## Yuva görseli: ürün yığını (MultiMesh) yalnızca ürün değişince yeniden kurulur; stok değişince
+## görünür adet ayarlanır, böylece yığın tepeden eriyerek azalır.
 func _refresh_slot_visual(idx: int) -> void:
 	var s := slots[idx]
+	if not s.has("fresh"):
+		s["fresh"] = 1.0
 	var vis := _slot_visuals[idx]
-	for c in vis.get_children():
-		c.queue_free()
 	var item_id: String = s["item"]
 	var cnt: int = s["count"]
 	var price: int = s["price"]
 	var lbl := _slot_labels[idx]
 	var blbl := _slot_back_labels[idx]
-	var tag_mat := _slot_tag_mats[idx]
+	var plbl := _slot_price_labels[idx]
+	var bplbl := _slot_back_price_labels[idx]
+	var pile: Dictionary = _slot_piles[idx]
 	if item_id == "" or cnt <= 0:
+		if not pile.is_empty():
+			Produce.set_pile_visible(pile["root"], 0)
 		lbl.text = "BOŞ"
 		lbl.modulate = Color(0.45, 0.4, 0.35)
-		blbl.text = "BOŞ"
+		blbl.text = "BOŞ YUVA"
 		blbl.modulate = Color(0.45, 0.4, 0.35)
-		tag_mat.albedo_color = Color(0.95, 0.92, 0.84)
+		plbl.text = "—"
+		bplbl.text = "—"
+		plbl.modulate = Color(0.45, 0.4, 0.35)
+		bplbl.modulate = Color(0.45, 0.4, 0.35)
+		_slot_tag_mats[idx].albedo_color = Color(0.95, 0.92, 0.84)
+		_apply_fresh_visual(idx)
 		return
+	if pile.is_empty() or str(pile["item"]) != item_id or not is_instance_valid(pile["root"]):
+		if not pile.is_empty() and is_instance_valid(pile["root"]):
+			(pile["root"] as Node3D).queue_free()
+		var xf := Produce.pile_layout(item_id, PILE_W, PILE_D, 3, 1.0, spot_idx * 4 + idx)
+		var root := Produce.build_pile(vis, item_id, xf, 0)
+		Produce.set_pile_overlay(root, _slot_overlays[idx])
+		pile = {"item": item_id, "root": root, "xf": xf}
+		_slot_piles[idx] = pile
+	var xfs: Array = pile["xf"]
+	Produce.set_pile_visible(pile["root"], Produce.pile_visible_for(cnt, max_slot_count(), xfs.size()))
 	var info: Dictionary = ITEMS[item_id]
-	var txt := "%s\n%d TL (%d/%d)" % [info["name"], price, cnt, max_slot_count()]
-	lbl.text = txt
+	lbl.text = str(info["name"])
 	lbl.modulate = Color(0.1, 0.07, 0.04)
-	blbl.text = txt
+	blbl.text = "%s  %d/%d" % [info["name"], cnt, max_slot_count()]
 	blbl.modulate = Color(0.1, 0.07, 0.04)
-	for j in mini(cnt, max_slot_count()):
-		Produce.build_mesh(vis, item_id, _slot_item_local_pos(j), 0.082)
+	plbl.text = "%d TL" % price
+	bplbl.text = "%d TL" % price
+	plbl.modulate = Color(0.62, 0.06, 0.04)
+	bplbl.modulate = Color(0.62, 0.06, 0.04)
 	_refresh_slot_price_color(idx)
+	_apply_fresh_visual(idx)
+
+
+## Yuvanın görünür en üst ürününün yerel konumu (vis düğümüne göre).
+func _pile_top_local(idx: int, cnt: int) -> Vector3:
+	var pile: Dictionary = _slot_piles[idx]
+	if pile.is_empty():
+		return Vector3(0, 0.1, 0)
+	var xfs: Array = pile["xf"]
+	var n := Produce.pile_visible_for(cnt, max_slot_count(), xfs.size())
+	if n <= 0:
+		return Vector3(0, 0.08, 0)
+	return (xfs[n - 1] as Transform3D).origin
+
+
+## Yerleştirme/satış anında kasa yığınına küçük squash & stretch.
+func _squash_slot(idx: int, strength := 1.0) -> void:
+	var vis := _slot_visuals[idx]
+	if vis.has_meta("sq_tw"):
+		var old: Tween = vis.get_meta("sq_tw")
+		if old and old.is_valid():
+			old.kill()
+	vis.scale = Vector3(1.0 + 0.07 * strength, 1.0 - 0.12 * strength, 1.0 + 0.07 * strength)
+	var tw := create_tween()
+	tw.tween_property(vis, "scale", Vector3(1.0 - 0.03 * strength, 1.0 + 0.06 * strength, 1.0 - 0.03 * strength), 0.09).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tw.tween_property(vis, "scale", Vector3.ONE, 0.16).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	vis.set_meta("sq_tw", tw)
+
+
+func _wobble_tag(idx: int, up: bool) -> void:
+	if idx >= _slot_tags.size():
+		return
+	var tag := _slot_tags[idx]
+	var tw := create_tween()
+	tag.scale = Vector3.ONE * (1.12 if up else 0.92)
+	tw.set_parallel()
+	tw.tween_property(tag, "scale", Vector3.ONE, 0.22).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw.tween_property(tag, "rotation:z", 0.0, 0.3).from(0.12 if up else -0.12).set_trans(Tween.TRANS_ELASTIC).set_ease(Tween.EASE_OUT)
+
+
+## Satılan (veya çalınan) ürün yığının tepesinden zıplayıp müşteri tarafına uçar.
+func _sale_pop(idx: int, item_id: String, old_cnt: int) -> void:
+	var vis := _slot_visuals[idx]
+	var top_local := _pile_top_local(idx, old_cnt)
+	var start := vis.to_global(top_local)
+	last_sale_pos = start
+	last_sale_ms = Time.get_ticks_msec()
+	_squash_slot(idx, 0.6)
+	if not is_inside_tree():
+		return
+	var hop := Produce.build_mesh(self, item_id, to_local(start), 0.082)
+	var p0 := hop.position
+	var p2 := to_local(start + global_transform.basis.z * 0.75 + Vector3(0, 0.15, 0))
+	var p1 := (p0 + p2) * 0.5 + Vector3(0, 0.45, 0)
+	var tw := create_tween()
+	tw.tween_method(func(t: float) -> void:
+		if is_instance_valid(hop):
+			var u := 1.0 - t
+			hop.position = u * u * p0 + 2.0 * u * t * p1 + t * t * p2
+			hop.rotation = Vector3(t * 4.0, t * 2.0, 0.0)
+			hop.scale = Vector3.ONE * lerpf(1.1, 0.05, t * t)
+	, 0.0, 1.0, 0.42).set_trans(Tween.TRANS_SINE)
+	tw.tween_callback(func() -> void:
+		if is_instance_valid(hop):
+			hop.queue_free()
+	)
 
 
 func _refresh_slot_price_color(idx: int) -> void:
@@ -639,32 +935,39 @@ func request_place(idx: int, item_id: String, from_world_pos := Vector3.ZERO) ->
 	if not can_place(idx, item_id):
 		return false
 	var s := slots[idx]
-	var new_cnt := int(s["count"]) + 1
+	var old_cnt := int(s["count"]) if s["item"] == item_id else 0
+	var new_cnt := old_cnt + 1
 	var price: int = int(s["price"]) if s["item"] == item_id else int(ITEMS[item_id]["base"])
+	# Taze kasa (1.0) mevcut stokla ağırlıklı ortalanır
+	var old_f := float(s.get("fresh", 1.0)) if old_cnt > 0 else 1.0
+	var fresh := (old_f * float(old_cnt) + 1.0) / float(new_cnt)
 	if Net.online():
-		rpc_place_animated.rpc(idx, item_id, new_cnt, price, from_world_pos)
+		rpc_place_animated.rpc(idx, item_id, new_cnt, price, from_world_pos, fresh)
 	else:
-		rpc_place_animated(idx, item_id, new_cnt, price, from_world_pos)
+		rpc_place_animated(idx, item_id, new_cnt, price, from_world_pos, fresh)
 	return true
 
 
 @rpc("any_peer", "call_local", "reliable")
-func rpc_place_animated(idx: int, item_id: String, count: int, price: int, from_world_pos: Vector3) -> void:
-	if idx < 0 or idx >= slots.size():
+func rpc_place_animated(idx: int, item_id: String, count: int, price: int, from_world_pos: Vector3, fresh := 1.0) -> void:
+	if idx < 0 or idx >= slots.size() or (item_id != "" and not ITEMS.has(item_id)):
 		return
-	slots[idx] = {"item": item_id, "count": clampi(count, 0, max_slot_count()), "price": clampi(price, 1, 199)}
-	if from_world_pos == Vector3.ZERO:
+	slots[idx] = {"item": item_id, "count": clampi(count, 0, max_slot_count()), "price": clampi(price, 1, 199), "fresh": clampf(fresh, 0.0, 1.0)}
+	if from_world_pos == Vector3.ZERO or not is_inside_tree():
 		_refresh_slot_visual(idx)
 		return
 	var vis := _slot_visuals[idx]
-	var target_local := _slot_item_local_pos(clampi(count - 1, 0, max_slot_count() - 1))
-	var target_world := vis.to_global(target_local)
+	# Yığın kurulu değilse (yeni ürün) önce kur ki hedef tepe noktası doğru olsun
+	var pile: Dictionary = _slot_piles[idx]
+	if pile.is_empty() or str(pile["item"]) != item_id:
+		_refresh_slot_visual(idx)
+		Produce.set_pile_visible(_slot_piles[idx]["root"], Produce.pile_visible_for(count - 1, max_slot_count(), (_slot_piles[idx]["xf"] as Array).size()) if count > 1 else 0)
+	var target_world := vis.to_global(_pile_top_local(idx, count))
 	var mid_world := (from_world_pos + target_world) * 0.5 + Vector3(0.0, 0.34, 0.0)
 	var fly := Produce.build_mesh(self, item_id, to_local(from_world_pos), 0.082)
 	var p0 := to_local(from_world_pos)
 	var p1 := to_local(mid_world)
 	var p2 := to_local(target_world)
-	Sfx.play_3d("place", target_world, self, -4.0, 0.92 + float(count % 5) * 0.05)
 	var dur := 0.11 if has_upgrade("big_crate") else 0.16
 	var tw := create_tween()
 	tw.tween_method(func(t: float) -> void:
@@ -672,13 +975,19 @@ func rpc_place_animated(idx: int, item_id: String, count: int, price: int, from_
 			var u := 1.0 - t
 			fly.position = u * u * p0 + 2.0 * u * t * p1 + t * t * p2
 			fly.rotation.x = t * PI * 1.2
-			fly.scale = Vector3.ONE * lerpf(0.72, 1.08, t)
+			# uçarken uzar (stretch), inerken toplanır
+			var st := 1.0 + sin(t * PI) * 0.22
+			fly.scale = Vector3(1.0 / sqrt(st), st, 1.0 / sqrt(st)) * lerpf(0.72, 1.05, t)
 	, 0.0, 1.0, dur).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	tw.tween_callback(func() -> void:
 		if is_instance_valid(fly):
 			fly.queue_free()
 		_refresh_slot_visual(idx)
+		_squash_slot(idx, 1.0)
+		Sfx.play_3d("place", target_world, self, -4.0, 0.92 + float(count % 5) * 0.05)
 		VFX.burst_dust(self, target_world, Color(1.0, 0.96, 0.85), 4)
+		if count >= max_slot_count():
+			VFX.spawn_floating_text(self, target_world + Vector3(0, 0.35, 0), "✔ DOLU!", Color(0.55, 1.0, 0.6), 30)
 	)
 
 
@@ -692,10 +1001,12 @@ func request_adjust_price(idx: int, delta: int) -> void:
 	if np == int(s["price"]):
 		return
 	Sfx.play("price_up" if delta > 0 else "price_down", -7.0)
+	_wobble_tag(idx, delta > 0)
+	var f := float(s.get("fresh", 1.0))
 	if Net.online():
-		rpc_sync_slot.rpc(idx, s["item"], int(s["count"]), np)
+		rpc_sync_slot.rpc(idx, s["item"], int(s["count"]), np, f)
 	else:
-		rpc_sync_slot(idx, s["item"], int(s["count"]), np)
+		rpc_sync_slot(idx, s["item"], int(s["count"]), np, f)
 
 
 func consume_for_sale(item_id: String) -> int:
@@ -709,22 +1020,257 @@ func consume_for_sale(item_id: String) -> int:
 	if best_idx < 0:
 		return 0
 	var s := slots[best_idx]
+	var f := float(s.get("fresh", 1.0))
 	var new_cnt := int(s["count"]) - 1
 	var new_item: String = s["item"] if new_cnt > 0 else ""
 	if Net.online():
-		rpc_sync_slot.rpc(best_idx, new_item, new_cnt, int(s["price"]))
+		rpc_sync_slot.rpc(best_idx, new_item, new_cnt, int(s["price"]), f)
 	else:
-		rpc_sync_slot(best_idx, new_item, new_cnt, int(s["price"]))
+		rpc_sync_slot(best_idx, new_item, new_cnt, int(s["price"]), f)
 	tip_scale()
+	# Çürük mal satmak itibarı biraz zedeler
+	if f < 0.3:
+		add_reputation(-0.03)
 	return best_price
 
 
 @rpc("any_peer", "call_local", "reliable")
-func rpc_sync_slot(idx: int, item_id: String, count: int, price: int) -> void:
-	if idx < 0 or idx >= slots.size():
+func rpc_sync_slot(idx: int, item_id: String, count: int, price: int, fresh := 1.0) -> void:
+	if idx < 0 or idx >= slots.size() or (item_id != "" and not ITEMS.has(item_id)):
 		return
-	slots[idx] = {"item": item_id, "count": clampi(count, 0, max_slot_count()), "price": clampi(price, 1, 199)}
+	var old: Dictionary = slots[idx]
+	var old_item := str(old["item"])
+	var old_cnt := int(old["count"])
+	var new_cnt := clampi(count, 0, max_slot_count())
+	slots[idx] = {"item": item_id, "count": new_cnt, "price": clampi(price, 1, 199), "fresh": clampf(fresh, 0.0, 1.0)}
+	var taken := old_item != "" and old_cnt > new_cnt and (item_id == old_item or item_id == "")
 	_refresh_slot_visual(idx)
+	if taken and is_inside_tree():
+		_sale_pop(idx, old_item, old_cnt)
+
+
+# ---------- Tazelik API (host yetkili) ----------
+
+## Bu ürünü tutan en iyi (en taze) yuvanın tazeliği; ürün yoksa 1.0.
+func get_item_freshness(item_id: String) -> float:
+	var best := -1.0
+	for s in slots:
+		if s["item"] == item_id and int(s["count"]) > 0:
+			best = maxf(best, float(s.get("fresh", 1.0)))
+	return best if best >= 0.0 else 1.0
+
+
+## Host: dolu tüm yuvaları tazeler (su fısfısı) ve herkese parıltı efektiyle yayınlar.
+func refresh_freshness(amount := SPRAY_AMOUNT) -> void:
+	if not _is_host():
+		return
+	for s in slots:
+		if str(s["item"]) != "" and int(s["count"]) > 0:
+			s["fresh"] = minf(float(s.get("fresh", 1.0)) + amount, 1.0)
+	_fresh_sync_t = 0.0
+	if Net.online():
+		rpc_sync_freshness.rpc(_fresh_values(), true)
+	else:
+		rpc_sync_freshness(_fresh_values(), true)
+
+
+## Sahibin fısfıs isteği (istemci → host). Host: mesafe/sahiplik doğrular, tazeler.
+func request_spray(sprayer_id: int) -> void:
+	if Net.online():
+		rpc_request_spray.rpc_id(1, sprayer_id)
+	else:
+		rpc_request_spray(sprayer_id)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func rpc_request_spray(sprayer_id: int) -> void:
+	if not _is_host():
+		return
+	if Net.online():
+		var snd := multiplayer.get_remote_sender_id()
+		if snd != 0 and snd != sprayer_id:
+			return
+	if sprayer_id != owner_id:
+		return
+	refresh_freshness(SPRAY_AMOUNT)
+
+
+func _spray_fx() -> void:
+	if not is_inside_tree():
+		return
+	for i in slots.size():
+		if int(slots[i]["count"]) <= 0:
+			continue
+		spawn_sparkle(self, _slot_visuals[i].global_position + Vector3(0, 0.25, 0))
+	VFX.spawn_floating_text(self, to_global(Vector3(0, 1.25, 0.4)), "💦 TAPTAZE!", Color(0.6, 0.92, 1.0), 40)
+
+
+## Parıltı: emisyonlu minik elmas kırıntıları yükselip söner (A'nın vfx.gd'sinden bağımsız).
+static func spawn_sparkle(parent: Node, world_pos: Vector3, color := Color(0.6, 0.9, 1.0), amount := 9) -> void:
+	if parent == null or not parent.is_inside_tree():
+		return
+	var p := CPUParticles3D.new()
+	p.one_shot = true
+	p.explosiveness = 0.5
+	p.amount = amount
+	p.lifetime = 0.75
+	p.mesh = LP.box(Vector3(0.013, 0.013, 0.013))
+	var shrink := Curve.new()
+	shrink.add_point(Vector2(0.0, 0.4))
+	shrink.add_point(Vector2(0.3, 1.0))
+	shrink.add_point(Vector2(1.0, 0.0))
+	p.scale_amount_curve = shrink
+	var m := StandardMaterial3D.new()
+	m.vertex_color_use_as_albedo = true
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.emission_enabled = true
+	m.emission = color
+	m.emission_energy_multiplier = 2.5
+	p.material_override = m
+	p.emission_shape = CPUParticles3D.EMISSION_SHAPE_BOX
+	p.emission_box_extents = Vector3(0.28, 0.08, 0.24)
+	p.direction = Vector3.UP
+	p.spread = 25.0
+	p.initial_velocity_min = 0.4
+	p.initial_velocity_max = 1.1
+	p.gravity = Vector3(0, -0.6, 0)
+	p.angular_velocity_min = -360.0
+	p.angular_velocity_max = 360.0
+	var grad := Gradient.new()
+	grad.set_color(0, Color(1, 1, 1, 1))
+	grad.add_point(0.4, Color(color.r, color.g, color.b, 0.95))
+	grad.set_color(1, Color(color.r, color.g, color.b, 0.0))
+	p.color_ramp = grad
+	parent.add_child(p)
+	p.global_position = world_pos
+	p.emitting = true
+	var tw := p.create_tween()
+	tw.tween_interval(p.lifetime + 0.3)
+	tw.tween_callback(p.queue_free)
+
+
+# ---------- İtibar (0..5 yıldız) ----------
+
+## Host: itibarı değiştirir ve tüm eşlere yayar.
+func add_reputation(delta: float) -> void:
+	if not _is_host():
+		return
+	set_reputation(reputation + delta)
+
+
+## Host: itibarı doğrudan ayarlar (kariyer kaydı yükleme vb.).
+func set_reputation(value: float) -> void:
+	if not _is_host():
+		return
+	var nv := clampf(value, 0.0, REP_MAX)
+	if is_equal_approx(nv, reputation):
+		return
+	if Net.online():
+		rpc_sync_reputation.rpc(nv)
+	else:
+		rpc_sync_reputation(nv)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func rpc_sync_reputation(value: float) -> void:
+	if Net.online() and multiplayer.get_remote_sender_id() not in [0, 1]:
+		return
+	var old := reputation
+	reputation = clampf(value, 0.0, REP_MAX)
+	_refresh_rep_label()
+	# Yarım yıldız eşiği geçildiğinde belirgin geri bildirim
+	var old_step := int(floor(old * 2.0 + 0.001))
+	var new_step := int(floor(reputation * 2.0 + 0.001))
+	if old_step != new_step and is_inside_tree() and _rep_label:
+		var up := new_step > old_step
+		var pos := _rep_label.global_position
+		Sfx.play_3d("rep_up" if up else "rep_down", pos, self, -3.0, 1.0, 24.0)
+		VFX.spawn_floating_text(self, pos + Vector3(0, 0.3, 0), "⭐ İtibar arttı!" if up else "💔 İtibar düştü!",
+			Color(1.0, 0.86, 0.3) if up else Color(1.0, 0.4, 0.34), 34)
+		if up:
+			spawn_sparkle(self, pos, Color(1.0, 0.86, 0.3), 10)
+		_rep_label.scale = Vector3.ONE * (1.3 if up else 0.8)
+		var tw := create_tween()
+		tw.tween_property(_rep_label, "scale", Vector3.ONE, 0.35).set_trans(Tween.TRANS_ELASTIC).set_ease(Tween.EASE_OUT)
+
+
+func _refresh_rep_label() -> void:
+	if _rep_label == null:
+		return
+	var full := clampi(int(round(reputation)), 0, 5)
+	_rep_label.text = "★".repeat(full) + "☆".repeat(5 - full) + "  %.1f" % reputation
+	if reputation >= 4.0:
+		_rep_label.modulate = Color(1.0, 0.86, 0.22)
+	elif reputation >= 2.5:
+		_rep_label.modulate = Color(1.0, 0.94, 0.62)
+	elif reputation >= 1.5:
+		_rep_label.modulate = Color(1.0, 0.7, 0.4)
+	else:
+		_rep_label.modulate = Color(1.0, 0.45, 0.38)
+
+
+## Müşteri tezgah seçimi çarpanı: 0★ ≈ 0.75, 2.5★ = 1.0, 5★ ≈ 1.3.
+func reputation_mult() -> float:
+	if reputation <= 2.5:
+		return lerpf(0.75, 1.0, reputation / 2.5)
+	return lerpf(1.0, 1.3, (reputation - 2.5) / 2.5)
+
+
+# ---------- Kapkaççı (hırsız) API ----------
+
+## Host: rastgele (veya istenen üründen) dolu bir yuvadan 1 adet alır; ürün kimliğini döndürür.
+func steal_one(item_id := "") -> String:
+	if not _is_host():
+		return ""
+	var cands: Array[int] = []
+	for i in slots.size():
+		var s := slots[i]
+		if int(s["count"]) > 0 and str(s["item"]) != "" and (item_id == "" or s["item"] == item_id):
+			cands.append(i)
+	if cands.is_empty() and item_id != "":
+		return steal_one("")
+	if cands.is_empty():
+		return ""
+	var idx: int = cands.pick_random()
+	var s := slots[idx]
+	var it := str(s["item"])
+	var new_cnt := int(s["count"]) - 1
+	var new_item := it if new_cnt > 0 else ""
+	if Net.online():
+		rpc_sync_slot.rpc(idx, new_item, new_cnt, int(s["price"]), float(s.get("fresh", 1.0)))
+	else:
+		rpc_sync_slot(idx, new_item, new_cnt, int(s["price"]), float(s.get("fresh", 1.0)))
+	return it
+
+
+## Host: yakalanan hırsızdan geri alınan 1 ürünü aynı ürünlü (yer varsa) veya boş yuvaya koyar.
+func restore_one(item_id: String) -> void:
+	if not _is_host() or not ITEMS.has(item_id):
+		return
+	var target := -1
+	for i in slots.size():
+		var s := slots[i]
+		if s["item"] == item_id and int(s["count"]) > 0 and int(s["count"]) < max_slot_count():
+			target = i
+			break
+	if target < 0:
+		for i in slots.size():
+			if str(slots[i]["item"]) == "" or int(slots[i]["count"]) <= 0:
+				target = i
+				break
+	if target < 0:
+		return
+	var s := slots[target]
+	var same: bool = s["item"] == item_id and int(s["count"]) > 0
+	var cnt := (int(s["count"]) if same else 0) + 1
+	var price: int = int(s["price"]) if same else int(ITEMS[item_id]["base"])
+	var f: float = float(s.get("fresh", 0.9)) if same else 0.9
+	var from_p := to_global(Vector3(0, 1.3, 1.4))
+	if Net.online():
+		rpc_place_animated.rpc(target, item_id, cnt, price, from_p, f)
+	else:
+		rpc_place_animated(target, item_id, cnt, price, from_p, f)
 
 
 func request_ring_bell() -> bool:
@@ -789,6 +1335,7 @@ func export_snapshot() -> Dictionary:
 		"bell_cd": bell_cd,
 		"has_radio": has_radio,
 		"radio_playing": radio_playing,
+		"reputation": reputation,
 	}
 
 
@@ -801,8 +1348,19 @@ func apply_snapshot(d: Dictionary) -> void:
 	if d.has("slots"):
 		var arr: Array = d["slots"]
 		for i in mini(arr.size(), slots.size()):
-			slots[i] = arr[i].duplicate()
+			var sd: Dictionary = arr[i].duplicate()
+			var it := str(sd.get("item", ""))
+			var ok := ITEMS.has(it)
+			slots[i] = {
+				"item": it if ok else "",
+				"count": clampi(int(sd.get("count", 0)), 0, max_slot_count()) if ok else 0,
+				"price": clampi(int(sd.get("price", 10)), 1, 199),
+				"fresh": clampf(float(sd.get("fresh", 1.0)), 0.0, 1.0),
+			}
 			_refresh_slot_visual(i)
+	if d.has("reputation"):
+		reputation = clampf(float(d["reputation"]), 0.0, REP_MAX)
+		_refresh_rep_label()
 	bell_boost = float(d.get("bell_boost", 0.0))
 	bell_cd = float(d.get("bell_cd", 0.0))
 	rpc_set_stall_radio(bool(d.get("has_radio", false)), bool(d.get("radio_playing", false)))

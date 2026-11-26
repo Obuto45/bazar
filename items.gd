@@ -1,6 +1,6 @@
 extends RefCounted
 ## Pazarcı kişisel envanter eşyaları (P mağazasından alınır; meyve kasaları ASLA envantere girmez).
-## Sigara, Küba Purosu, El Megafonu, Meyve Bıçağı ve Arabesk Radyo için 3D model ve tanımlar.
+## Sigara, Küba Purosu, El Megafonu, Meyve Bıçağı, Arabesk Radyo ve Su Fısfısı için 3D model ve tanımlar.
 
 const LP := preload("res://lowpoly.gd")
 
@@ -55,9 +55,19 @@ const CATALOG := {
 		"consumable": false,
 		"desc": "Sol tıkla Hicaz Arabesk müzik aç/kapat; tezgahına koyup tüm sokağı inletebilirsin!",
 	},
+	"spray": {
+		"name": "Su Fısfısı",
+		"short": "Fısfıs",
+		"icon": "💦",
+		"cost": 25,
+		"uses": 4, # 4 fıs
+		"puffs_per_use": 1,
+		"consumable": true,
+		"desc": "4 fıs. Tezgahına bakıp sol tıkla: ürünler ışıl ışıl tazelenir (+%35 tazelik), müşteri burun kıvırmaz!",
+	},
 }
 
-const ORDER := ["sigara", "puro", "megafon", "bicak", "radyo"]
+const ORDER := ["sigara", "puro", "megafon", "bicak", "radyo", "spray"]
 
 
 ## Birinci veya üçüncü şahıs için detaylı 3D eşya modeli üretir.
@@ -137,5 +147,22 @@ static func build_item_model(item_id: String, burn_ratio := 0.0) -> Node3D:
 			LP.add(root, LP.box(Vector3(0.085, 0.065, 0.018)), Vector3(0, 0.072, 0.056), Color(0.12, 0.12, 0.14))
 			LP.add(root, LP.box(Vector3(0.24, 0.018, 0.02)), Vector3(0, 0.215, 0), Color(0.75, 0.76, 0.8), Vector3.ZERO, 0.25, 0.85)
 			LP.add(root, LP.cyl(0.004, 0.006, 0.26, 6), Vector3(0.13, 0.29, -0.02), Color(0.84, 0.86, 0.9), Vector3(0, 0, -0.28), 0.2, 0.9)
+
+		"spray":
+			# Yarı saydam mavi plastik fısfıs şişesi + içinde su + beyaz tetikli başlık ve uzun nozul
+			var bottle := LP.add(root, LP.cyl(0.036, 0.04, 0.15, 9), Vector3(0, 0.0, 0), Color(0.55, 0.82, 1.0, 0.55), Vector3.ZERO, 0.12)
+			var bm := bottle.material_override as StandardMaterial3D
+			bm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			bm.metallic_specular = 0.9
+			LP.add(root, LP.cyl(0.031, 0.035, 0.1, 9), Vector3(0, -0.02, 0), Color(0.3, 0.62, 0.98), Vector3.ZERO, 0.1)
+			LP.add(root, LP.cyl(0.026, 0.036, 0.03, 9), Vector3(0, 0.088, 0), Color(0.96, 0.96, 0.98), Vector3.ZERO, 0.4)
+			LP.add(root, LP.box(Vector3(0.05, 0.05, 0.07)), Vector3(0, 0.124, -0.012), Color(0.96, 0.96, 0.98), Vector3.ZERO, 0.4)
+			LP.add(root, LP.cyl(0.008, 0.01, 0.05, 6), Vector3(0, 0.134, -0.065), Color(0.2, 0.62, 0.95), Vector3(PI / 2, 0, 0), 0.35)
+			var trig := LP.add(root, LP.box(Vector3(0.016, 0.05, 0.016)), Vector3(0, 0.096, -0.046), Color(0.2, 0.62, 0.95), Vector3(-0.35, 0, 0), 0.4)
+			trig.name = "Trigger"
+			var nozzle := Node3D.new()
+			nozzle.name = "SmokeTip" # duman ucu ile aynı adı paylaşır: buğu buradan çıkar
+			nozzle.position = Vector3(0, 0.134, -0.095)
+			root.add_child(nozzle)
 
 	return root

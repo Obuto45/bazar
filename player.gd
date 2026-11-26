@@ -1,20 +1,23 @@
 extends CharacterBody3D
-## Oyuncu: yuvarlak hatlı karakter (models/character.glb), 1. şahıs hareket + ayak sesleri + kamera sarsıntısı,
-## 3D hedef vurgusu, proximity sesli sohbet, bağırma dalgaları, toptancı/depo kasa alımı, satış ve yükseltmeler.
+## Oyuncu: kişisel envanter (1-6; meyve kasaları ASLA envantere girmez), sigara/puro yanma + duman,
+## el megafonu (+dB bağırma), meyve bıçağı saldırısı, Arabesk radyo, azaltılmış sarsıntı ve koşma efekti.
 
 const MODEL := preload("res://models/character.glb")
 const LP := preload("res://lowpoly.gd")
 const Produce := preload("res://produce.gd")
 const StallScript := preload("res://stall.gd")
+const Items := preload("res://items.gd")
 const VFX := preload("res://vfx.gd")
 
 signal money_earned(amount: int, total: int, tip: int)
 signal money_spent(amount: int, total: int, reason: String)
-signal open_upgrade_shop()
+signal open_shop()
+signal inventory_changed()
 
 const STARTING_MONEY := 120
+const INV_SIZE := 6
 const WALK := 3.6
-const RUN := 6.8
+const RUN := 7.0
 const JUMP := 5.2
 const GRAVITY := 14.0
 const SENS := 0.0025
@@ -32,12 +35,12 @@ const VOICE_DB_MIN := -46.0
 const VOICE_DB_MAX := -12.0
 const VOICE_UNIT_SIZE := 3.5
 const VOICE_MAX_DIST := 22.0
-# Bağırma eşikleri
+# Bağırma eşikleri (Megafon eldeyken +12 dB / 1.85x!)
 const SHOUT_DB_MIN := -36.0
 const SHOUT_DB_MAX := -10.0
-const SHOUT_KEY_POWER := 0.62
-const SHOUT_ON := 0.55
-const SHOUT_CALLS := ["Taze %s! %d TL!", "Gel gel! %s %d lira!", "Kaçırma! %s sadece %d TL!", "Bal gibi %s! %d TL!"]
+const SHOUT_KEY_POWER := 0.72
+const SHOUT_ON := 0.45
+const SHOUT_CALLS := ["Taze %s! %d TL!", "Gel gel! %s %d lira!", "Seç al! %s sadece %d TL!", "Bal gibi %s! %d TL!"]
 const HAIRS := [Color(0.2, 0.12, 0.07), Color(0.08, 0.06, 0.05), Color(0.75, 0.55, 0.25), Color(0.55, 0.22, 0.1),
 	Color(0.4, 0.28, 0.18), Color(0.85, 0.8, 0.7)]
 const SHIRTS := [Color(0.85, 0.2, 0.18), Color(0.2, 0.5, 0.9), Color(0.98, 0.75, 0.15), Color(0.3, 0.75, 0.35),
@@ -58,6 +61,10 @@ var _held_anchor: Node3D
 var _held_visual: Node3D
 var _fp_crate_anchor: Node3D
 var _fp_crate_visual: Node3D
+var _fp_item_anchor: Node3D
+var _fp_item_visual: Node3D
+var _tp_item_anchor: Node3D
+var _tp_item_visual: Node3D
 var _hl_box: Node3D
 var _hl_mat: StandardMaterial3D
 
@@ -70,12 +77,31 @@ var daily_tips := 0
 var daily_sold := 0
 var daily_haggles := 0
 
+# Kişisel Envanter (1..6 — meyve kasaları ASLA buraya girmez!)
+var inventory: Array[Dictionary] = [] # {"id": String, "uses": int, "puffs": int} veya {}
+var active_slot := -1 # -1 = boş el, 0..5 = seçili envanter yuvası
+var _remote_item_id := ""
+var _remote_burn := 0.0
+var _use_anim := 0.0
+var _knife_cd := 0.0
+var _puff_cd := 0.0
+var _idle_smoke_cd := 1.4
+var _mega_burst := 0.0
+var _stun_t := 0.0
+var _hand_radio_playing := false
+var _hand_radio_audio: AudioStreamPlayer3D
+var _radio_note_cd := 0.0
+
+# Elde fiziksel taşınan meyve kasası (envanterden tamamen bağımsız!)
 var held_crate := false
 var held_item := ""
 var held_count := 0
+
 var shout_power := 0.0
+var sprint_k := 0.0 # 0..1 koşma efekti yoğunluğu (HUD hız çizgileri için)
 var _shout_lbl: Label3D
 var _shout_ring_cd := 0.0
+var _was_shouting := false
 var interact_hint := ""
 var has_target := false
 var _place_cd := 0.0
@@ -138,7 +164,7 @@ func face_yaw() -> float:
 
 
 func add_trauma(amount: float) -> void:
-	_trauma = clampf(_trauma + amount, 0.0, 1.0)
+	_trauma = clampf(_trauma + amount * 0.55, 0.0, 0.7) # azaltılmış yumuşak sarsıntı
 
 
 func _ready() -> void:
@@ -146,6 +172,7 @@ func _ready() -> void:
 	position = spawn_pos
 	net_pos = spawn_pos
 	body_yaw = face_yaw()
+	_init_inventory()
 	var col := CollisionShape3D.new()
 	var cap := CapsuleShape3D.new()
 	cap.radius = 0.32; cap.height = 1.4
@@ -153,6 +180,10 @@ func _ready() -> void:
 	col.position.y = 0.7
 	add_child(col)
 	_build_model(HAIRS[(id / 8 + id) % HAIRS.size()], SHIRTS[id % SHIRTS.size()])
+	_hand_radio_audio = Sfx.make_radio_player()
+	_hand_radio_audio.position = Vector3(0, 1.0, 0)
+	add_child(_hand_radio_audio)
+
 	tag = Label3D.new()
 	_base_tag = Net.display_name(id)
 	tag.text = _base_tag
@@ -186,8 +217,12 @@ func _ready() -> void:
 		_fp_crate_anchor.position = Vector3(0.0, -0.34, -0.58)
 		_fp_crate_anchor.rotation_degrees = Vector3(14.0, 0.0, 0.0)
 		cam.add_child(_fp_crate_anchor)
+		_fp_item_anchor = Node3D.new()
+		_fp_item_anchor.position = Vector3(0.24, -0.20, -0.38)
+		cam.add_child(_fp_item_anchor)
 		_build_highlight_box()
 		_setup_voice_capture()
+		_refresh_equipped_visual()
 	else:
 		_setup_voice_playback()
 		_shout_lbl = Label3D.new()
@@ -202,7 +237,183 @@ func _ready() -> void:
 		add_child(_shout_lbl)
 
 
-## Bakılan yuva / kasa / zil / müşteri çevresinde parlayan altın 3D seçim çerçevesi.
+func _init_inventory() -> void:
+	inventory.clear()
+	for i in INV_SIZE:
+		inventory.append({})
+	# Her pazarcı başlangıçta 1 paket (5 dal) Sigara ile başlar!
+	inventory[0] = {"id": "sigara", "uses": 5, "puffs": 0}
+	active_slot = -1
+
+
+func equipped_item_id() -> String:
+	if held_crate:
+		return ""
+	if not is_multiplayer_authority():
+		return _remote_item_id
+	if active_slot >= 0 and active_slot < inventory.size():
+		return str(inventory[active_slot].get("id", ""))
+	return ""
+
+
+func is_holding_item(item_id: String) -> bool:
+	return equipped_item_id() == item_id
+
+
+func has_inventory_item(item_id: String) -> bool:
+	for sl in inventory:
+		if str(sl.get("id", "")) == item_id and int(sl.get("uses", 0)) > 0:
+			return true
+	return false
+
+
+func has_prestige_aura() -> bool:
+	return is_holding_item("puro")
+
+
+## Efektif bağırma gücü: normal mikrofon/B + El Megafonu (1.85x) + Tezgah Hoparlörü (1.35x).
+func get_effective_shout() -> float:
+	var sp := maxf(shout_power, 1.15 if _mega_burst > 0.0 else 0.0)
+	if is_holding_item("megafon"):
+		sp *= 1.85
+	var st := _find_stall(_my_peer_id())
+	if st and st.has_upgrade("megaphone"):
+		sp *= 1.35
+	return sp
+
+
+func select_slot(idx: int) -> void:
+	if idx < 0 or idx >= INV_SIZE:
+		active_slot = -1
+	elif active_slot == idx:
+		active_slot = -1 # aynı tuşa basınca cebine koy
+	elif not inventory[idx].is_empty():
+		active_slot = idx
+		Sfx.play("ui_click", -10.0)
+	else:
+		active_slot = -1
+	if not is_holding_item("radyo") and _hand_radio_playing:
+		_set_hand_radio_synced(false)
+	_sync_equipped_to_peers()
+	_refresh_equipped_visual()
+	inventory_changed.emit()
+
+
+func _sync_equipped_to_peers() -> void:
+	var iid := equipped_item_id()
+	var br := _current_burn_ratio()
+	if Net.online():
+		rpc_sync_equipped.rpc(iid, br)
+
+
+@rpc("authority", "reliable")
+func rpc_sync_equipped(item_id: String, burn_r: float) -> void:
+	_remote_item_id = item_id
+	_remote_burn = burn_r
+	_refresh_equipped_visual()
+
+
+func _current_burn_ratio() -> float:
+	if not is_multiplayer_authority():
+		return _remote_burn
+	if active_slot >= 0 and active_slot < inventory.size() and not inventory[active_slot].is_empty():
+		var iid := str(inventory[active_slot].get("id", ""))
+		if Items.CATALOG.has(iid):
+			var max_p: int = int(Items.CATALOG[iid]["puffs_per_use"])
+			return float(int(inventory[active_slot].get("puffs", 0))) / float(maxi(max_p, 1))
+	return 0.0
+
+
+func _refresh_equipped_visual() -> void:
+	if _fp_item_visual:
+		_fp_item_visual.queue_free()
+		_fp_item_visual = null
+	if _tp_item_visual:
+		_tp_item_visual.queue_free()
+		_tp_item_visual = null
+	var iid := equipped_item_id()
+	if iid == "" or not Items.CATALOG.has(iid):
+		return
+	var br := _current_burn_ratio()
+	if is_multiplayer_authority() and _fp_item_anchor:
+		_fp_item_visual = Items.build_item_model(iid, br)
+		_fp_item_anchor.add_child(_fp_item_visual)
+		# Eşyaya özel doğal 1. şahıs tutuş açısı
+		match iid:
+			"sigara", "puro":
+				_fp_item_anchor.position = Vector3(0.22, -0.17, -0.34)
+				_fp_item_anchor.rotation_degrees = Vector3(12, 24, -10)
+			"megafon":
+				_fp_item_anchor.position = Vector3(0.26, -0.20, -0.44)
+				_fp_item_anchor.rotation_degrees = Vector3(6, 12, 0)
+			"bicak":
+				_fp_item_anchor.position = Vector3(0.28, -0.22, -0.42)
+				_fp_item_anchor.rotation_degrees = Vector3(14, 10, -14)
+			"radyo":
+				_fp_item_anchor.position = Vector3(0.26, -0.26, -0.48)
+				_fp_item_anchor.rotation_degrees = Vector3(8, -22, 0)
+	elif _tp_item_anchor:
+		_tp_item_visual = Items.build_item_model(iid, br)
+		_tp_item_anchor.add_child(_tp_item_visual)
+
+
+func add_inventory_item_synced(item_id: String) -> void:
+	if Net.online():
+		rpc_add_inventory_item.rpc(item_id)
+	else:
+		rpc_add_inventory_item(item_id)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func rpc_add_inventory_item(item_id: String) -> void:
+	if Net.online() and multiplayer.get_remote_sender_id() not in [0, 1]:
+		return
+	if not Items.CATALOG.has(item_id):
+		return
+	var info: Dictionary = Items.CATALOG[item_id]
+	var add_uses: int = int(info["uses"])
+	# Aynı tüketilebilir eşya varsa adetini ekle (sigara/puro)
+	for i in inventory.size():
+		if str(inventory[i].get("id", "")) == item_id:
+			if bool(info["consumable"]):
+				inventory[i]["uses"] = int(inventory[i]["uses"]) + add_uses
+			if is_multiplayer_authority():
+				inventory_changed.emit()
+			return
+	# Boş yuvaya koy
+	for i in inventory.size():
+		if inventory[i].is_empty():
+			inventory[i] = {"id": item_id, "uses": add_uses, "puffs": 0}
+			if is_multiplayer_authority():
+				active_slot = i
+				_sync_equipped_to_peers()
+				_refresh_equipped_visual()
+				inventory_changed.emit()
+			return
+
+
+func confiscate_item_synced(item_id: String) -> void:
+	if Net.online():
+		rpc_confiscate_item.rpc(item_id)
+	else:
+		rpc_confiscate_item(item_id)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func rpc_confiscate_item(item_id: String) -> void:
+	if Net.online() and multiplayer.get_remote_sender_id() not in [0, 1]:
+		return
+	for i in inventory.size():
+		if str(inventory[i].get("id", "")) == item_id:
+			inventory[i] = {}
+			if active_slot == i:
+				active_slot = -1
+	if is_multiplayer_authority():
+		_sync_equipped_to_peers()
+		_refresh_equipped_visual()
+		inventory_changed.emit()
+
+
 func _build_highlight_box() -> void:
 	_hl_box = Node3D.new()
 	_hl_box.top_level = true
@@ -214,12 +425,11 @@ func _build_highlight_box() -> void:
 	_hl_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_hl_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	var t := 0.022
-	# Birim küpün 12 kenarı (scale ile hedef kutuya oturur)
 	var edge_x := LP.box(Vector3(1.0, t, t))
 	var edge_y := LP.box(Vector3(t, 1.0, t))
 	var edge_z := LP.box(Vector3(t, t, 1.0))
-	for a in [-0.5, 0.5]:
-		for b in [-0.5, 0.5]:
+	for a: float in [-0.5, 0.5]:
+		for b: float in [-0.5, 0.5]:
 			for pair in [[edge_x, Vector3(0, a, b)], [edge_y, Vector3(a, 0, b)], [edge_z, Vector3(a, b, 0)]]:
 				var mi := MeshInstance3D.new()
 				mi.mesh = pair[0]
@@ -266,6 +476,10 @@ func _build_model(hair: Color, shirt: Color) -> void:
 					var c := mat.duplicate() as BaseMaterial3D
 					c.albedo_color = hair if mat.resource_name == "Hair" else shirt
 					mi.set_surface_override_material(i, c)
+	_tp_item_anchor = Node3D.new()
+	_tp_item_anchor.position = Vector3(0.0, 0.04, 0.14)
+	_tp_item_anchor.rotation_degrees = Vector3(0, 180, 0)
+	(parts["HandR"] as Node3D).add_child(_tp_item_anchor)
 	mouth_node = parts["Head"].find_child("Mouth", true, false)
 	if mouth_node:
 		mouth_rest = mouth_node.position
@@ -288,12 +502,19 @@ func _unhandled_input(e: InputEvent) -> void:
 			talk_db = -60.0
 			_voice_accum.clear()
 		return
-	if e.is_action_pressed("upgrade_shop"):
-		open_upgrade_shop.emit()
+	if e.is_action_pressed("open_shop") or e.is_action_pressed("upgrade_shop"):
+		open_shop.emit()
 		return
 	if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
 		_place_held = false
 		return
+	if e is InputEventKey and e.pressed and not e.echo:
+		if e.physical_keycode >= KEY_1 and e.physical_keycode <= KEY_6:
+			select_slot(e.physical_keycode - KEY_1)
+			return
+		elif e.physical_keycode == KEY_0:
+			select_slot(-1)
+			return
 	if e is InputEventMouseMotion:
 		look_yaw = wrapf(look_yaw - e.relative.x * SENS, -PI, PI)
 		look_pitch = clampf(look_pitch - e.relative.y * SENS, -1.45, 1.35)
@@ -311,20 +532,188 @@ func _unhandled_input(e: InputEvent) -> void:
 		_do_adjust_price(1)
 	elif e is InputEventMouseButton:
 		if e.button_index == MOUSE_BUTTON_LEFT:
-			_place_held = e.pressed
-			if e.pressed:
-				_try_place_once()
-				var st := _find_stall(_my_peer_id())
-				_place_cd = 0.16 if (st and st.has_upgrade("big_crate")) else 0.24
+			if held_crate:
+				_place_held = e.pressed
+				if e.pressed:
+					_try_place_once()
+					var st := _find_stall(_my_peer_id())
+					_place_cd = 0.16 if (st and st.has_upgrade("big_crate")) else 0.24
+			elif e.pressed:
+				_use_active_item()
 		elif e.pressed and e.button_index == MOUSE_BUTTON_WHEEL_UP:
 			_do_adjust_price(1)
 		elif e.pressed and e.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 			_do_adjust_price(-1)
 
 
+## Kişisel envanter eşyasını kullan (Sigara/Puro nefes çek, Megafon patlat, Bıçak savur, Radyo aç/kapat).
+func _use_active_item() -> void:
+	var iid := equipped_item_id()
+	if iid == "":
+		return
+	match iid:
+		"sigara", "puro":
+			if _puff_cd > 0.0:
+				return
+			_puff_cd = 0.95
+			_use_anim = 1.0
+			var sl := inventory[active_slot]
+			var max_p: int = int(Items.CATALOG[iid]["puffs_per_use"])
+			sl["puffs"] = int(sl.get("puffs", 0)) + 1
+			var tip_pos := _get_smoke_tip_world()
+			var fwd := -cam.global_transform.basis.z if cam else Vector3(0, 0, -1)
+			_trigger_item_fx_synced("smoke", iid, tip_pos, fwd)
+			if int(sl["puffs"]) >= max_p:
+				sl["uses"] = int(sl["uses"]) - 1
+				sl["puffs"] = 0
+				if int(sl["uses"]) <= 0:
+					inventory[active_slot] = {}
+					active_slot = -1
+			_sync_equipped_to_peers()
+			_refresh_equipped_visual()
+			inventory_changed.emit()
+
+		"megafon":
+			_mega_burst = 2.4
+			_use_anim = 1.0
+			var pos := global_position + Vector3(0, 1.3, 0)
+			_trigger_item_fx_synced("mega", iid, pos, Vector3.UP)
+
+		"bicak":
+			if _knife_cd > 0.0:
+				return
+			_knife_cd = 0.65
+			_use_anim = 1.0
+			var pos := global_position + Vector3(0, 1.1, 0)
+			var fwd := -cam.global_transform.basis.z if cam else Vector3(0, 0, -1)
+			_trigger_item_fx_synced("knife", iid, pos, fwd)
+			_check_knife_hit(fwd)
+
+		"radyo":
+			_set_hand_radio_synced(not _hand_radio_playing)
+			_use_anim = 0.5
+
+
+func _get_smoke_tip_world() -> Vector3:
+	if _fp_item_visual:
+		var tip := _fp_item_visual.find_child("SmokeTip", true, false) as Node3D
+		if tip:
+			return tip.global_position
+	return (cam.global_position + (-cam.global_transform.basis.z) * 0.42) if cam else (global_position + Vector3(0, 1.15, 0))
+
+
+func _check_knife_hit(fwd: Vector3) -> void:
+	var pg := get_parent()
+	var main := _find_main()
+	if pg == null or main == null:
+		return
+	var best_id := -1
+	var best_d := 2.6
+	for p in pg.get_children():
+		if p == self or p.npc:
+			continue
+		var diff: Vector3 = p.global_position - global_position
+		var d := diff.length()
+		if d < best_d and Vector3(diff.x, 0, diff.z).normalized().dot(Vector3(fwd.x, 0, fwd.z).normalized()) > 0.32:
+			best_d = d
+			best_id = p.name.to_int()
+	if best_id > 0:
+		main.request_knife_attack(best_id)
+
+
+func _set_hand_radio_synced(on: bool) -> void:
+	if Net.online():
+		rpc_set_hand_radio.rpc(on)
+	else:
+		rpc_set_hand_radio(on)
+
+
+@rpc("authority", "call_local", "reliable")
+func rpc_set_hand_radio(on: bool) -> void:
+	_hand_radio_playing = on
+	if _hand_radio_audio:
+		if on and DisplayServer.get_name() != "headless":
+			if not _hand_radio_audio.playing:
+				_hand_radio_audio.play()
+		elif _hand_radio_audio.playing:
+			_hand_radio_audio.stop()
+
+
+func _trigger_item_fx_synced(action: String, iid: String, pos: Vector3, dir: Vector3) -> void:
+	if Net.online():
+		rpc_item_fx.rpc(action, iid, pos, dir)
+	else:
+		rpc_item_fx(action, iid, pos, dir)
+
+
+@rpc("authority", "call_local", "reliable")
+func rpc_item_fx(action: String, iid: String, pos: Vector3, dir: Vector3) -> void:
+	var w := _find_world()
+	match action:
+		"smoke":
+			var thick := iid == "puro"
+			Sfx.play_3d("puff", pos, w, -3.5, 0.92 if thick else 1.05, 14.0)
+			VFX.spawn_smoke_puff(w, pos, dir, thick)
+			VFX.spawn_ember_sparks(w, pos)
+		"mega":
+			Sfx.play_3d("megaphone_pop", pos, w, 0.0, 1.0, 36.0)
+			VFX.spawn_sound_ring(w, pos, 6.2, Color(1.0, 0.72, 0.18))
+			VFX.spawn_floating_text(w, pos + Vector3(0, 0.65, 0), "📢 GEL VATANDAŞ GELL!", Color(1.0, 0.86, 0.25), 46)
+		"knife":
+			Sfx.play_3d("knife_swing", pos, w, -2.0, 1.0, 16.0)
+
+
+func apply_knife_hit_synced(knock_dir: Vector3) -> void:
+	if Net.online():
+		rpc_on_knife_hit.rpc(knock_dir)
+	else:
+		rpc_on_knife_hit(knock_dir)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func rpc_on_knife_hit(knock_dir: Vector3) -> void:
+	if Net.online() and multiplayer.get_remote_sender_id() not in [0, 1]:
+		return
+	var w := _find_world()
+	Sfx.play_3d("knife_hit", global_position + Vector3(0, 1.1, 0), w, 0.0, 1.0, 26.0)
+	VFX.spawn_hit_burst(w, global_position + Vector3(0, 1.1, 0))
+	VFX.spawn_floating_text(w, global_position + Vector3(0, 1.85, 0), "💢 SALDIRIYA UĞRADIN!", Color(1.0, 0.28, 0.22), 44)
+	if is_multiplayer_authority():
+		_stun_t = 1.2
+		velocity = knock_dir * 6.5 + Vector3.UP * 2.5
+		add_trauma(0.55)
+		if held_crate:
+			_do_throw_crate()
+
+
 func _process(dt: float) -> void:
 	if npc:
 		return
+	if _puff_cd > 0.0:
+		_puff_cd = maxf(_puff_cd - dt, 0.0)
+	if _knife_cd > 0.0:
+		_knife_cd = maxf(_knife_cd - dt, 0.0)
+	if _mega_burst > 0.0:
+		_mega_burst = maxf(_mega_burst - dt, 0.0)
+	if _stun_t > 0.0:
+		_stun_t = maxf(_stun_t - dt, 0.0)
+
+	# Yanan sigara / puro ucundan sürekli ince duman süzülsün!
+	var eq := equipped_item_id()
+	if eq in ["sigara", "puro"]:
+		_idle_smoke_cd -= dt
+		if _idle_smoke_cd <= 0.0:
+			_idle_smoke_cd = 1.15 if eq == "puro" else 1.55
+			var tip_p := _get_smoke_tip_world() if is_multiplayer_authority() else (global_position + Vector3(0, 1.05, 0))
+			VFX.spawn_smoke_puff(_find_world(), tip_p, Vector3.UP, false)
+
+	# Elde çalan Arabesk Radyo notaları
+	if _hand_radio_playing:
+		_radio_note_cd -= dt
+		if _radio_note_cd <= 0.0:
+			_radio_note_cd = 1.15
+			VFX.spawn_music_note(_find_world(), global_position + Vector3(0, 1.25, 0))
+
 	_tick_shout_rings(dt)
 	if is_multiplayer_authority():
 		_process_voice_capture(dt)
@@ -337,12 +726,16 @@ func _process(dt: float) -> void:
 func _tick_shout_rings(dt: float) -> void:
 	if _shout_ring_cd > 0.0:
 		_shout_ring_cd = maxf(_shout_ring_cd - dt, 0.0)
-	if shout_power >= SHOUT_ON and _shout_ring_cd <= 0.0:
-		_shout_ring_cd = 0.58
-		var st := _find_stall(_my_peer_id())
-		var has_mega: bool = st != null and st.has_upgrade("megaphone")
-		var rad := (3.2 + shout_power * 1.6) * (1.4 if has_mega else 1.0)
-		var col := Color(1.0, 0.78, 0.2) if has_mega else Color(1.0, 0.92, 0.55)
+	var eff := get_effective_shout()
+	var is_sh := eff >= SHOUT_ON
+	if is_sh and not _was_shouting and is_holding_item("megafon"):
+		Sfx.play_3d("megaphone_pop", global_position + Vector3(0, 1.2, 0), _find_world(), -2.0, 1.0, 28.0)
+	_was_shouting = is_sh
+	if is_sh and _shout_ring_cd <= 0.0:
+		_shout_ring_cd = 0.50 if is_holding_item("megafon") else 0.60
+		var has_mega := is_holding_item("megafon")
+		var rad := clampf(2.8 + eff * 1.9, 3.0, 6.8)
+		var col := Color(1.0, 0.65, 0.14) if has_mega else Color(1.0, 0.90, 0.45)
 		VFX.spawn_sound_ring(_find_world(), global_position + Vector3(0, 1.25, 0), rad, col)
 
 
@@ -364,17 +757,17 @@ func _physics_process(dt: float) -> void:
 func _local(dt: float) -> void:
 	var inp := Vector2.ZERO
 	var captured := Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
-	if captured:
+	if captured and _stun_t <= 0.0:
 		inp = Input.get_vector("left", "right", "fwd", "back")
 	var dir := (Basis(Vector3.UP, look_yaw) * Vector3(inp.x, 0, inp.y)).normalized()
-	var running := Input.is_action_pressed("run") and inp.y < 0.0
+	var running := Input.is_action_pressed("run") and inp.y < 0.0 and _stun_t <= 0.0
 	var target := dir * (RUN if running else WALK)
 	var accel := (14.0 if target != Vector3.ZERO else 18.0) if is_on_floor() else 3.0
 	velocity.x = move_toward(velocity.x, target.x, accel * dt * WALK)
 	velocity.z = move_toward(velocity.z, target.z, accel * dt * WALK)
 	var was_air := air
 	if is_on_floor():
-		if captured and Input.is_action_just_pressed("jump"):
+		if captured and _stun_t <= 0.0 and Input.is_action_just_pressed("jump"):
 			velocity.y = JUMP
 	else:
 		velocity.y -= GRAVITY * dt
@@ -384,47 +777,75 @@ func _local(dt: float) -> void:
 		velocity = Vector3.ZERO
 	spd = Vector2(velocity.x, velocity.z).length()
 	air = not is_on_floor()
+	# Koşma efekti yoğunluğu (HUD hız çizgileri ve FOV artışı için)
+	var target_sprint := clampf((spd - WALK - 0.35) / (RUN - WALK), 0.0, 1.0) if (running and not air) else 0.0
+	sprint_k = lerpf(sprint_k, target_sprint, minf(dt * 9.0, 1.0))
 	if was_air and not air:
-		land_t = 0.22
-		add_trauma(0.18)
-		Sfx.play("step", -10.0, 0.85)
-		VFX.burst_dust(_find_world(), global_position + Vector3(0, 0.08, 0), Color(0.88, 0.78, 0.62), 5)
+		land_t = 0.14
+		add_trauma(0.10)
+		Sfx.play("step", -11.0, 0.85)
+		VFX.burst_dust(_find_world(), global_position + Vector3(0, 0.08, 0), Color(0.84, 0.80, 0.72), 4)
+	# Bağırma: El Megafonu takılıysa mikrofon dB +12 dB güçlenir!
+	var db_boost := 12.0 if is_holding_item("megafon") else 0.0
 	var manual_shout := SHOUT_KEY_POWER if (captured and Input.is_action_pressed("shout")) else 0.0
 	var mic_shout := 0.0 if mic_muted else \
-		clampf((talk_db - SHOUT_DB_MIN) / (SHOUT_DB_MAX - SHOUT_DB_MIN), 0.0, 1.0) * 1.35
-	shout_power = lerpf(shout_power, maxf(manual_shout, mic_shout), minf(dt * 10.0, 1.0))
+		clampf(((talk_db + db_boost) - SHOUT_DB_MIN) / (SHOUT_DB_MAX - SHOUT_DB_MIN), 0.0, 1.0) * 1.45
+	var burst := 1.05 if _mega_burst > 0.0 else 0.0
+	shout_power = lerpf(shout_power, maxf(maxf(manual_shout, mic_shout), burst), minf(dt * 14.0, 1.0))
 	if Net.online():
 		sync_state.rpc(global_position, body_yaw, look_yaw, look_pitch, spd, air, shout_power)
 
 
+## Azaltılmış yumuşak ekran sarsılması + canlı koşma FOV efekti + 1. şahıs eşya animasyonları!
 func _camera(dt: float) -> void:
 	var kr := clampf((spd - WALK) / (RUN - WALK), 0.0, 1.0)
 	bob_k = lerpf(bob_k, 0.0 if air else clampf(spd / WALK, 0.0, 1.0), minf(dt * 8.0, 1.0))
-	var amp := lerpf(0.032, 0.068, kr) * bob_k
-	var bob := Vector3(cos(phase) * amp * 0.55, absf(sin(phase)) * amp - amp * 0.5 - land_t * 0.45, 0)
+	# Ekran sarsılması ~%65 azaltıldı: kaymak gibi akıcı yürüyüş ve koşu!
+	var amp := lerpf(0.010, 0.022, kr) * bob_k
+	var bob := Vector3(cos(phase) * amp * 0.45, absf(sin(phase)) * amp - amp * 0.5 - land_t * 0.18, 0)
 
-	# Trauma tabanlı yumuşak kamera sarsıntısı
 	var shake_off := Vector3.ZERO
 	var shake_roll := 0.0
 	if _trauma > 0.0:
-		_trauma = maxf(_trauma - dt * 1.8, 0.0)
+		_trauma = maxf(_trauma - dt * 2.4, 0.0)
 		var sh := _trauma * _trauma
-		_shake_t += dt * 32.0
-		shake_off = Vector3(sin(_shake_t * 1.7) * 0.045 * sh, sin(_shake_t * 2.3) * 0.035 * sh, 0.0)
-		shake_roll = sin(_shake_t * 1.2) * 0.04 * sh
+		_shake_t += dt * 30.0
+		shake_off = Vector3(sin(_shake_t * 1.7) * 0.015 * sh, sin(_shake_t * 2.3) * 0.012 * sh, 0.0)
+		shake_roll = sin(_shake_t * 1.2) * 0.014 * sh
 
 	var yb := Basis(Vector3.UP, look_yaw)
 	cam_root.position = Vector3(0, EYE_Y, 0) + yb * (Vector3(0, 0, -EYE_FWD) + bob + shake_off)
-	cam_root.rotation = Vector3(look_pitch, look_yaw, -cos(phase) * 0.011 * bob_k * (1.0 + kr) + shake_roll)
-	cam.fov = lerpf(cam.fov, 78.0 + kr * 6.0, minf(dt * 6.0, 1.0))
+	cam_root.rotation = Vector3(look_pitch, look_yaw, -cos(phase) * 0.004 * bob_k * (1.0 + kr) + shake_roll)
+	# Belirgin koşma FOV açılması (78° -> 89°!)
+	cam.fov = lerpf(cam.fov, 78.0 + sprint_k * 11.5, minf(dt * 7.5, 1.0))
 
-	# Birinci şahıs kasa salınımı ve dizme hareketi
 	if _fp_crate_anchor:
 		_place_kick = lerpf(_place_kick, 0.0, minf(dt * 14.0, 1.0))
-		var sway_x := cos(phase) * 0.014 * bob_k
-		var sway_y := absf(sin(phase)) * 0.014 * bob_k
+		var sway_x := cos(phase) * 0.010 * bob_k
+		var sway_y := absf(sin(phase)) * 0.010 * bob_k
 		_fp_crate_anchor.position = Vector3(sway_x, -0.34 - sway_y + _place_kick * 0.04, -0.58 - _place_kick * 0.09)
-		_fp_crate_anchor.rotation_degrees = Vector3(14.0 - _place_kick * 16.0, 0.0, -sway_x * 65.0)
+		_fp_crate_anchor.rotation_degrees = Vector3(14.0 - _place_kick * 16.0, 0.0, -sway_x * 45.0)
+
+	# 1. şahıs eşya kullanım animasyonu (sigara/puro ağıza çekiş, bıçak savurma, megafon kaldırma)
+	if _fp_item_anchor and _fp_item_visual:
+		_use_anim = maxf(_use_anim - dt * 3.0, 0.0)
+		var u := sin(_use_anim * PI)
+		var iid := equipped_item_id()
+		match iid:
+			"sigara", "puro":
+				_fp_item_visual.position = Vector3(-u * 0.14, u * 0.11, u * 0.14)
+				_fp_item_visual.rotation_degrees = Vector3(u * 14.0, -u * 26.0, 0.0)
+				# Nefes çekerken kor parlaklığı fırlar!
+				var emb := _fp_item_visual.find_child("Ember", true, false) as MeshInstance3D
+				if emb and emb.material_override is StandardMaterial3D:
+					(emb.material_override as StandardMaterial3D).emission_energy_multiplier = 2.6 + u * 4.5
+			"bicak":
+				_fp_item_visual.position = Vector3(-u * 0.24, -u * 0.06, -u * 0.22)
+				_fp_item_visual.rotation_degrees = Vector3(-u * 42.0, u * 55.0, -u * 35.0)
+			"megafon":
+				_fp_item_visual.position = Vector3(-u * 0.08, u * 0.06, -u * 0.05)
+			"radyo":
+				_fp_item_visual.position = Vector3(0.0, u * 0.04, 0.0)
 
 
 @rpc("authority", "unreliable_ordered")
@@ -434,7 +855,7 @@ func sync_state(p: Vector3, by: float, ly: float, lp: float, s: float, a: bool, 
 	look_yaw = ly
 	look_pitch = lp
 	if not a and air:
-		land_t = 0.22
+		land_t = 0.14
 	spd = s
 	air = a
 	shout_power = sp
@@ -467,18 +888,17 @@ func _animate(dt: float) -> void:
 	var lift := lerpf(0.11, 0.20, kr) * kw
 	if not air and spd > 0.08:
 		phase = wrapf(phase + dt * (spd / stride_full) * 0.94, 0.0, TAU)
-		# Adım fazıyla tam senkron ayak sesi
 		if not npc and is_multiplayer_authority() and spd > 0.65:
 			var cur_half := 0 if phase < PI else 1
 			if cur_half != _prev_step_half:
 				_prev_step_half = cur_half
-				Sfx.play("step", -14.0 + kr * 3.5, 0.96 + float(cur_half) * 0.08)
+				Sfx.play("step", -14.0 + kr * 4.5, 0.96 + kr * 0.16 + float(cur_half) * 0.07)
 	land_t = maxf(land_t - dt, 0.0)
-	var land := land_t / 0.22
+	var land := land_t / 0.14
 	var breathe := sin(t * 2.2)
 	var f := minf(dt * 18.0, 1.0)
 
-	for side in [-1.0, 1.0]:
+	for side: float in [-1.0, 1.0]:
 		var n := "FootR" if side < 0 else "FootL"
 		var c: float = phase + (0.0 if side < 0 else PI)
 		var p: Vector3 = rest[n]
@@ -495,7 +915,7 @@ func _animate(dt: float) -> void:
 		w.position = w.position.lerp(p, f)
 		w.rotation = w.rotation.lerp(r, f)
 
-	for side in [-1.0, 1.0]:
+	for side: float in [-1.0, 1.0]:
 		var n := "HandR" if side < 0 else "HandL"
 		var c: float = phase + (0.0 if side < 0 else PI)
 		var p: Vector3 = rest[n]
@@ -506,7 +926,7 @@ func _animate(dt: float) -> void:
 		else:
 			var hand_stride := lerpf(0.24, 0.38, kr) * kw
 			p.z += cos(c) * hand_stride + kr * 0.07
-			p.y += kr * 0.12 + maxf(0.0, cos(c)) * 0.05 * kw + breathe * 0.015 * idle - land * 0.08
+			p.y += kr * 0.12 + maxf(0.0, cos(c)) * 0.05 * kw + breathe * 0.015 * idle - land * 0.06
 			p.x += side * (0.02 * sin(t * 1.3 + side) * idle + 0.015 * kw)
 			r.x = -cos(c) * lerpf(0.55, 1.0, kr) * kw
 		var w: Node3D = parts[n]
@@ -515,11 +935,11 @@ func _animate(dt: float) -> void:
 
 	var body: Node3D = parts["Body"]
 	var bp: Vector3 = rest["Body"]
-	bp.y += absf(sin(phase)) * lerpf(0.04, 0.075, kr) * kw + breathe * 0.008 * idle - land * 0.07 + (0.04 if air else 0.0)
+	bp.y += absf(sin(phase)) * lerpf(0.04, 0.075, kr) * kw + breathe * 0.008 * idle - land * 0.05 + (0.04 if air else 0.0)
 	body.position = body.position.lerp(bp, f)
 	body.rotation = body.rotation.lerp(
 		Vector3(0.06 * kw + 0.19 * kr, cos(phase) * lerpf(0.09, 0.15, kr) * kw, sin(phase) * 0.06 * kw), f)
-	var sq := 1.0 + breathe * 0.015 * idle - land * 0.12 + (0.05 if air else 0.0)
+	var sq := 1.0 + breathe * 0.015 * idle - land * 0.08 + (0.05 if air else 0.0)
 	var side_sq := 1.0 + (1.0 - sq) * 0.5
 	body.scale = body.scale.lerp(Vector3(side_sq, sq, side_sq), f)
 
@@ -532,7 +952,7 @@ func _animate(dt: float) -> void:
 	head.rotation.z = lerpf(head.rotation.z, -sin(phase) * 0.045 * kw, f)
 
 
-# ---------- Proximity Sesli Sohbet ve Ağız/Göz Animasyonu ----------
+# ---------- Proximity Sesli Sohbet ----------
 
 func set_display_name(n: String) -> void:
 	_base_tag = n
@@ -726,11 +1146,12 @@ func _process_voice_remote(dt: float) -> void:
 func _update_shout_bubble() -> void:
 	if _shout_lbl == null:
 		return
-	var on := shout_power >= SHOUT_ON
+	var eff := get_effective_shout()
+	var on := eff >= SHOUT_ON
 	if on and not _shout_lbl.visible:
 		_shout_lbl.text = _pick_shout_call()
 	_shout_lbl.visible = on
-	_shout_lbl.scale = Vector3.ONE * (0.85 + clampf(shout_power, 0.0, 1.35) * 0.3)
+	_shout_lbl.scale = Vector3.ONE * (0.88 + clampf(eff, 0.0, 2.0) * 0.25)
 
 
 func _pick_shout_call() -> String:
@@ -741,7 +1162,7 @@ func _pick_shout_call() -> String:
 			if sl["item"] != "" and int(sl["count"]) > 0:
 				stocked.append(sl)
 	if stocked.is_empty():
-		return "📢 Gel gel! Buraya!"
+		return "📢 Gel vatandaş gel!"
 	var pick: Dictionary = stocked.pick_random()
 	return "📢 " + str(SHOUT_CALLS.pick_random()) % [Produce.ITEMS[pick["item"]]["name"], int(pick["price"])]
 
@@ -786,7 +1207,7 @@ func _animate_eyes(dt: float) -> void:
 		pupil_r.position = p_off
 
 
-# ---------- Etkileşim, Hedef Vurgusu, Toptancı, Satış ve Ekonomi ----------
+# ---------- Etkileşim, Hedef Vurgusu ve Ekonomi ----------
 
 func _my_peer_id() -> int:
 	return name.to_int()
@@ -835,7 +1256,7 @@ func _update_highlight(area: Area3D, show_hl: bool) -> void:
 
 func _process_interaction(dt: float) -> void:
 	var my_st := _find_stall(_my_peer_id())
-	if _place_held and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+	if _place_held and held_crate and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		_place_cd -= dt
 		if _place_cd <= 0.0:
 			var fast: bool = my_st != null and my_st.has_upgrade("big_crate")
@@ -855,6 +1276,19 @@ func _process_interaction(dt: float) -> void:
 				interact_hint = "Elde: %s Kasası (%d/%d)  •  [Q] Fırlat" % [Produce.ITEMS[held_item]["name"], held_count, cap]
 			else:
 				interact_hint = "Elde: Boş Kasa  •  [Q] Uzağa Fırlat"
+		else:
+			var eq := equipped_item_id()
+			match eq:
+				"sigara":
+					interact_hint = "🚬 Sigara  •  [Sol Tık] Nefes Çek"
+				"puro":
+					interact_hint = "🪵 Küba Purosu  •  [Sol Tık] Nefes Çek (+Prestij)"
+				"megafon":
+					interact_hint = "📢 El Megafonu (+12 dB)  •  [B / Mikrofon / Sol Tık] Bağır!"
+				"bicak":
+					interact_hint = "🔪 Meyve Bıçağı  •  [Sol Tık] Savur (Zabıta Dikkat!)"
+				"radyo":
+					interact_hint = "📻 Arabesk Radyo (%s)  •  [Sol Tık] Aç/Kapat  •  Tezgaha bakıp [E] Koy" % ("ÇALIYOR" if _hand_radio_playing else "KAPALI")
 		return
 
 	var kind: String = str(area.get_meta("kind", ""))
@@ -874,7 +1308,7 @@ func _process_interaction(dt: float) -> void:
 				elif cost == 0:
 					interact_hint = "[E] %s Kasası Al — ACİL VERESİYE (0 TL, %d ad.)" % [nm, cap]
 				else:
-					interact_hint = "[E] %s Kasası Satın Al — %d TL (%d ad.)" % [nm, cost, cap]
+					interact_hint = "[E] Yedek %s Kasası — %d TL (%d ad.)" % [nm, cost, cap]
 		"wholesale_crate":
 			var item_id: String = str(area.get_meta("item_id", ""))
 			if Produce.ITEMS.has(item_id):
@@ -885,7 +1319,10 @@ func _process_interaction(dt: float) -> void:
 				if held_crate:
 					interact_hint = "Önce elindeki kasayı [Q] ile fırlat"
 				else:
-					interact_hint = "[E] Toptancıdan %s Kasası Al — %d TL (%d ad.)" % [nm, cost, cap]
+					interact_hint = "[E] Ford Transit'ten %s Kasası Al — %d TL (%d ad.)" % [nm, cost, cap]
+		"truck_horn":
+			show_hl = true
+			interact_hint = "[E] Toptancıya Selam Ver — Havalı Korna Çaldır! 📣"
 		"slot":
 			var owner_id: int = int(area.get_meta("stall_owner", -1))
 			var idx: int = int(area.get_meta("slot_idx", -1))
@@ -898,12 +1335,19 @@ func _process_interaction(dt: float) -> void:
 					parts_txt.append("[Sol Tık] %s Diz (%d kaldı)" % [Produce.ITEMS[held_item]["name"], held_count])
 				elif held_crate and held_count == 0:
 					parts_txt.append("Kasa boş! [Q] Fırlat")
+				elif is_holding_item("radyo") and not st.has_radio:
+					parts_txt.append("[E] Radyoyu Tezgaha Koy")
 				elif not held_crate and sl["count"] == 0:
-					parts_txt.append("Arka depodan veya Toptancıdan [E] ile kasa al")
+					parts_txt.append("Ford Transit Toptancıdan veya arkadan [E] kasa al")
 				if sl["item"] != "" and int(sl["count"]) > 0:
 					var badge := _price_badge(sl["item"], int(sl["price"]))
 					parts_txt.append("[Tekerlek / Z-X] %d TL (%s)" % [int(sl["price"]), badge])
 				interact_hint = "  •  ".join(parts_txt)
+		"stall_radio":
+			var owner_id: int = int(area.get_meta("stall_owner", -1))
+			if owner_id == my_id and my_st and my_st.has_radio:
+				show_hl = true
+				interact_hint = "📻 Tezgah Radyosu (%s)  •  [E] Aç/Kapat  •  [R] Eline Al" % ("ÇALIYOR" if my_st.radio_playing else "KAPALI")
 		"bell":
 			var owner_id: int = int(area.get_meta("stall_owner", -1))
 			if owner_id == my_id and my_st and my_st.has_upgrade("bell"):
@@ -916,7 +1360,7 @@ func _process_interaction(dt: float) -> void:
 			var owner_id: int = int(area.get_meta("stall_owner", -1))
 			if owner_id == my_id:
 				show_hl = true
-				interact_hint = "[E / U] Tezgah Geliştirmeleri (Megafon, Işıklar, Geniş Kasa, Zil)"
+				interact_hint = "[E / P] Pazarcı Dükkanı (Sigara, Puro, Megafon, Bıçak, Radyo & Tezgah)"
 		"customer":
 			var c := _find_customer(str(area.get_meta("customer_name", "")))
 			if c:
@@ -960,6 +1404,27 @@ func _do_interact() -> void:
 			var item_id: String = str(area.get_meta("item_id", ""))
 			if not held_crate and main:
 				main.request_buy_crate(item_id, true)
+		"truck_horn":
+			var w := _find_world()
+			var tr := w.get_node_or_null("Wholesaler") if w else null
+			if tr and tr.has_method("request_honk"):
+				tr.request_honk()
+		"slot":
+			var owner_id: int = int(area.get_meta("stall_owner", -1))
+			var st := _find_stall(owner_id)
+			if st and owner_id == my_id and is_holding_item("radyo") and not st.has_radio:
+				_set_hand_radio_synced(false)
+				st.set_radio_synced(true, true)
+				inventory[active_slot] = {}
+				active_slot = -1
+				_sync_equipped_to_peers()
+				_refresh_equipped_visual()
+				inventory_changed.emit()
+		"stall_radio":
+			var owner_id: int = int(area.get_meta("stall_owner", -1))
+			var st := _find_stall(owner_id)
+			if st and owner_id == my_id and st.has_radio:
+				st.set_radio_synced(true, not st.radio_playing)
 		"bell":
 			var owner_id: int = int(area.get_meta("stall_owner", -1))
 			if owner_id == my_id:
@@ -967,7 +1432,7 @@ func _do_interact() -> void:
 		"upgrade_board":
 			var owner_id: int = int(area.get_meta("stall_owner", -1))
 			if owner_id == my_id:
-				open_upgrade_shop.emit()
+				open_shop.emit()
 		"customer":
 			_do_sell_to_customer(false)
 
@@ -980,7 +1445,18 @@ func _do_ring_bell() -> void:
 
 func _do_sell_to_customer(insist: bool) -> void:
 	var area := _ray_target()
-	if area == null or str(area.get_meta("kind", "")) != "customer":
+	if area == null:
+		return
+	var kind := str(area.get_meta("kind", ""))
+	if insist and kind == "stall_radio":
+		# R ile tezgaha konan radyoyu geri envantere al
+		var owner_id: int = int(area.get_meta("stall_owner", -1))
+		var st := _find_stall(owner_id)
+		if st and owner_id == _my_peer_id() and st.has_radio:
+			st.set_radio_synced(false, false)
+			add_inventory_item_synced("radyo")
+		return
+	if kind != "customer":
 		return
 	var my_id := _my_peer_id()
 	var c := _find_customer(str(area.get_meta("customer_name", "")))
@@ -1022,7 +1498,7 @@ func _do_throw_crate() -> void:
 	var vel := fwd * 9.5 + Vector3.UP * 3.4 + velocity * 0.35
 	var item_id := held_item
 	var cnt := held_count
-	add_trauma(0.22)
+	add_trauma(0.14)
 	set_held_crate(false, "", 0)
 	if Net.online():
 		rpc_throw_crate.rpc(item_id, cnt, start_p, vel)
@@ -1090,7 +1566,6 @@ func rpc_set_held_crate(has_crate: bool, item_id: String, count: int) -> void:
 	_apply_held_crate(has_crate, item_id, count)
 
 
-## Sunucu kasa satın alımını onayladığında oyuncuya kasa verir.
 func give_crate_synced(item_id: String, capacity: int) -> void:
 	if Net.online():
 		rpc_give_crate.rpc(item_id, capacity)
@@ -1125,6 +1600,8 @@ func _apply_held_crate(has_crate: bool, item_id: String, count: int) -> void:
 		elif _held_anchor:
 			_held_visual = StallScript.build_held_crate(held_item, held_count)
 			_held_anchor.add_child(_held_visual)
+	# Kasa taşırken eldeki kişisel eşya geçici gizlenir, kasa bırakılınca geri görünür (envantere kasa ASLA girmez!)
+	_refresh_equipped_visual()
 
 
 func award_money(amount: int, tip := 0, was_haggle := false) -> void:
@@ -1176,7 +1653,7 @@ func rpc_spend_money(amount: int, reason: String, is_fine: bool) -> void:
 	if is_fine:
 		daily_fines += amount
 		if is_multiplayer_authority():
-			add_trauma(0.42)
+			add_trauma(0.32)
 	else:
 		daily_spent += amount
 	money_spent.emit(amount, money, reason)
@@ -1207,18 +1684,12 @@ func net_profit() -> int:
 
 func export_snapshot() -> Dictionary:
 	return {
-		"id": _my_peer_id(),
-		"pos": global_position,
-		"money": money,
-		"daily_revenue": daily_revenue,
-		"daily_spent": daily_spent,
-		"daily_fines": daily_fines,
-		"daily_tips": daily_tips,
-		"daily_sold": daily_sold,
-		"daily_haggles": daily_haggles,
-		"held_crate": held_crate,
-		"held_item": held_item,
-		"held_count": held_count,
+		"id": _my_peer_id(), "pos": global_position, "money": money,
+		"daily_revenue": daily_revenue, "daily_spent": daily_spent,
+		"daily_fines": daily_fines, "daily_tips": daily_tips,
+		"daily_sold": daily_sold, "daily_haggles": daily_haggles,
+		"held_crate": held_crate, "held_item": held_item, "held_count": held_count,
+		"equipped": equipped_item_id(), "hand_radio": _hand_radio_playing,
 	}
 
 
@@ -1230,4 +1701,6 @@ func apply_snapshot(d: Dictionary) -> void:
 	daily_tips = int(d.get("daily_tips", 0))
 	daily_sold = int(d.get("daily_sold", 0))
 	daily_haggles = int(d.get("daily_haggles", 0))
+	_remote_item_id = str(d.get("equipped", ""))
 	_apply_held_crate(bool(d.get("held_crate", false)), str(d.get("held_item", "")), int(d.get("held_count", 0)))
+	rpc_set_hand_radio(bool(d.get("hand_radio", false)))

@@ -1,6 +1,7 @@
 extends Node3D
-## Yapay zeka pazar müşterisi: 4 karakter tipi (Normal, Pazarlıkçı Teyze, Aceleci, VIP),
-## aldıkça dolan 3D pazar filesi, baş üstü sabır çubuğu, tepki animasyonları, pazarlık ve bahşiş.
+## Yapay zeka pazar müşterisi: gerçekçi başörtülü/pazar arabalı Pazar Teyzesi dahil 4 tip,
+## belirgin pop-up çizgi roman konuşma kartları, güçlü bağırma çekimi (daha çok bağıran pazarcıya gider!)
+## ve iki kapıdan sakin tempoda gezinen + Ford Transit'ten kaçınan yapay zeka.
 
 const MODEL := preload("res://models/character.glb")
 const LP := preload("res://lowpoly.gd")
@@ -12,32 +13,45 @@ const HAIRS := [Color(0.2, 0.12, 0.07), Color(0.08, 0.06, 0.05), Color(0.75, 0.5
 	Color(0.4, 0.28, 0.18), Color(0.85, 0.8, 0.7)]
 const SHIRTS := [Color(0.82, 0.28, 0.24), Color(0.24, 0.52, 0.82), Color(0.92, 0.72, 0.2), Color(0.32, 0.7, 0.36),
 	Color(0.62, 0.36, 0.78), Color(0.92, 0.48, 0.65), Color(0.18, 0.68, 0.68), Color(0.92, 0.54, 0.18)]
+const SCARF_COLORS := [
+	Color(0.88, 0.24, 0.44), Color(0.18, 0.62, 0.66), Color(0.66, 0.26, 0.68),
+	Color(0.92, 0.50, 0.20), Color(0.24, 0.52, 0.82), Color(0.24, 0.62, 0.34),
+]
 
 enum State { STROLL, APPROACH, WAIT_BUY, LEAVE }
-enum Archetype { NORMAL, BARGAINER, IMPATIENT, VIP }
+enum Archetype { NORMAL, BARGAINER, IMPATIENT, VIP } # BARGAINER = İkonik Pazar Teyzesi!
 
 var state: int = State.STROLL
 var archetype: int = Archetype.NORMAL
 var color_seed := 0
-var wants: Dictionary = {} # item_id -> kalan adet
-var offers: Dictionary = {} # item_id -> pazarlık teklifi
-var bought_items: Array = [] # filedeki alınan ürünler
+var wants: Dictionary = {}
+var offers: Dictionary = {}
+var bought_items: Array = []
 var target_owner_id := 0
 var target_pos := Vector3.ZERO
-var exit_pos := Vector3(0, 0, 20)
-var walk_speed := 2.35
-var max_wait := 26.0
-var wait_timer := 26.0
+var exit_pos := Vector3(0, 0, 21.5)
+var walk_speed := 1.72
+var max_wait := 28.0
+var wait_timer := 28.0
 var eval_timer := 0.0
 var mood_text := ""
+var _last_bubble_txt := ""
 
 var rig: Node3D
 var head: Node3D
 var parts := {}
 var rest := {}
+var _popup_pivot: Node3D
+var _popup_card: MeshInstance3D
+var _popup_border: MeshInstance3D
+var _popup_tail: MeshInstance3D
+var _popup_border_mat: StandardMaterial3D
+var _popup_bg_mat: StandardMaterial3D
+var _popup_tw: Tween
 var bubble: Label3D
 var _bag_anchor: Node3D
 var _bag_items_root: Node3D
+var _trolley_wheels: Array[Node3D] = []
 var _patience_root: Node3D
 var _patience_fill: MeshInstance3D
 var _patience_mat: StandardMaterial3D
@@ -62,28 +76,113 @@ func init_customer(p_name: String, p_seed: int, start_pos: Vector3, p_exit: Vect
 	exit_pos = p_exit
 	target_pos = p_exit
 	wants = p_wants.duplicate()
+	# Sakin, doğal Türk pazarı gezinme temposu
 	match archetype:
 		Archetype.IMPATIENT:
-			walk_speed = 3.2
-			max_wait = 13.5
-		Archetype.BARGAINER:
-			walk_speed = 2.1
-			max_wait = 29.0
-		Archetype.VIP:
 			walk_speed = 2.45
-			max_wait = 24.0
-		_:
-			walk_speed = 2.35
+			max_wait = 15.0
+		Archetype.BARGAINER: # Pazar Teyzesi: ağır ağır gezer, sabırlı ama sıkı pazarlıkçı!
+			walk_speed = 1.48
+			max_wait = 32.0
+		Archetype.VIP:
+			walk_speed = 1.78
 			max_wait = 26.0
+		_:
+			walk_speed = 1.68 + float(absi(p_seed) % 4) * 0.08
+			max_wait = 28.0
 	wait_timer = max_wait
 
 
 func _ready() -> void:
-	_build_visual()
-	_build_accessories_and_bag()
-	_build_bubble_patience_and_area()
+	if archetype == Archetype.BARGAINER:
+		_build_teyze_visual()
+	else:
+		_build_visual()
+		_build_accessories_and_bag()
+	_build_popup_bubble_patience_and_area()
 	_refresh_bag_visual()
 	_refresh_bubble()
+
+
+## Bıyıksız, kasketsiz, başörtülü, gözlüklü, çiçekli hırkalı ve tekerlekli pazar arabalı İKONİK PAZAR TEYZESİ!
+func _build_teyze_visual() -> void:
+	rig = Node3D.new()
+	add_child(rig)
+	head = Node3D.new()
+	add_child(head)
+
+	var scarf_col: Color = SCARF_COLORS[absi(color_seed) % SCARF_COLORS.size()]
+	var cardigan_col: Color = SHIRTS[absi(color_seed * 5 + 2) % SHIRTS.size()]
+	var skirt_col := cardigan_col.darkened(0.32)
+	var skin_col := Color(0.93, 0.78, 0.66)
+
+	# Gövde: uzun etek + yumuşak teyze hırkası + desenli önlük
+	var body_w := Node3D.new(); body_w.name = "Body"
+	rest["Body"] = Vector3(0, 0.50, 0)
+	body_w.position = rest["Body"]
+	LP.add(body_w, LP.cyl(0.22, 0.30, 0.42, 9), Vector3(0, -0.14, 0), skirt_col)
+	LP.add(body_w, LP.ellipsoid(0.25, 0.24, 0.23, 9, 5), Vector3(0, 0.14, 0), cardigan_col)
+	LP.add(body_w, LP.box(Vector3(0.22, 0.36, 0.04)), Vector3(0, -0.02, 0.22), Color(0.96, 0.94, 0.88)) # önlük
+	rig.add_child(body_w)
+	parts["Body"] = body_w
+
+	# Kafa: bıyıksız güler yüz + başörtüsü (yemeni) + altın gözlük + al yanaklar!
+	var head_w := Node3D.new(); head_w.name = "Head"
+	rest["Head"] = Vector3(0, 1.06, 0)
+	head.position = rest["Head"]
+	head.add_child(head_w)
+	parts["Head"] = head_w
+	LP.add(head_w, LP.sphere(0.25, 9, 6), Vector3.ZERO, skin_col, Vector3.ZERO, 0.82)
+	# Başörtüsü / eşarp (başın üstünü, yanlarını ve enseyi sarar, çene altında düğüm)
+	LP.add(head_w, LP.ellipsoid(0.28, 0.26, 0.28, 9, 6), Vector3(0, 0.04, -0.04), scarf_col)
+	LP.add(head_w, LP.cyl(0.24, 0.28, 0.22, 8), Vector3(0, -0.14, -0.12), scarf_col.darkened(0.08))
+	LP.add(head_w, LP.torus(0.21, 0.26, 10, 5), Vector3(0, 0.02, 0.08), scarf_col.lightened(0.14), Vector3(PI / 2, 0, 0))
+	# Gözler + yuvarlak altın teyze gözlüğü + al yanaklar + sıcak gülümseme
+	for sx: float in [-0.085, 0.085]:
+		LP.add(head_w, LP.sphere(0.036, 6, 4), Vector3(sx, 0.03, 0.225), Color.WHITE, Vector3.ZERO, 0.2)
+		LP.add(head_w, LP.sphere(0.020, 6, 4), Vector3(sx, 0.03, 0.252), Color(0.1, 0.08, 0.07), Vector3.ZERO, 0.1)
+		LP.add(head_w, LP.torus(0.044, 0.053, 10, 4), Vector3(sx, 0.03, 0.255), Color(0.88, 0.72, 0.22), Vector3(PI / 2, 0, 0), 0.25, 0.85)
+		LP.add(head_w, LP.sphere(0.034, 5, 3), Vector3(sx * 1.45, -0.04, 0.215), Color(0.95, 0.56, 0.56))
+	LP.add(head_w, LP.box(Vector3(0.06, 0.012, 0.012)), Vector3(0, 0.03, 0.255), Color(0.88, 0.72, 0.22), Vector3.ZERO, 0.25, 0.85)
+	LP.add(head_w, LP.sphere(0.032, 5, 3), Vector3(0, -0.02, 0.255), skin_col.darkened(0.05)) # minik burun
+	LP.add(head_w, LP.box(Vector3(0.085, 0.022, 0.02)), Vector3(0, -0.10, 0.242), Color(0.76, 0.28, 0.30)) # gülümseme
+
+	# Eller ve ayaklar
+	for side: float in [-1.0, 1.0]:
+		var fn := "FootR" if side < 0 else "FootL"
+		var hn := "HandR" if side < 0 else "HandL"
+		var fw := Node3D.new(); fw.name = fn
+		rest[fn] = Vector3(side * 0.13, 0.10, 0)
+		fw.position = rest[fn]
+		LP.add(fw, LP.ellipsoid(0.08, 0.055, 0.12, 6, 4), Vector3.ZERO, Color(0.24, 0.18, 0.16))
+		rig.add_child(fw)
+		parts[fn] = fw
+		var hw := Node3D.new(); hw.name = hn
+		rest[hn] = Vector3(side * 0.33, 0.54, 0.05)
+		hw.position = rest[hn]
+		LP.add(hw, LP.sphere(0.068, 6, 4), Vector3.ZERO, skin_col)
+		rig.add_child(hw)
+		parts[hn] = hw
+
+	# Sağ elin arkasında tekerlekli ekose PAZAR ARABASI (aldıkça içi meyve dolar!)
+	var trolley := Node3D.new()
+	trolley.position = Vector3(-0.34, 0.0, -0.42)
+	rig.add_child(trolley)
+	var t_col := Color(0.76, 0.18, 0.24) if (color_seed % 2 == 0) else Color(0.18, 0.38, 0.66)
+	LP.add(trolley, LP.box(Vector3(0.30, 0.44, 0.24)), Vector3(0, 0.34, 0), t_col)
+	LP.add(trolley, LP.box(Vector3(0.31, 0.06, 0.25)), Vector3(0, 0.44, 0), Color(0.95, 0.90, 0.80))
+	LP.add(trolley, LP.box(Vector3(0.31, 0.06, 0.25)), Vector3(0, 0.24, 0), Color(0.95, 0.90, 0.80))
+	LP.add(trolley, LP.cyl(0.012, 0.012, 0.68, 5), Vector3(0, 0.48, 0.15), Color(0.65, 0.66, 0.68), Vector3(0.32, 0, 0))
+	LP.add(trolley, LP.box(Vector3(0.22, 0.03, 0.03)), Vector3(0, 0.78, 0.26), Color(0.18, 0.18, 0.2))
+	_trolley_wheels.clear()
+	for wx: float in [-0.17, 0.17]:
+		var wh := LP.add(trolley, LP.cyl(0.095, 0.095, 0.035, 8), Vector3(wx, 0.095, -0.02), Color(0.16, 0.16, 0.18), Vector3(0, 0, PI / 2))
+		_trolley_wheels.append(wh)
+	_bag_items_root = Node3D.new()
+	_bag_items_root.position = Vector3(0, 0.56, 0)
+	trolley.add_child(_bag_items_root)
+
+	scale = Vector3(0.96, 0.96, 0.96)
 
 
 func _build_visual() -> void:
@@ -95,11 +194,9 @@ func _build_visual() -> void:
 	var hair_col: Color = HAIRS[absi(color_seed) % HAIRS.size()]
 	var shirt_col: Color = SHIRTS[absi(color_seed * 3 + 1) % SHIRTS.size()]
 	if archetype == Archetype.VIP:
-		shirt_col = Color(0.18, 0.14, 0.24) # şık koyu kadife takım
-	elif archetype == Archetype.BARGAINER:
-		shirt_col = Color(0.82, 0.34, 0.56) # canlı teyze bluzu
+		shirt_col = Color(0.18, 0.14, 0.24)
 	elif archetype == Archetype.IMPATIENT:
-		shirt_col = Color(0.96, 0.42, 0.12) # enerjik spor tişört
+		shirt_col = Color(0.96, 0.42, 0.12)
 	for n in ["Body", "Head", "HandL", "HandR", "FootL", "FootR"]:
 		var m: Node3D = src.find_child(n, true, false)
 		var w := Node3D.new()
@@ -130,39 +227,24 @@ func _build_visual() -> void:
 	var sc := 0.94 + float(absi(color_seed) % 5) * 0.03
 	if archetype == Archetype.VIP:
 		sc = 1.08
-	elif archetype == Archetype.BARGAINER:
-		sc = 0.95
 	scale = Vector3(sc, sc, sc)
 
 
-## Müşteri tipine özel şapka/aksesuar + sağ elde aldıkça dolan 3D pazar filesi.
 func _build_accessories_and_bag() -> void:
 	var h := parts["Head"] as Node3D
 	match archetype:
 		Archetype.VIP:
-			# Uzun şık silindir şapka + altın şerit
 			LP.add(h, LP.cyl(0.28, 0.28, 0.04, 10), Vector3(0, 0.27, 0), Color(0.12, 0.11, 0.15))
 			LP.add(h, LP.cyl(0.20, 0.19, 0.28, 10), Vector3(0, 0.42, 0), Color(0.12, 0.11, 0.15))
 			LP.add(h, LP.cyl(0.205, 0.205, 0.05, 10), Vector3(0, 0.32, 0), Color(0.95, 0.78, 0.2), Vector3.ZERO, 0.25, 0.85)
-		Archetype.BARGAINER:
-			# Renkli teyze eşarbı / şal örtüsü
-			var scarf_col := Color(0.94, 0.42, 0.64) if (color_seed % 2 == 0) else Color(0.22, 0.72, 0.74)
-			LP.add(h, LP.ellipsoid(0.31, 0.24, 0.31, 8, 5), Vector3(0, 0.15, -0.04), scarf_col)
-			LP.add(h, LP.box(Vector3(0.26, 0.18, 0.08)), Vector3(0, -0.1, -0.24), scarf_col.darkened(0.08))
 		Archetype.IMPATIENT:
-			# Parlak spor alın bandı / şapka siperi
 			LP.add(h, LP.torus(0.22, 0.27, 10, 5), Vector3(0, 0.18, 0), Color(1.0, 0.76, 0.14))
 			LP.add(h, LP.box(Vector3(0.28, 0.035, 0.22)), Vector3(0, 0.18, 0.26), Color(0.96, 0.32, 0.12))
 
-	# Sağ elde pazar filesi / bez alışveriş çantası
 	_bag_anchor = Node3D.new()
 	_bag_anchor.position = Vector3(0.0, -0.24, 0.06)
 	(parts["HandR"] as Node3D).add_child(_bag_anchor)
-	var bag_col := Color(0.86, 0.76, 0.56)
-	if archetype == Archetype.VIP:
-		bag_col = Color(0.24, 0.18, 0.32)
-	elif archetype == Archetype.BARGAINER:
-		bag_col = Color(0.92, 0.52, 0.38)
+	var bag_col := Color(0.24, 0.18, 0.32) if archetype == Archetype.VIP else Color(0.86, 0.76, 0.56)
 	LP.add(_bag_anchor, LP.box(Vector3(0.22, 0.24, 0.18)), Vector3.ZERO, bag_col)
 	LP.add(_bag_anchor, LP.torus(0.055, 0.072, 8, 4), Vector3(0, 0.16, 0), bag_col.darkened(0.25), Vector3(PI / 2, 0, 0))
 	_bag_items_root = Node3D.new()
@@ -177,23 +259,66 @@ func _refresh_bag_visual() -> void:
 		c.queue_free()
 	for i in mini(bought_items.size(), 6):
 		var item_id: String = str(bought_items[i])
-		var ox := -0.05 + float(i % 2) * 0.10
-		var oy := float(int(i / 2)) * 0.065
-		var oz := -0.03 + float((i + 1) % 2) * 0.06
-		Produce.build_mesh(_bag_items_root, item_id, Vector3(ox, oy, oz), 0.048)
+		var ox := -0.055 + float(i % 2) * 0.11
+		var oy := float(int(i / 2)) * 0.068
+		var oz := -0.035 + float((i + 1) % 2) * 0.07
+		Produce.build_mesh(_bag_items_root, item_id, Vector3(ox, oy, oz), 0.052)
 
 
-func _build_bubble_patience_and_area() -> void:
+## Yüksek kontrastlı, açılışta zıplayarak beliren Pop-Up konuşma balonu kartı + sabır çubuğu.
+func _build_popup_bubble_patience_and_area() -> void:
+	_popup_pivot = Node3D.new()
+	_popup_pivot.position = Vector3(0, 2.02, 0)
+	add_child(_popup_pivot)
+
+	# Dış renkli çerçeve
+	_popup_border = MeshInstance3D.new()
+	var bq := QuadMesh.new()
+	bq.size = Vector2(1.42, 0.42)
+	_popup_border.mesh = bq
+	_popup_border.position = Vector3(0, 0, -0.012)
+	_popup_border_mat = StandardMaterial3D.new()
+	_popup_border_mat.albedo_color = Color(0.16, 0.11, 0.08, 0.96)
+	_popup_border_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_popup_border_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_popup_border.material_override = _popup_border_mat
+	_popup_pivot.add_child(_popup_border)
+
+	# Parlak krem/beyaz iç kart
+	_popup_card = MeshInstance3D.new()
+	var cq := QuadMesh.new()
+	cq.size = Vector2(1.34, 0.34)
+	_popup_card.mesh = cq
+	_popup_card.position = Vector3(0, 0, -0.004)
+	_popup_bg_mat = StandardMaterial3D.new()
+	_popup_bg_mat.albedo_color = Color(1.0, 0.98, 0.92, 0.96)
+	_popup_bg_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_popup_bg_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_popup_card.material_override = _popup_bg_mat
+	_popup_pivot.add_child(_popup_card)
+
+	# Konuşma balonu alt ok ucu
+	_popup_tail = MeshInstance3D.new()
+	var tq := QuadMesh.new()
+	tq.size = Vector2(0.15, 0.15)
+	_popup_tail.mesh = tq
+	_popup_tail.position = Vector3(0, -0.19, -0.010)
+	_popup_tail.rotation.z = PI / 4.0
+	_popup_tail.material_override = _popup_bg_mat
+	_popup_pivot.add_child(_popup_tail)
+
+	# Kart üstü belirgin koyu yazı
 	bubble = Label3D.new()
-	bubble.position = Vector3(0, 1.92, 0)
-	bubble.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-	bubble.font_size = 33
-	bubble.outline_size = 10
-	bubble.modulate = Color(1.0, 0.98, 0.9)
-	bubble.outline_modulate = Color(0.1, 0.06, 0.04)
-	add_child(bubble)
+	bubble.position = Vector3(0, 0, 0.012)
+	bubble.font_size = 30
+	bubble.pixel_size = 0.0032
+	bubble.outline_size = 5
+	bubble.double_sided = false
+	bubble.modulate = Color(0.10, 0.07, 0.05)
+	bubble.outline_modulate = Color(1.0, 0.98, 0.92)
+	_popup_pivot.add_child(bubble)
 
-	# Baş üstü 3D sabır çubuğu (sadece tezgah önünde beklerken görünür)
+	# Baş üstü 3D sabır çubuğu
 	_patience_root = Node3D.new()
 	_patience_root.position = Vector3(0, 1.66, 0)
 	var bg := MeshInstance3D.new()
@@ -254,35 +379,65 @@ func archetype_tag() -> String:
 
 
 func _refresh_bubble() -> void:
-	if bubble == null:
+	if bubble == null or _popup_pivot == null:
 		return
+	var txt := ""
+	var border_c := Color(0.22, 0.16, 0.12, 0.96)
+	var bg_c := Color(1.0, 0.98, 0.92, 0.96)
+
 	if mood_text != "":
-		bubble.text = mood_text
-		bubble.modulate = Color(0.62, 1.0, 0.62) if ("😊" in mood_text or "⭐" in mood_text) else Color(1.0, 0.52, 0.45)
-		return
-	var segs := PackedStringArray()
-	for k in wants:
-		var cnt: int = int(wants[k])
-		if cnt > 0 and StallScript.ITEMS.has(k):
-			segs.append("%dx %s" % [cnt, StallScript.ITEMS[k]["name"]])
-	if segs.is_empty():
-		bubble.text = ""
-		return
-	var prefix := archetype_tag()
-	if prefix != "":
-		prefix += " • "
-	var st: Node3D = _find_stall(target_owner_id) if state == State.WAIT_BUY else null
-	var cur := _current_item(st) if st else ""
-	if offers.has(cur):
-		var ask := "Abi %s bize %d lira olmaz mı?" if archetype != Archetype.BARGAINER else "Evladım %s %d liraya ver hele!"
-		bubble.text = "🤔 " + prefix + (ask % [StallScript.ITEMS[cur]["name"], int(offers[cur])])
-		bubble.modulate = Color(1.0, 0.76, 0.42)
-	elif state == State.WAIT_BUY:
-		bubble.text = "🛒 " + prefix + ", ".join(segs)
-		bubble.modulate = Color(1.0, 0.92, 0.38) if archetype != Archetype.VIP else Color(1.0, 0.82, 0.25)
+		txt = mood_text
+		if "😊" in mood_text or "⭐" in mood_text or "⚡" in mood_text or "Bereketli" in mood_text:
+			border_c = Color(0.18, 0.68, 0.28, 0.98)
+			bg_c = Color(0.90, 1.0, 0.92, 0.97)
+		else:
+			border_c = Color(0.82, 0.22, 0.18, 0.98)
+			bg_c = Color(1.0, 0.90, 0.88, 0.97)
 	else:
-		bubble.text = "💬 " + prefix + ", ".join(segs)
-		bubble.modulate = Color(1.0, 0.96, 0.88) if archetype != Archetype.VIP else Color(1.0, 0.88, 0.42)
+		var segs := PackedStringArray()
+		for k in wants:
+			var cnt: int = int(wants[k])
+			if cnt > 0 and StallScript.ITEMS.has(k):
+				segs.append("%dx %s" % [cnt, StallScript.ITEMS[k]["name"]])
+		if not segs.is_empty():
+			var prefix := archetype_tag()
+			if prefix != "":
+				prefix += " • "
+			var st: Node3D = _find_stall(target_owner_id) if state == State.WAIT_BUY else null
+			var cur := _current_item(st) if st else ""
+			if offers.has(cur):
+				var ask := "Abi %s %d lira olmaz mı?" if archetype != Archetype.BARGAINER else "Evladım %s %d liraya ver hele!"
+				txt = "🤔 " + prefix + (ask % [StallScript.ITEMS[cur]["name"], int(offers[cur])])
+				border_c = Color(0.92, 0.48, 0.12, 0.98)
+				bg_c = Color(1.0, 0.95, 0.84, 0.98)
+			elif state == State.WAIT_BUY:
+				txt = "🛒 " + prefix + ", ".join(segs)
+				border_c = Color(0.88, 0.64, 0.10, 0.98)
+				bg_c = Color(1.0, 0.97, 0.86, 0.97)
+			else:
+				txt = "💬 " + prefix + ", ".join(segs)
+
+	if txt == "":
+		_popup_pivot.hide()
+		_last_bubble_txt = ""
+		return
+
+	_popup_pivot.show()
+	bubble.text = txt
+	_popup_border_mat.albedo_color = border_c
+	_popup_bg_mat.albedo_color = bg_c
+	# Kart genişliğini metin uzunluğuna göre bol kenar boşluklu ayarla
+	var card_w := clampf(float(txt.length()) * 0.062 + 0.42, 0.96, 2.65)
+	(_popup_card.mesh as QuadMesh).size = Vector2(card_w, 0.32)
+	(_popup_border.mesh as QuadMesh).size = Vector2(card_w + 0.08, 0.40)
+
+	if txt != _last_bubble_txt:
+		_last_bubble_txt = txt
+		if _popup_tw and _popup_tw.is_valid():
+			_popup_tw.kill()
+		_popup_pivot.scale = Vector3(0.08, 0.08, 0.08)
+		_popup_tw = create_tween()
+		_popup_tw.tween_property(_popup_pivot, "scale", Vector3.ONE, 0.28).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 
 
 func _update_patience_bar() -> void:
@@ -301,6 +456,17 @@ func _update_patience_bar() -> void:
 	else:
 		var pulse := 0.78 + 0.22 * sin(Time.get_ticks_msec() * 0.018)
 		_patience_mat.albedo_color = Color(1.0 * pulse, 0.22, 0.18)
+
+
+func _process(_dt: float) -> void:
+	# Pop-up konuşma kartı daima aktif kameraya baksın
+	if _popup_pivot and _popup_pivot.visible:
+		var cam := get_viewport().get_camera_3d()
+		if cam:
+			var to_cam := cam.global_position - _popup_pivot.global_position
+			to_cam.y = 0.0
+			if to_cam.length_squared() > 0.001:
+				_popup_pivot.global_rotation = Vector3(0, atan2(to_cam.x, to_cam.z), 0)
 
 
 func _physics_process(dt: float) -> void:
@@ -331,9 +497,9 @@ func _tick_ai(dt: float) -> void:
 			_move_toward_target(dt, walk_speed)
 			eval_timer -= dt
 			if eval_timer <= 0.0:
-				eval_timer = 0.45
-				_evaluate_stalls()
-			if Vector2(position.x - exit_pos.x, position.z - exit_pos.z).length() < 1.2:
+				eval_timer = 0.35
+				_evaluate_stalls(false)
+			if Vector2(position.x - exit_pos.x, position.z - exit_pos.z).length() < 1.3:
 				queue_free()
 		State.APPROACH:
 			var st := _find_stall(target_owner_id)
@@ -343,8 +509,13 @@ func _tick_ai(dt: float) -> void:
 				target_pos = exit_pos
 				_refresh_bubble()
 				return
-			_move_toward_target(dt, walk_speed * 1.12)
-			if Vector2(position.x - target_pos.x, position.z - target_pos.z).length() < 0.35:
+			# Yürürken başka bir pazarcı ÇOK DAHA GÜÇLÜ bağırırsa ona dön!
+			eval_timer -= dt
+			if eval_timer <= 0.0:
+				eval_timer = 0.65
+				_evaluate_stalls(true)
+			_move_toward_target(dt, walk_speed * 1.15)
+			if Vector2(position.x - target_pos.x, position.z - target_pos.z).length() < 0.38:
 				state = State.WAIT_BUY
 				_spd = 0.0
 				wait_timer = max_wait
@@ -360,7 +531,7 @@ func _tick_ai(dt: float) -> void:
 			var st := _find_stall(target_owner_id)
 			if st == null or not _stall_has_any_want(st) or _total_wants() <= 0 or wait_timer <= 0.0:
 				if _total_wants() <= 0:
-					mood_text = "😊 Teşekkürler!"
+					mood_text = "😊 Bereketli olsun evladım!" if archetype == Archetype.BARGAINER else "😊 Teşekkürler!"
 				elif wait_timer <= 0.0:
 					mood_text = "😤 Çok bekledim!" if archetype == Archetype.IMPATIENT else "😕 Çok bekledim..."
 					_trigger_reaction(false)
@@ -370,7 +541,7 @@ func _tick_ai(dt: float) -> void:
 				_refresh_bubble()
 		State.LEAVE:
 			_move_toward_target(dt, walk_speed * 1.08)
-			if Vector2(position.x - exit_pos.x, position.z - exit_pos.z).length() < 1.2:
+			if Vector2(position.x - exit_pos.x, position.z - exit_pos.z).length() < 1.3:
 				queue_free()
 
 
@@ -381,26 +552,46 @@ func _move_toward_target(dt: float, speed: float) -> void:
 		_spd = 0.0
 		return
 	var dir := diff / dist
-	var from_fountain := Vector2(position.x, position.z)
-	if from_fountain.length() < 3.55:
-		var push := from_fountain.normalized()
-		dir = (dir + Vector3(push.x, 0.0, push.y) * 0.95).normalized()
+	# Ortadaki Ford Transit Toptancı park/sürüş halindeyse yanından kibarca dolan
+	var w := get_parent().get_parent() if get_parent() else null
+	var truck := w.get_node_or_null("Wholesaler") as Node3D if w else null
+	if truck and truck.is_present():
+		var rel_x := position.x - truck.position.x
+		var rel_z := position.z - truck.position.z
+		if absf(rel_x) < 2.25 and absf(rel_z) < 4.5:
+			var push_x := 1.0 if rel_x >= 0.0 else -1.0
+			dir = (dir + Vector3(push_x * 1.3, 0.0, 0.0)).normalized()
 	position += dir * minf(speed * dt, dist)
 	_body_yaw = lerp_angle(_body_yaw, atan2(dir.x, dir.z), minf(dt * 8.0, 1.0))
 	_spd = speed
 
 
-## Çok faktörlü tezgah seçimi: göreceli fiyat + bağırma (Megafon) + tezgah ışığı + zil + çeşitlilik + kuyruk.
-func _evaluate_stalls() -> void:
+## Güçlendirilmiş bağırma odaklı tezgah seçimi: daha yüksek bağıran (veya Megafon kullanan) pazarcı müşteriyi kazanır!
+func _evaluate_stalls(only_louder_override: bool) -> void:
 	var stalls := _all_stalls()
 	if stalls.is_empty():
 		return
 	var ev := _active_event_item()
+	var cur_shout := 0.0
+	if only_louder_override and target_owner_id != 0:
+		var cur_owner := _find_player(target_owner_id)
+		if cur_owner and cur_owner.has_method("get_effective_shout"):
+			cur_shout = cur_owner.get_effective_shout()
+
 	var best_stall = null
 	var best_score := 0.0
+	var best_shout := 0.0
+
 	for st in stalls:
+		var owner := _find_player(st.owner_id)
+		var eff_shout := 0.0
+		var hearing_range := 22.0
+		if owner and owner.global_position.distance_to(st.global_position) < 6.0:
+			eff_shout = owner.get_effective_shout() if owner.has_method("get_effective_shout") else float(owner.shout_power)
+			if owner.has_method("is_holding_item") and owner.is_holding_item("megafon"):
+				hearing_range = 34.0
 		var dist := global_position.distance_to(st.global_position)
-		if dist > 16.5:
+		if dist > hearing_range:
 			continue
 		var matched := 0
 		var price_sum := 0.0
@@ -411,32 +602,53 @@ func _evaluate_stalls() -> void:
 		if matched == 0:
 			continue
 		var avg_price_score := price_sum / float(matched)
-		if avg_price_score < 0.12:
+		if avg_price_score < 0.14:
 			continue
-		# Oyuncu bağırması (Megafon yükseltmesi gücü ve menzili artırır)
+
+		# Bağırma dominansı: daha yüksek dB / Megafon doğrusal değil üstel avantaj sağlar!
 		var shout_score := 0.0
-		var owner := _find_player(st.owner_id)
-		if owner and owner.global_position.distance_to(st.global_position) < 4.8:
-			var sp: float = owner.shout_power
-			var mega_mul := 1.45 if st.has_upgrade("megaphone") else 1.0
-			var falloff := 0.085 if st.has_upgrade("megaphone") else 0.12
+		if owner and eff_shout > 0.08:
 			var heard := global_position.distance_to(owner.global_position)
-			shout_score = clampf((sp * mega_mul) / (1.0 + heard * falloff), 0.0, 1.45)
-		# Pirinç zil çalındıysa ek güçlü çekim!
+			var falloff := 0.045 if hearing_range > 25.0 else 0.08
+			shout_score = clampf(pow(eff_shout, 1.3) / (1.0 + heard * falloff), 0.0, 2.4)
 		if st.bell_boost > 0.0:
-			shout_score = maxf(shout_score, clampf(1.25 / (1.0 + dist * 0.07), 0.35, 1.3))
-		# Süslü tente ve ışıklar pasif cazibe bonusu
-		var lights_bonus := 0.22 if st.has_upgrade("lights") else 0.0
+			shout_score = maxf(shout_score, clampf(1.55 / (1.0 + dist * 0.05), 0.45, 1.6))
+
+		# Ek çekicilik bonusları: Süslü Işıklar, Arabesk Radyo, Küba Purosu Prestiji!
+		var charm := 0.0
+		if st.has_upgrade("lights"):
+			charm += 0.18
+		if st.has_radio and st.radio_playing:
+			charm += 0.18
+		if owner and owner.has_method("has_prestige_aura") and owner.has_prestige_aura():
+			charm += 0.18 if archetype == Archetype.VIP else 0.10
+
 		var variety := clampf(float(matched) / float(maxi(wants.size(), 1)), 0.0, 1.0)
-		var proximity := clampf(1.0 - dist / 16.5, 0.0, 1.0)
+		var proximity := clampf(1.0 - dist / hearing_range, 0.0, 1.0)
 		var busy := _count_customers_at(st.owner_id)
-		var vip_var := 1.25 if archetype == Archetype.VIP else 1.0
-		var score := avg_price_score * 0.48 + shout_score * 0.32 * clampf(avg_price_score, 0.35, 1.15) \
-			+ (variety * 0.6 * vip_var + proximity * 0.4) * 0.18 + lights_bonus - float(busy) * 0.24
+		# Bağırma ağırlığı %62 (baskın!), fiyat %28, çeşit/yakınlık %10 + tezgah cazibesi
+		var score := shout_score * 0.62 * clampf(avg_price_score, 0.45, 1.15) \
+			+ avg_price_score * 0.28 + (variety * 0.55 + proximity * 0.45) * 0.10 \
+			+ charm - float(busy) * 0.20
+
 		if score > best_score:
 			best_score = score
 			best_stall = st
-	if best_stall and best_score > 0.34 and randf() < clampf(best_score * 0.74, 0.16, 0.94):
+			best_shout = eff_shout
+
+	if best_stall == null:
+		return
+	if only_louder_override:
+		# Başka bir pazarcı açık ara daha güçlü bağırıyorsa ona çevril!
+		if best_stall.owner_id != target_owner_id and best_shout > cur_shout + 0.50 and best_shout >= 0.70:
+			target_owner_id = best_stall.owner_id
+			var busy_n := _count_customers_at(target_owner_id)
+			target_pos = best_stall.customer_spot(float(busy_n % 3 - 1) * 0.68)
+			_refresh_bubble()
+		return
+
+	var lure_prob := clampf(best_score * 0.85 + (0.28 if best_shout >= 0.5 else 0.0), 0.14, 0.97)
+	if best_score > 0.24 and randf() < lure_prob:
 		target_owner_id = best_stall.owner_id
 		var busy_n := _count_customers_at(target_owner_id)
 		var side_off := float(busy_n % 3 - 1) * 0.68
@@ -445,11 +657,10 @@ func _evaluate_stalls() -> void:
 		_refresh_bubble()
 
 
-## Pazarlık: Pazarlıkçı Teyze neredeyse her zaman ~%28 indirim ister; VIP pazarlık etmez!
 func _make_offers(st) -> void:
 	offers.clear()
 	if archetype == Archetype.VIP:
-		return # VIP pazarlık etmez, tam fiyat + bahşiş öder!
+		return
 	var stalls := _all_stalls()
 	var ev := _active_event_item()
 	for k in wants:
@@ -461,9 +672,9 @@ func _make_offers(st) -> void:
 		var discount := 0.80
 		if archetype == Archetype.BARGAINER:
 			prob = clampf(prob + 0.42, 0.55, 0.96)
-			discount = 0.72
+			discount = 0.74
 		elif archetype == Archetype.IMPATIENT:
-			prob *= 0.45 # aceleci pek pazarlık yapmaz
+			prob *= 0.45
 		if price >= 2 and (score <= 1.06 or archetype == Archetype.BARGAINER) and randf() < prob:
 			offers[k] = clampi(roundi(price * discount), 1, price - 1)
 
@@ -484,10 +695,10 @@ func try_sell_one_from(seller_id: int, insist := false) -> Dictionary:
 		offers.erase(k)
 		var base_ch := StallScript.relative_price_score(k, st.get_item_price(k), _all_stalls(), ev) * 0.8
 		if archetype == Archetype.BARGAINER:
-			base_ch *= 0.72 # teyze daha inatçı
+			base_ch *= 0.72
 		var chance := clampf(base_ch, 0.1, 0.9)
 		if randf() >= chance:
-			mood_text = "😤 Çok pahalı evladım!" if archetype == Archetype.BARGAINER else "😤 Pahalıymış abi..."
+			mood_text = "😤 Çok pahalıymış, öbür tezgaha bakayım!" if archetype == Archetype.BARGAINER else "😤 Pahalıymış abi..."
 			state = State.LEAVE
 			target_owner_id = 0
 			target_pos = exit_pos
@@ -510,7 +721,6 @@ func try_sell_one_from(seller_id: int, insist := false) -> Dictionary:
 		offers.erase(k)
 	bought_items.append(k)
 
-	# Bahşiş hesapla (Aceleci hızlı servis veya VIP sepeti tamamlama)
 	var tip := 0
 	if archetype == Archetype.IMPATIENT and wait_timer / maxf(max_wait, 1.0) >= 0.55:
 		tip += randi_range(4, 7)
@@ -522,6 +732,8 @@ func try_sell_one_from(seller_id: int, insist := false) -> Dictionary:
 			mood_text = "⭐ Harika servis! +%d TL Bahşiş!" % tip
 		elif tip > 0:
 			mood_text = "⚡ Süper hız! +%d TL Bahşiş!" % tip
+		elif archetype == Archetype.BARGAINER:
+			mood_text = "😊 Bereketli olsun evladım!"
 		else:
 			mood_text = "😊 Teşekkürler!"
 		state = State.LEAVE
@@ -590,7 +802,7 @@ func _trigger_reaction(happy: bool) -> void:
 
 
 @rpc("authority", "unreliable_ordered")
-func rpc_sync_state(p: Vector3, yaw: float, s: float, st: int, own: int, w: Dictionary, off: Dictionary, mood: String, wt := 26.0) -> void:
+func rpc_sync_state(p: Vector3, yaw: float, s: float, st: int, own: int, w: Dictionary, off: Dictionary, mood: String, wt := 28.0) -> void:
 	_net_pos = p
 	_net_yaw = yaw
 	_net_spd = s
@@ -606,20 +818,11 @@ func rpc_sync_state(p: Vector3, yaw: float, s: float, st: int, own: int, w: Dict
 
 func export_snapshot() -> Dictionary:
 	return {
-		"name": name,
-		"seed": color_seed,
-		"archetype": archetype,
-		"pos": position,
-		"yaw": _body_yaw,
-		"exit": exit_pos,
-		"target_pos": target_pos,
-		"target_owner": target_owner_id,
-		"state": state,
-		"wants": wants.duplicate(),
-		"offers": offers.duplicate(),
-		"bought": bought_items.duplicate(),
-		"mood": mood_text,
-		"wait": wait_timer,
+		"name": name, "seed": color_seed, "archetype": archetype,
+		"pos": position, "yaw": _body_yaw, "exit": exit_pos,
+		"target_pos": target_pos, "target_owner": target_owner_id,
+		"state": state, "wants": wants.duplicate(), "offers": offers.duplicate(),
+		"bought": bought_items.duplicate(), "mood": mood_text, "wait": wait_timer,
 	}
 
 
@@ -708,26 +911,28 @@ func _count_customers_at(owner_id: int) -> int:
 
 
 func _animate_walk(dt: float) -> void:
-	var kw := clampf(_spd / 2.6, 0.0, 1.0)
-	var stride := 0.25 * kw
-	var lift := 0.10 * kw
+	var kw := clampf(_spd / 2.2, 0.0, 1.0)
+	var stride := 0.24 * kw
+	var lift := 0.09 * kw
 	if _spd > 0.08:
-		_phase = wrapf(_phase + dt * (_spd / 0.25) * 0.94, 0.0, TAU)
+		_phase = wrapf(_phase + dt * (_spd / 0.24) * 0.94, 0.0, TAU)
+		for wh in _trolley_wheels:
+			wh.rotation.x += _spd * dt / 0.095
 	var f := minf(dt * 14.0, 1.0)
 	var hop := 0.0
 	if _react_jump > 0.0:
 		_react_jump = maxf(_react_jump - dt, 0.0)
 		hop = sin((_react_jump / 0.34) * PI) * 0.24
-	for side in [-1.0, 1.0]:
+	for side: float in [-1.0, 1.0]:
 		var fn := "FootR" if side < 0 else "FootL"
 		var hn := "HandR" if side < 0 else "HandL"
 		var c: float = _phase + (0.0 if side < 0 else PI)
 		var fp: Vector3 = rest[fn] + Vector3(0, maxf(0.0, sin(c)) * lift + hop * 0.5, -cos(c) * stride)
 		parts[fn].position = parts[fn].position.lerp(fp, f)
-		parts[fn].rotation = parts[fn].rotation.lerp(Vector3(-sin(c) * 0.4 * kw, 0, 0), f)
-		var hp: Vector3 = rest[hn] + Vector3(0, maxf(0.0, cos(c)) * 0.04 * kw + hop * 1.1, cos(c) * 0.20 * kw)
+		parts[fn].rotation = parts[fn].rotation.lerp(Vector3(-sin(c) * 0.38 * kw, 0, 0), f)
+		var hp: Vector3 = rest[hn] + Vector3(0, maxf(0.0, cos(c)) * 0.04 * kw + hop * 1.1, cos(c) * 0.18 * kw)
 		parts[hn].position = parts[hn].position.lerp(hp, f)
-		parts[hn].rotation = parts[hn].rotation.lerp(Vector3(-cos(c) * 0.45 * kw, 0, 0), f)
-	var bp: Vector3 = rest["Body"] + Vector3(0, absf(sin(_phase)) * 0.035 * kw + hop, 0)
+		parts[hn].rotation = parts[hn].rotation.lerp(Vector3(-cos(c) * 0.42 * kw, 0, 0), f)
+	var bp: Vector3 = rest["Body"] + Vector3(0, absf(sin(_phase)) * 0.032 * kw + hop, 0)
 	parts["Body"].position = parts["Body"].position.lerp(bp, f)
 	head.position = head.position.lerp(rest["Head"] + Vector3(0, (parts["Body"].position.y - rest["Body"].y) * 1.1, 0), f)

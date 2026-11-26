@@ -1,0 +1,94 @@
+﻿[gd_scene load_steps=7 format=3]
+
+[ext_resource type="Script" path="res://models/ford_transit/ford_transit_controller.gd" id="1_ctrl"]
+[ext_resource type="PackedScene" path="res://models/ford_transit/ford_transit_chassis.glb" id="2_chassis"]
+[ext_resource type="PackedScene" path="res://models/ford_transit/wheel_front.glb" id="3_wheel_f"]
+[ext_resource type="PackedScene" path="res://models/ford_transit/wheel_rear.glb" id="4_wheel_r"]
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_cab"]
+size = Vector3(1.98, 1.85, 2.22)
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_cargo"]
+size = Vector3(2.16, 1.92, 3.68)
+
+[node name="FordTransit" type="VehicleBody3D"]
+mass = 2400.0
+center_of_mass_mode = 1
+center_of_mass = Vector3(0, 0.72, -0.15)
+script = ExtResource("1_ctrl")
+
+[node name="ChassisModel" parent="." instance=ExtResource("2_chassis")]
+
+[node name="CabCollision" type="CollisionShape3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.38, 1.90)
+shape = SubResource("BoxShape3D_cab")
+
+[node name="CargoCollision" type="CollisionShape3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.78, -1.11)
+shape = SubResource("BoxShape3D_cargo")
+
+[node name="WheelFL" type="VehicleWheel3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.86, 0.37, 1.82)
+use_as_steering = true
+wheel_radius = 0.37
+wheel_rest_length = 0.14
+wheel_friction_slip = 3.2
+suspension_travel = 0.18
+suspension_stiffness = 48.0
+damping_compression = 2.4
+damping_relaxation = 3.0
+
+[node name="Mesh" parent="WheelFL" instance=ExtResource("3_wheel_f")]
+
+[node name="WheelFR" type="VehicleWheel3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.86, 0.37, 1.82)
+use_as_steering = true
+wheel_radius = 0.37
+wheel_rest_length = 0.14
+wheel_friction_slip = 3.2
+suspension_travel = 0.18
+suspension_stiffness = 48.0
+damping_compression = 2.4
+damping_relaxation = 3.0
+
+[node name="Mesh" parent="WheelFR" instance=ExtResource("3_wheel_f")]
+
+[node name="WheelRL" type="VehicleWheel3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.82, 0.37, -1.78)
+use_as_traction = true
+wheel_radius = 0.37
+wheel_rest_length = 0.14
+wheel_friction_slip = 3.6
+suspension_travel = 0.20
+suspension_stiffness = 58.0
+damping_compression = 2.8
+damping_relaxation = 3.4
+
+[node name="Mesh" parent="WheelRL" instance=ExtResource("4_wheel_r")]
+
+[node name="WheelRR" type="VehicleWheel3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.82, 0.37, -1.78)
+use_as_traction = true
+wheel_radius = 0.37
+wheel_rest_length = 0.14
+wheel_friction_slip = 3.6
+suspension_travel = 0.20
+suspension_stiffness = 58.0
+damping_compression = 2.8
+damping_relaxation = 3.4
+
+[node name="Mesh" parent="WheelRR" instance=ExtResource("4_wheel_r")]
+
+[node name="HeadlightLeft" type="SpotLight3D" parent="."]
+transform = Transform3D(-1, 0, 0, 0, 0.996195, 0.0871557, 0, 0.0871557, -0.996195, 0.74, 1.04, 3.05)
+light_color = Color(1, 0.96, 0.86, 1)
+light_energy = 4.5
+spot_range = 35.0
+spot_angle = 36.0
+
+[node name="HeadlightRight" type="SpotLight3D" parent="."]
+transform = Transform3D(-1, 0, 0, 0, 0.996195, 0.0871557, 0, 0.0871557, -0.996195, -0.74, 1.04, 3.05)
+light_color = Color(1, 0.96, 0.86, 1)
+light_energy = 4.5
+spot_range = 35.0
+spot_angle = 36.0

@@ -1,25 +1,27 @@
 extends Node3D
-## Oyuncu tezgahı: 4 ürün yuvası, renkli fiyat etiketleri, pirinç terazi, arka depo kasaları,
-## geliştirme panosu ve 3D yükseltmeler (Megafon, Süslü Işıklar, Geniş Kasa, Pirinç Zil).
+## Oyuncu tezgahı: dokulu ahşap/branda, 4 ürün yuvası, çift taraflı renkli fiyat etiketleri,
+## pirinç terazi, arka yedek kasalar, tezgaha konulan Arabesk Radyo ve 3D yükseltmeler.
 
 const LP := preload("res://lowpoly.gd")
 const Produce := preload("res://produce.gd")
+const Items := preload("res://items.gd")
 const VFX := preload("res://vfx.gd")
 
 const ITEMS := Produce.ITEMS
 const ITEM_ORDER := Produce.ITEM_ORDER
 const BASIC_ORDER := Produce.BASIC_ORDER
 const WOOD := Color(0.55, 0.37, 0.22)
+const STEEL := Color(0.50, 0.52, 0.55)
 const BRASS := Color(0.88, 0.70, 0.22)
 const AWNINGS := [
-	Color(0.86, 0.22, 0.18), Color(0.2, 0.52, 0.85), Color(0.95, 0.72, 0.18), Color(0.28, 0.68, 0.32),
-	Color(0.65, 0.34, 0.8), Color(0.95, 0.48, 0.62), Color(0.16, 0.72, 0.72), Color(0.95, 0.52, 0.16),
+	Color(0.14, 0.44, 0.80), Color(0.84, 0.22, 0.18), Color(0.18, 0.54, 0.30), Color(0.92, 0.56, 0.14),
+	Color(0.62, 0.30, 0.76), Color(0.90, 0.38, 0.54), Color(0.14, 0.62, 0.66), Color(0.82, 0.66, 0.16),
 ]
 const UPGRADES := {
 	"megaphone": {
-		"name": "Megafon",
+		"name": "Tezgah Hoparlörü",
 		"cost": 80,
-		"desc": "Bağırma gücü ve menzili +%45 artar, altın ses dalgası yayar.",
+		"desc": "Tezgaha hoparlör takar: bağırma gücü +%35 artar, el megafonuyla birleşir.",
 	},
 	"lights": {
 		"name": "Süslü Tente & Işıklar",
@@ -41,17 +43,25 @@ const UPGRADE_ORDER := ["megaphone", "lights", "big_crate", "bell"]
 const SLOT_XS := [-1.2, -0.4, 0.4, 1.2]
 const MAX_SLOT_COUNT := 10
 const CRATE_CAPACITY := 10
-const GOUGE_RATIO := 1.75 # bu oranın üstü Zabıta tarafından fahiş fiyat sayılır
+const GOUGE_RATIO := 1.75
 
 var owner_id := 0
 var owner_name := ""
 var spot_idx := 0
-var awning_color := Color(0.85, 0.22, 0.18)
-var slots: Array[Dictionary] = [] # {"item": String, "count": int, "price": int}
+var awning_color := Color(0.14, 0.44, 0.80)
+var slots: Array[Dictionary] = []
 var crate_available: Dictionary = {}
 var upgrades: Dictionary = {"megaphone": false, "lights": false, "big_crate": false, "bell": false}
 var bell_boost := 0.0
 var bell_cd := 0.0
+
+# Tezgaha bırakılan Arabesk Radyo
+var has_radio := false
+var radio_playing := false
+var _radio_node: Node3D
+var _radio_area: Area3D
+var _radio_audio: AudioStreamPlayer3D
+var _radio_note_cd := 0.0
 
 var _crate_visuals: Dictionary = {}
 var _crate_labels: Dictionary = {}
@@ -86,6 +96,7 @@ func _ready() -> void:
 	_build_scale()
 	_build_upgrade_board()
 	_build_upgrade_attachments()
+	_build_radio_slot()
 	for k in upgrades:
 		if bool(upgrades[k]):
 			_show_upgrade_visual(k)
@@ -100,6 +111,12 @@ func _process(dt: float) -> void:
 	if not _light_bulbs.is_empty() and has_upgrade("lights"):
 		for i in _light_bulbs.size():
 			_light_bulbs[i].emission_energy_multiplier = 2.0 + sin(_anim_t * 4.5 + float(i) * 1.1) * 0.45
+	if has_radio and radio_playing:
+		_radio_note_cd -= dt
+		if _radio_note_cd <= 0.0:
+			_radio_note_cd = 1.15
+			if _radio_node:
+				VFX.spawn_music_note(self, _radio_node.global_position + Vector3(0, 0.28, 0))
 
 
 func max_slot_count() -> int:
@@ -115,33 +132,34 @@ func has_upgrade(key: String) -> bool:
 
 
 func _build_geometry() -> void:
-	# Gövde, ahşap çıtalar ve tezgah tablası
-	LP.add(self, LP.box(Vector3(3.4, 0.52, 0.92)), Vector3(0, 0.26, 0.25), WOOD)
+	var wood_m := LP.mat_tex(WOOD, LP.tex_wood(), 0.86, Vector3(2.0, 1.0, 1.0))
+	var top_m := LP.mat_tex(WOOD.lightened(0.14), LP.tex_wood(), 0.84, Vector3(2.0, 1.0, 1.0))
+	var tarp_a := LP.mat_tex(awning_color, LP.tex_tarp(), 0.72, Vector3(2.0, 2.0, 1.0))
+	var tarp_w := LP.mat_tex(Color(0.96, 0.94, 0.88), LP.tex_tarp(), 0.74, Vector3(2.0, 2.0, 1.0))
+
+	LP.add_mat(self, LP.box(Vector3(3.4, 0.52, 0.92)), Vector3(0, 0.26, 0.25), wood_m)
 	LP.add(self, LP.box(Vector3(3.46, 0.08, 0.96)), Vector3(0, 0.06, 0.25), WOOD.darkened(0.24))
-	LP.add(self, LP.box(Vector3(3.54, 0.06, 1.04)), Vector3(0, 0.545, 0.25), WOOD.lightened(0.14))
-	# Ön dekoratif tahta şeritleri
+	LP.add_mat(self, LP.box(Vector3(3.54, 0.06, 1.04)), Vector3(0, 0.545, 0.25), top_m)
 	for sx in [-1.25, -0.42, 0.42, 1.25]:
 		LP.add(self, LP.box(Vector3(0.06, 0.48, 0.03)), Vector3(sx, 0.27, 0.72), WOOD.darkened(0.18))
 	LP.solid(self, Vector3(0, 0.285, 0.25), Vector3(3.54, 0.57, 1.04))
 
-	# Dört köşe direk + çapraz destekler (ferah baş üstü yüksekliği 2.28m)
+	# Galvaniz çelik pazarcı direkleri
 	for x in [-1.62, 1.62]:
 		for z in [-0.75, 0.85]:
-			LP.add(self, LP.cyl(0.05, 0.06, 2.28, 6), Vector3(x, 1.14, z), WOOD.darkened(0.22))
-		LP.add(self, LP.box(Vector3(0.06, 0.06, 1.62)), Vector3(x, 2.14, 0.05), WOOD.darkened(0.24))
-	LP.add(self, LP.box(Vector3(3.36, 0.07, 0.07)), Vector3(0, 2.18, 0.85), WOOD.darkened(0.22))
+			LP.add(self, LP.cyl(0.042, 0.048, 2.28, 6), Vector3(x, 1.14, z), STEEL, Vector3.ZERO, 0.42, 0.7)
+		LP.add(self, LP.box(Vector3(0.05, 0.05, 1.62)), Vector3(x, 2.14, 0.05), STEEL, Vector3.ZERO, 0.42, 0.7)
+	LP.add(self, LP.box(Vector3(3.36, 0.06, 0.06)), Vector3(0, 2.18, 0.85), STEEL, Vector3.ZERO, 0.42, 0.7)
 
-	# Çizgili eğik tente + ön saçak
+	# Çizgili dokulu branda tente
 	for i in 5:
-		var c := awning_color if i % 2 == 0 else Color(0.97, 0.94, 0.87)
-		LP.add(self, LP.box(Vector3(0.73, 0.05, 2.18)), Vector3(-1.46 + i * 0.73, 2.33, 0.12), c, Vector3(0.18, 0, 0))
-	LP.add(self, LP.box(Vector3(3.68, 0.22, 0.04)), Vector3(0, 2.11, 1.17), awning_color)
-	# Saçak altı küçük dalgalı süs dişleri
+		var m := tarp_a if i % 2 == 0 else tarp_w
+		LP.add_mat(self, LP.box(Vector3(0.73, 0.05, 2.18)), Vector3(-1.46 + float(i) * 0.73, 2.33, 0.12), m, Vector3(0.18, 0, 0))
+	LP.add_mat(self, LP.box(Vector3(3.68, 0.22, 0.04)), Vector3(0, 2.11, 1.17), tarp_a)
 	for i in 9:
-		var fc := awning_color.darkened(0.12) if i % 2 == 0 else Color(0.97, 0.94, 0.87)
-		LP.add(self, LP.prism(Vector3(0.38, 0.13, 0.04)), Vector3(-1.52 + i * 0.38, 1.95, 1.17), fc, Vector3(0, 0, PI))
+		var fc := awning_color.darkened(0.12) if i % 2 == 0 else Color(0.96, 0.94, 0.88)
+		LP.add(self, LP.prism(Vector3(0.38, 0.13, 0.04)), Vector3(-1.52 + float(i) * 0.38, 1.95, 1.17), fc, Vector3(0, 0, PI))
 
-	# Oyuncu tezgah tabelası
 	_sign_label = Label3D.new()
 	_sign_label.text = (owner_name + " Tezgahı") if owner_name != "" else "Tezgah"
 	_sign_label.position = Vector3(0, 2.12, 1.22)
@@ -151,7 +169,6 @@ func _build_geometry() -> void:
 	add_child(_sign_label)
 
 
-## Tezgah sağ ön köşesinde animasyonlu pirinç Esnaf Terazisi (direk iç tarafında).
 func _build_scale() -> void:
 	var sc := Node3D.new()
 	sc.position = Vector3(1.44, 0.58, 0.56)
@@ -162,7 +179,7 @@ func _build_scale() -> void:
 	_scale_beam.position = Vector3(0, 0.29, 0)
 	sc.add_child(_scale_beam)
 	LP.add(_scale_beam, LP.box(Vector3(0.28, 0.018, 0.02)), Vector3.ZERO, BRASS, Vector3.ZERO, 0.25, 0.85)
-	for side in [-1.0, 1.0]:
+	for side: float in [-1.0, 1.0]:
 		LP.add(_scale_beam, LP.cyl(0.004, 0.004, 0.11, 4), Vector3(side * 0.12, -0.055, 0), BRASS, Vector3.ZERO, 0.3, 0.8)
 		LP.add(_scale_beam, LP.cyl(0.068, 0.045, 0.022, 8), Vector3(side * 0.12, -0.115, 0), BRASS.lightened(0.1), Vector3.ZERO, 0.25, 0.85)
 
@@ -177,7 +194,6 @@ func tip_scale() -> void:
 	tw.tween_property(_scale_beam, "rotation:z", 0.0, 0.16).set_trans(Tween.TRANS_SINE)
 
 
-## Sol yan direkte tıklanabilir Esnaf Geliştirme Panosu.
 func _build_upgrade_board() -> void:
 	var b := Node3D.new()
 	b.position = Vector3(-1.68, 1.24, 0.05)
@@ -186,9 +202,9 @@ func _build_upgrade_board() -> void:
 	LP.add(b, LP.box(Vector3(0.76, 0.48, 0.05)), Vector3.ZERO, Color(0.14, 0.2, 0.14))
 	LP.add(b, LP.box(Vector3(0.82, 0.54, 0.03)), Vector3(0, 0, -0.015), WOOD.darkened(0.15))
 	var lbl := Label3D.new()
-	lbl.text = "⭐ TEZGAH\nGELİŞTİR\n[E / U]"
+	lbl.text = "⭐ DÜKKAN\n[P / E]"
 	lbl.position = Vector3(0, 0, 0.035)
-	lbl.font_size = 22
+	lbl.font_size = 24
 	lbl.outline_size = 6
 	lbl.modulate = Color(1.0, 0.88, 0.35)
 	lbl.double_sided = true
@@ -208,12 +224,60 @@ func _build_upgrade_board() -> void:
 	b.add_child(area)
 
 
-## Yükseltmeler satın alınınca tezgaha takılan 3D parçalar.
+## Tezgaha bırakılan Arabesk Radyo yuvası (sağ arka masa köşesi).
+func _build_radio_slot() -> void:
+	_radio_node = Items.build_item_model("radyo")
+	_radio_node.position = Vector3(1.52, 0.58, -0.05)
+	_radio_node.rotation.y = -0.35
+	_radio_node.hide()
+	add_child(_radio_node)
+
+	_radio_audio = Sfx.make_radio_player()
+	_radio_node.add_child(_radio_audio)
+
+	_radio_area = Area3D.new()
+	_radio_area.name = "StallRadioArea"
+	_radio_area.collision_layer = 0
+	_radio_area.collision_mask = 0
+	_radio_area.set_meta("kind", "stall_radio")
+	_radio_area.set_meta("stall_owner", owner_id)
+	_radio_area.set_meta("hl_size", Vector3(0.42, 0.30, 0.24))
+	_radio_area.position = Vector3(0, 0.12, 0)
+	var cs := CollisionShape3D.new()
+	var sh := BoxShape3D.new()
+	sh.size = Vector3(0.44, 0.32, 0.28)
+	cs.shape = sh
+	_radio_area.add_child(cs)
+	_radio_node.add_child(_radio_area)
+
+
+func set_radio_synced(placed: bool, playing: bool) -> void:
+	if Net.online():
+		rpc_set_stall_radio.rpc(placed, playing)
+	else:
+		rpc_set_stall_radio(placed, playing)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func rpc_set_stall_radio(placed: bool, playing: bool) -> void:
+	has_radio = placed
+	radio_playing = placed and playing
+	if _radio_node:
+		_radio_node.visible = placed
+	if _radio_area:
+		_radio_area.collision_layer = 4 if placed else 0
+	if _radio_audio:
+		if radio_playing and DisplayServer.get_name() != "headless":
+			if not _radio_audio.playing:
+				_radio_audio.play()
+		elif _radio_audio.playing:
+			_radio_audio.stop()
+
+
 func _build_upgrade_attachments() -> void:
 	_upgrade_visuals.clear()
 	_light_bulbs.clear()
 
-	# 1) Megafon (ön sol direkte kırmızı/altın huni megafon)
 	var mega := Node3D.new()
 	mega.position = Vector3(-1.62, 1.92, 0.92)
 	mega.rotation = Vector3(-0.1, 0.25, 0.0)
@@ -224,7 +288,6 @@ func _build_upgrade_attachments() -> void:
 	add_child(mega)
 	_upgrade_visuals["megaphone"] = mega
 
-	# 2) Süslü Tente & Parlayan Işık Dizisi
 	var lights := Node3D.new()
 	for i in 7:
 		var lx := -1.5 + float(i) * 0.5
@@ -235,7 +298,6 @@ func _build_upgrade_attachments() -> void:
 		bm.emission = col
 		bm.emission_energy_multiplier = 2.2
 		_light_bulbs.append(bm)
-	# Altın kenar şeridi + sıcak tezgah ışığı
 	LP.add(lights, LP.box(Vector3(3.68, 0.05, 0.06)), Vector3(0, 2.24, 1.19), BRASS, Vector3.ZERO, 0.25, 0.8)
 	var glow := OmniLight3D.new()
 	glow.position = Vector3(0, 1.84, 0.72)
@@ -247,7 +309,6 @@ func _build_upgrade_attachments() -> void:
 	add_child(lights)
 	_upgrade_visuals["lights"] = lights
 
-	# 3) Geniş Kasa & Hızlı Dizim (yan destek rafları + altın arma)
 	var big := Node3D.new()
 	LP.add(big, LP.box(Vector3(3.56, 0.05, 0.16)), Vector3(0, 0.58, 0.78), BRASS.darkened(0.15), Vector3.ZERO, 0.35, 0.6)
 	LP.add(big, LP.box(Vector3(0.45, 0.26, 0.36)), Vector3(1.62, 0.14, -0.35), WOOD.lightened(0.1))
@@ -255,7 +316,6 @@ func _build_upgrade_attachments() -> void:
 	add_child(big)
 	_upgrade_visuals["big_crate"] = big
 
-	# 4) Pirinç Tezgah Zili (sol ön köşe, direk içi)
 	var bell := Node3D.new()
 	bell.position = Vector3(-1.44, 0.58, 0.56)
 	_bell_mesh = Node3D.new()
@@ -265,7 +325,7 @@ func _build_upgrade_attachments() -> void:
 	LP.add(_bell_mesh, LP.cyl(0.025, 0.025, 0.03, 6), Vector3(0, 0.135, 0), BRASS.lightened(0.15), Vector3.ZERO, 0.2, 0.9)
 	_bell_area = Area3D.new()
 	_bell_area.name = "BellArea"
-	_bell_area.collision_layer = 0 # zil alınınca layer 4 olur
+	_bell_area.collision_layer = 0
 	_bell_area.collision_mask = 0
 	_bell_area.set_meta("kind", "bell")
 	_bell_area.set_meta("stall_owner", owner_id)
@@ -298,16 +358,17 @@ func _build_slots() -> void:
 	_slot_labels.clear()
 	_slot_back_labels.clear()
 	_slot_tag_mats.clear()
+	var crate_cols := [Color(0.12, 0.44, 0.82), Color(0.18, 0.56, 0.26), Color(0.84, 0.24, 0.18), Color(0.88, 0.66, 0.14)]
 	for i in 4:
 		var sx: float = SLOT_XS[i]
-		LP.add(self, LP.box(Vector3(0.72, 0.04, 0.66)), Vector3(sx, 0.59, 0.24), WOOD.darkened(0.28))
-		LP.add(self, LP.box(Vector3(0.74, 0.06, 0.04)), Vector3(sx, 0.61, 0.56), WOOD.darkened(0.15))
-		LP.add(self, LP.box(Vector3(0.74, 0.06, 0.04)), Vector3(sx, 0.61, -0.08), WOOD.darkened(0.15))
+		var cc: Color = crate_cols[i % crate_cols.size()]
+		LP.add(self, LP.box(Vector3(0.72, 0.04, 0.66)), Vector3(sx, 0.59, 0.24), cc.darkened(0.22), Vector3.ZERO, 0.55)
+		LP.add(self, LP.box(Vector3(0.74, 0.07, 0.04)), Vector3(sx, 0.62, 0.56), cc, Vector3.ZERO, 0.52)
+		LP.add(self, LP.box(Vector3(0.74, 0.07, 0.04)), Vector3(sx, 0.62, -0.08), cc, Vector3.ZERO, 0.52)
 		var vis := Node3D.new()
 		vis.position = Vector3(sx, 0.61, 0.24)
 		add_child(vis)
 		_slot_visuals.append(vis)
-		# Ön kenarda kibar, çift taraflı 3D fiyat etiketi (müşteri önden, tezgah sahibi arkadan okur!)
 		LP.add(self, LP.cyl(0.011, 0.013, 0.17, 5), Vector3(sx, 0.68, 0.61), WOOD.darkened(0.3))
 		var tag_mi := LP.add(self, LP.box(Vector3(0.46, 0.20, 0.02)), Vector3(sx, 0.79, 0.61), Color(0.98, 0.95, 0.84))
 		_slot_tag_mats.append(tag_mi.material_override as StandardMaterial3D)
@@ -350,11 +411,11 @@ func _build_slots() -> void:
 		_refresh_slot_visual(i)
 
 
-## Tezgahın arkasında 4 temel ürünün sipariş kasası. E ile toptan fiyattan alınır.
 func _build_supply_crates() -> void:
 	crate_available.clear()
 	_crate_visuals.clear()
 	_crate_labels.clear()
+	var crate_cols := [Color(0.86, 0.22, 0.18), Color(0.18, 0.58, 0.26), Color(0.88, 0.68, 0.14), Color(0.12, 0.46, 0.84)]
 	for i in BASIC_ORDER.size():
 		var item_id: String = BASIC_ORDER[i]
 		var info: Dictionary = ITEMS[item_id]
@@ -366,8 +427,9 @@ func _build_supply_crates() -> void:
 		LP.add(spot, LP.box(Vector3(0.68, 0.03, 0.58)), Vector3(0, 0.015, 0), WOOD.darkened(0.38))
 		var c := Node3D.new()
 		spot.add_child(c)
-		LP.add(c, LP.box(Vector3(0.60, 0.30, 0.50)), Vector3(0, 0.16, 0), WOOD.lightened(0.06))
-		LP.add(c, LP.box(Vector3(0.64, 0.04, 0.54)), Vector3(0, 0.31, 0), WOOD.darkened(0.18))
+		var cc: Color = crate_cols[i % crate_cols.size()]
+		LP.add(c, LP.box(Vector3(0.60, 0.30, 0.50)), Vector3(0, 0.16, 0), cc, Vector3.ZERO, 0.52)
+		LP.add(c, LP.box(Vector3(0.64, 0.04, 0.54)), Vector3(0, 0.31, 0), cc.darkened(0.22), Vector3.ZERO, 0.5)
 		for j in 8:
 			Produce.build_mesh(c, item_id, _crate_item_pos(j, 0.16, 0.12, 0.34), 0.072)
 		_crate_visuals[item_id] = c
@@ -422,11 +484,19 @@ static func _slot_item_local_pos(j: int) -> Vector3:
 
 static func build_held_crate(item_id: String, count: int) -> Node3D:
 	var n := Node3D.new()
-	LP.add(n, LP.box(Vector3(0.42, 0.03, 0.34)), Vector3(0, -0.09, 0), WOOD.darkened(0.15))
-	LP.add(n, LP.box(Vector3(0.42, 0.18, 0.03)), Vector3(0, 0.0, 0.155), WOOD.lightened(0.08))
-	LP.add(n, LP.box(Vector3(0.42, 0.18, 0.03)), Vector3(0, 0.0, -0.155), WOOD.lightened(0.08))
-	LP.add(n, LP.box(Vector3(0.03, 0.18, 0.30)), Vector3(-0.195, 0.0, 0), WOOD.lightened(0.04))
-	LP.add(n, LP.box(Vector3(0.03, 0.18, 0.30)), Vector3(0.195, 0.0, 0), WOOD.lightened(0.04))
+	# Renkli plastik Türk pazar kasası
+	var cc := Color(0.12, 0.46, 0.84)
+	if item_id in ["domates", "elma"]:
+		cc = Color(0.84, 0.22, 0.18) if item_id == "domates" else Color(0.18, 0.58, 0.26)
+	elif item_id in ["karpuz", "patlican"]:
+		cc = Color(0.16, 0.56, 0.24)
+	elif item_id in ["muz", "sogan", "portakal"]:
+		cc = Color(0.90, 0.66, 0.12)
+	LP.add(n, LP.box(Vector3(0.42, 0.03, 0.34)), Vector3(0, -0.09, 0), cc.darkened(0.2), Vector3.ZERO, 0.55)
+	LP.add(n, LP.box(Vector3(0.42, 0.18, 0.03)), Vector3(0, 0.0, 0.155), cc, Vector3.ZERO, 0.52)
+	LP.add(n, LP.box(Vector3(0.42, 0.18, 0.03)), Vector3(0, 0.0, -0.155), cc, Vector3.ZERO, 0.52)
+	LP.add(n, LP.box(Vector3(0.03, 0.18, 0.30)), Vector3(-0.195, 0.0, 0), cc.lightened(0.05), Vector3.ZERO, 0.52)
+	LP.add(n, LP.box(Vector3(0.03, 0.18, 0.30)), Vector3(0.195, 0.0, 0), cc.lightened(0.05), Vector3.ZERO, 0.52)
 	if item_id != "" and ITEMS.has(item_id):
 		for j in clampi(count, 0, 14):
 			Produce.build_mesh(n, item_id, _crate_item_pos(j, 0.11, 0.08, -0.02), 0.052)
@@ -487,13 +557,13 @@ func _refresh_slot_price_color(idx: int) -> void:
 	var fp := fair_price(item_id, all_stalls, ev)
 	var ratio := float(s["price"]) / maxf(fp, 1.0)
 	if float(s["price"]) > gouge_ceiling(item_id, ev):
-		_slot_tag_mats[idx].albedo_color = Color(1.0, 0.52, 0.48) # fahiş kırmızı (Zabıta riski!)
+		_slot_tag_mats[idx].albedo_color = Color(1.0, 0.52, 0.48)
 	elif ratio < 0.88:
-		_slot_tag_mats[idx].albedo_color = Color(0.74, 0.96, 0.74) # ucuz / fırsat yeşili
+		_slot_tag_mats[idx].albedo_color = Color(0.74, 0.96, 0.74)
 	elif ratio <= 1.15:
-		_slot_tag_mats[idx].albedo_color = Color(0.98, 0.95, 0.84) # normal krem
+		_slot_tag_mats[idx].albedo_color = Color(0.98, 0.95, 0.84)
 	else:
-		_slot_tag_mats[idx].albedo_color = Color(1.0, 0.80, 0.56) # pahalı turuncu
+		_slot_tag_mats[idx].albedo_color = Color(1.0, 0.80, 0.56)
 
 
 func refresh_all_price_colors() -> void:
@@ -501,7 +571,6 @@ func refresh_all_price_colors() -> void:
 		_refresh_slot_price_color(i)
 
 
-## Arka depo kasa etiketlerini güncel toptan fiyatlarla yeniler.
 func update_crate_prices(prices: Dictionary, emergency_free := false) -> void:
 	for item_id in _crate_labels:
 		var lbl: Label3D = _crate_labels[item_id]
@@ -548,7 +617,6 @@ func total_stock() -> int:
 	return t
 
 
-## Zabıta resmi tavan fiyatı (oyuncu tek başına piyasa ortalamasını şişirerek Zabıta'dan kaçamaz).
 static func gouge_ceiling(item_id: String, event_item := "") -> float:
 	var base: float = float(ITEMS.get(item_id, {"base": 10})["base"])
 	if event_item != "" and item_id == event_item:
@@ -556,7 +624,6 @@ static func gouge_ceiling(item_id: String, event_item := "") -> float:
 	return base * GOUGE_RATIO
 
 
-## Fahiş fiyat kontrolü (Zabıta için): resmi tavanın üstünde ürün varsa döndürür.
 func find_price_gouging(all_stalls: Array, event_item := "") -> Dictionary:
 	for s in slots:
 		var item_id: String = s["item"]
@@ -568,7 +635,6 @@ func find_price_gouging(all_stalls: Array, event_item := "") -> Dictionary:
 	return {}
 
 
-## Bir ürün yerleştirir; kasadan yuvaya yay çizerek uçuş animasyonu + toz efekti + ses oynatır.
 func request_place(idx: int, item_id: String, from_world_pos := Vector3.ZERO) -> bool:
 	if not can_place(idx, item_id):
 		return false
@@ -677,9 +743,9 @@ func rpc_ring_bell() -> void:
 		return
 	bell_boost = 10.0
 	bell_cd = 15.0
-	var bell_pos := to_global(Vector3(-1.58, 0.78, 0.54))
-	Sfx.play_3d("bell", bell_pos, self, 0.0, 1.0, 28.0)
-	VFX.spawn_sound_ring(self, bell_pos, 5.2, Color(1.0, 0.85, 0.28))
+	var bell_pos := to_global(Vector3(-1.44, 0.78, 0.56))
+	Sfx.play_3d("bell", bell_pos, self, 0.0, 1.0, 32.0)
+	VFX.spawn_sound_ring(self, bell_pos, 5.5, Color(1.0, 0.85, 0.28))
 	VFX.spawn_floating_text(self, bell_pos + Vector3(0, 0.55, 0), "🔔 GEL VATANDAŞ GEL!", Color(1.0, 0.88, 0.3), 38)
 	if _bell_mesh:
 		var tw := create_tween()
@@ -712,7 +778,6 @@ func rpc_apply_upgrade(key: String) -> void:
 		_refresh_slot_visual(i)
 
 
-## Geç katılan oyuncular için tam tezgah fotoğrafı.
 func export_snapshot() -> Dictionary:
 	return {
 		"owner_id": owner_id,
@@ -722,6 +787,8 @@ func export_snapshot() -> Dictionary:
 		"upgrades": upgrades.duplicate(true),
 		"bell_boost": bell_boost,
 		"bell_cd": bell_cd,
+		"has_radio": has_radio,
+		"radio_playing": radio_playing,
 	}
 
 
@@ -738,6 +805,7 @@ func apply_snapshot(d: Dictionary) -> void:
 			_refresh_slot_visual(i)
 	bell_boost = float(d.get("bell_boost", 0.0))
 	bell_cd = float(d.get("bell_cd", 0.0))
+	rpc_set_stall_radio(bool(d.get("has_radio", false)), bool(d.get("radio_playing", false)))
 
 
 func _all_stalls() -> Array:
@@ -749,7 +817,6 @@ func _active_event_item() -> String:
 	return str(w.get_meta("event_item", "")) if w else ""
 
 
-## Bir ürün için pazardaki adil referans fiyatı (aktif kıtlık/talep olayı varsa %40 artar).
 static func fair_price(item_id: String, all_stalls: Array, event_item := "") -> float:
 	var base: float = float(ITEMS.get(item_id, {"base": 10})["base"])
 	if event_item != "" and item_id == event_item:
@@ -764,7 +831,6 @@ static func fair_price(item_id: String, all_stalls: Array, event_item := "") -> 
 	return lerpf(base, market_avg, 0.55)
 
 
-## Pazardaki tüm tezgahlara göre göreceli fiyat cazibesi (0.04 .. 1.30).
 static func relative_price_score(item_id: String, price: int, all_stalls: Array, event_item := "") -> float:
 	var ref := fair_price(item_id, all_stalls, event_item)
 	var ratio := float(price) / maxf(ref, 1.0)

@@ -1,15 +1,17 @@
 extends Node3D
-## Menü, lobi, Pazar Günü döngüsü, Toptancı ekonomisi, rastgele olaylar, Zabıta,
-## Tezgah Geliştirme mağazası, Skor Tablosu, Gün Sonu özeti ve tam multiplayer senkronu.
+## Menü (TEK OYNA solo + çoklu lobi), Pazar Günü, sürüşlü Ford Transit Toptancı, iki kapılı sakin NPC + kalabalık dalgaları,
+## P Pazarcı Dükkanı (Sigara, Puro, Megafon, Bıçak, Radyo + Tezgah Geliştirmeleri), Envanter Hotbar (1-6) ve koşma hız çizgileri.
 
 const PlayerScript := preload("res://player.gd")
 const BazaarScript := preload("res://bazaar.gd")
 const StallScript := preload("res://stall.gd")
 const CustomerScript := preload("res://customer.gd")
 const InspectorScript := preload("res://inspector.gd")
+const WholesalerScript := preload("res://wholesaler.gd")
 const Produce := preload("res://produce.gd")
+const Items := preload("res://items.gd")
 
-const DAY_DURATION := 300.0 # 5 dakikalık Pazar Günü (08:00 -> 21:30)
+const DAY_DURATION := 300.0
 const GOLD := Color(1.0, 0.74, 0.3)
 const INK := Color(0.09, 0.06, 0.05)
 
@@ -46,16 +48,20 @@ var crosshair: ColorRect
 var interact_lbl: Label
 var ingame_box: VBoxContainer
 
-# Yeni HUD & modal paneller
+# HUD & Modallar
+var speed_lines: Control
+var hotbar_wrap: HBoxContainer
+var hotbar_slots: Array = [] # [[PanelContainer, Label, Label, StyleBoxFlat], ...]
 var day_hud: PanelContainer
 var day_lbl: Label
 var day_bar: ColorRect
 var event_banner: PanelContainer
 var event_lbl: Label
 var toast_box: VBoxContainer
-var upgrade_wrap: ColorRect
-var upgrade_rows: Dictionary = {} # key -> [Button, Label]
-var upgrade_wallet_lbl: Label
+var shop_wrap: ColorRect
+var shop_wallet_lbl: Label
+var shop_item_btns: Dictionary = {}
+var upgrade_rows: Dictionary = {}
 var scoreboard_wrap: ColorRect
 var scoreboard_list: VBoxContainer
 var summary_wrap: ColorRect
@@ -65,15 +71,18 @@ var next_day_btn: Button
 
 var world: Node3D
 var bazaar_node: Node3D
+var wholesaler_node: Node3D
 var players: Node3D
 var stalls: Node3D
 var customers: Node3D
-var _stall_spots := {} # peer_id -> spot_idx (0..7)
+var _stall_spots := {}
 var _cust_seq := 0
-var _cust_cd := 1.5
+var _cust_cd := 2.2
+var _crowd_timer := 0.0 # >0 iken kalabalık dalgası!
+var _next_crowd_cd := 48.0
 var _price_ui_cd := 0.0
 
-# Gün ve ekonomi durumu (Host otoritesi)
+# Gün ve ekonomi durumu
 var day_num := 1
 var day_time := 0.0
 var day_ended := false
@@ -82,9 +91,8 @@ var deal_item := "domates"
 var active_event_item := ""
 var active_event_title := ""
 var event_timer := 0.0
-var next_event_cd := 38.0
-var next_zabita_cd := 62.0
-var next_price_shift_cd := 75.0
+var next_event_cd := 40.0
+var next_zabita_cd := 68.0
 var rush_announced := false
 var _day_sync_t := 0.0
 
@@ -130,35 +138,39 @@ func _ready() -> void:
 		get_tree().quit()
 		return
 	if "--selftest" in args:
-		await get_tree().create_timer(1.4).timeout
+		await get_tree().create_timer(1.2).timeout
 		if DisplayServer.get_name() != "headless":
 			get_viewport().get_texture().get_image().save_png(OS.get_user_data_dir() + "/selftest_menu.png")
-		Net.host_local()
-		_on_start()
-		await get_tree().create_timer(1.4).timeout
-		# Tezgahı ürün ve yükseltmelerle doldurup gerçekçi görünüm test et
+		_start_solo()
+		await get_tree().create_timer(1.2).timeout
 		var st1 := stalls.get_node_or_null("Stall_1")
 		if st1:
 			st1.rpc_sync_slot(0, "domates", 8, 10)
 			st1.rpc_sync_slot(1, "karpuz", 5, 26)
 			st1.rpc_sync_slot(2, "muz", 7, 19)
 			st1.rpc_sync_slot(3, "patlican", 6, 17)
-			st1.rpc_apply_upgrade("lights")
-			st1.rpc_apply_upgrade("bell")
-		day_time = DAY_DURATION * 0.35 # parlak öğle
-		if bazaar_node:
-			bazaar_node.set_day_progress(0.35)
-		await get_tree().create_timer(0.6).timeout
-		if DisplayServer.get_name() != "headless":
-			get_viewport().get_texture().get_image().save_png(OS.get_user_data_dir() + "/selftest_game.png")
-		# Gün batımı + yanan fenerler + tezgah ışıkları + Toptancı Kamyonu önizlemesi
-		day_time = DAY_DURATION * 0.82
-		if bazaar_node:
-			bazaar_node.set_day_progress(0.82)
+			st1.rpc_set_stall_radio(true, true)
 		var me1 := players.get_node_or_null("1")
 		if me1:
-			me1.global_position = Vector3(-4.5, 0.2, 1.5)
-			me1.look_yaw = 1.35 # Batıdaki Toptancı Kamyonu ve çeşmeye bak
+			me1.select_slot(0) # elinde yanan sigara!
+		if wholesaler_node:
+			wholesaler_node.position = Vector3(0.0, 0.0, WholesalerScript.PARK_Z)
+			wholesaler_node.rpc_state_changed(WholesalerScript.State.PARKED, 48.0)
+		# Teyze pop-up balonu + tezgah + Ford Transit görünümü
+		rpc_spawn_customer("PreviewTeyze", 7, Vector3(-3.4, 0, -5.2), Vector3(0, 0, 20), {"domates": 2, "karpuz": 1}, CustomerScript.Archetype.BARGAINER)
+		day_time = DAY_DURATION * 0.36
+		if bazaar_node:
+			bazaar_node.set_day_progress(0.36)
+		await get_tree().create_timer(0.7).timeout
+		if DisplayServer.get_name() != "headless":
+			get_viewport().get_texture().get_image().save_png(OS.get_user_data_dir() + "/selftest_game.png")
+		# Akşam Pazarı + Ford Transit "GARDAŞLAR SEBZE MEYVE" + Teyze görünümü
+		day_time = DAY_DURATION * 0.80
+		if bazaar_node:
+			bazaar_node.set_day_progress(0.80)
+		if me1:
+			me1.global_position = Vector3(-3.2, 0.2, -5.5)
+			me1.look_yaw = -2.55 # Ford Transit'e ve arka pankartına + sokağa bak!
 			me1.look_pitch = -0.05
 		await get_tree().create_timer(0.6).timeout
 		if DisplayServer.get_name() != "headless":
@@ -172,7 +184,7 @@ func _setup_input() -> void:
 		"fwd": KEY_W, "back": KEY_S, "left": KEY_A, "right": KEY_D,
 		"jump": KEY_SPACE, "run": KEY_SHIFT, "mic_mute": KEY_M,
 		"interact": KEY_E, "throw_crate": KEY_Q, "price_down": KEY_Z, "price_up": KEY_X, "shout": KEY_B,
-		"refuse_offer": KEY_R, "upgrade_shop": KEY_U, "ring_bell": KEY_F, "scoreboard": KEY_TAB,
+		"refuse_offer": KEY_R, "upgrade_shop": KEY_U, "open_shop": KEY_P, "ring_bell": KEY_F, "scoreboard": KEY_TAB,
 	}
 	for a in keys:
 		if not InputMap.has_action(a):
@@ -219,7 +231,7 @@ func _make_theme() -> Theme:
 	t.set_color("font_disabled_color", "Button", Color(0.55, 0.5, 0.45))
 	for k in ["normal", "hover", "pressed"]:
 		t.set_stylebox(k, "OptionButton", t.get_stylebox(k, "Button"))
-	var p := _sb(Color(0.08, 0.05, 0.04, 0.90), 16, 22)
+	var p := _sb(Color(0.08, 0.05, 0.04, 0.92), 16, 20)
 	p.set_border_width_all(2)
 	p.border_color = Color(GOLD, 0.55)
 	t.set_stylebox("panel", "PanelContainer", p)
@@ -234,7 +246,7 @@ func _make_theme() -> Theme:
 		t.set_stylebox(k, "BigButton", bn)
 	for k in ["hover", "pressed"]:
 		t.set_stylebox(k, "BigButton", bh)
-	t.set_font_size("font_size", "BigButton", 30)
+	t.set_font_size("font_size", "BigButton", 29)
 	t.set_font("font", "BigButton", _font(900))
 	t.set_constant("outline_size", "BigButton", 6)
 	t.set_color("font_outline_color", "BigButton", Color(0, 0, 0, 0.6))
@@ -275,7 +287,7 @@ func _btn(parent: Node, text: String, cb: Callable, h := 42) -> Button:
 
 
 func _big(parent: Node, text: String, cb: Callable) -> Button:
-	var b := _btn(parent, text, cb, 58)
+	var b := _btn(parent, text, cb, 54)
 	b.theme_type_variation = "BigButton"
 	b.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	return b
@@ -296,103 +308,37 @@ func _page(n: String) -> VBoxContainer:
 	pages[n] = c
 	var v := VBoxContainer.new()
 	v.set_anchors_preset(Control.PRESET_LEFT_WIDE)
-	v.offset_left = 80; v.offset_right = 80 + 460
+	v.offset_left = 80; v.offset_right = 80 + 470
 	v.alignment = BoxContainer.ALIGNMENT_CENTER
 	v.add_theme_constant_override("separation", 6)
 	c.add_child(v)
 	return v
 
 
-func _build_ui() -> void:
-	var layer := CanvasLayer.new()
-	add_child(layer)
-	var theme := _make_theme()
-	ui = Control.new()
-	ui.set_anchors_preset(Control.PRESET_FULL_RECT)
-	ui.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	ui.theme = theme
-	layer.add_child(ui)
-	var shade := TextureRect.new()
-	var grad := Gradient.new()
-	grad.set_color(0, Color(0.06, 0.03, 0.02, 0.92))
-	grad.set_color(1, Color(0.06, 0.03, 0.02, 0.0))
-	grad.add_point(0.45, Color(0.06, 0.03, 0.02, 0.55))
-	var gt := GradientTexture2D.new()
-	gt.gradient = grad
-	shade.texture = gt
-	shade.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	shade.stretch_mode = TextureRect.STRETCH_SCALE
-	shade.set_anchors_preset(Control.PRESET_FULL_RECT)
-	shade.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	ui.add_child(shade)
+## Koşarken ekran kenarlarında beliren dinamik hız çizgileri efekti.
+class SpeedLines extends Control:
+	var intensity := 0.0
+	var _t := 0.0
 
-	# Ana menü
-	var mv := _page("main")
-	_logo(mv, "BAZAR", 120)
-	_lbl(mv, "Arkadaşlarınla pazarda buluş, bağır, pazarlık yap, kazan!", 19, 0.85)
-	_gap(mv, 30)
-	_big(mv, "OYNA", _show_page.bind("lobby"))
-	_big(mv, "AYARLAR", _open_pause)
-	_big(mv, "ÇIKIŞ", get_tree().quit)
-	_gap(mv, 24)
-	var st := _lbl(mv, ("●  Steam: " + Net.my_name()) if Net.steam_ok else "●  Steam bağlı değil (Steam açık mı?)", 15, 0.8)
-	st.add_theme_color_override("font_color", Color(0.55, 1.0, 0.55) if Net.steam_ok else Color(1.0, 0.6, 0.5))
+	func _process(dt: float) -> void:
+		if intensity > 0.01:
+			_t += dt * 18.0
+			queue_redraw()
 
-	# Lobi
-	var lv := _page("lobby")
-	_logo(lv, "LOBİ", 72)
-	_lbl(lv, "Lobi kur, arkadaşlarını çağır, pazarı aç.", 17, 0.75)
-	_gap(lv, 10)
-	var panel := PanelContainer.new()
-	lv.add_child(panel)
-	var v := VBoxContainer.new()
-	v.add_theme_constant_override("separation", 9)
-	panel.add_child(v)
-	host_btn = _btn(v, "Steam Lobisi Kur", Net.host_steam)
-	_btn(v, "Arkadaşlar  (davet et / lobisine katıl)", _show_friends)
-	var scroll := ScrollContainer.new()
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	friends_box = VBoxContainer.new()
-	friends_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.add_child(friends_box)
-	v.add_child(scroll)
-	members = _lbl(v, "", 16)
-	start_btn = _btn(v, "▶  Pazarı Aç", _on_start, 52)
-	start_btn.add_theme_font_size_override("font_size", 22)
-	_btn(v, "Lobiden Çık", Net.leave)
-	var test := HBoxContainer.new()
-	test.add_theme_constant_override("separation", 8)
-	v.add_child(test)
-	var tl := _lbl(test, "Tek PC testi:", 14, 0.6)
-	tl.autowrap_mode = TextServer.AUTOWRAP_OFF
-	for b in [_btn(test, "Yerel Host", Net.host_local, 34), _btn(test, "Yerel Katıl", Net.join_local, 34)]:
-		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_gap(lv, 6)
-	_btn(lv, "◀  Geri", _show_page.bind("main"))
-
-	info = _lbl(ui, "", 15, 0.85)
-	info.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
-	info.offset_left = 80; info.offset_right = -230; info.offset_top = -60; info.offset_bottom = -24
-	var ver := _lbl(ui, "sürüm " + Updater.version(), 14, 0.55)
-	ver.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_RIGHT)
-	ver.offset_left = -200; ver.offset_right = -24; ver.offset_top = -50; ver.offset_bottom = -24
-	ver.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	invite_box = VBoxContainer.new()
-	invite_box.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	invite_box.offset_left = -380; invite_box.offset_right = -30; invite_box.offset_top = 30
-	ui.add_child(invite_box)
-
-	hint = _lbl(layer, "WASD yürü • E kasa al/sat • Sol Tık diz • Q fırlat • Tekerlek/Z-X fiyat • B/Mik bağır • R olmaz • U geliştir • F zil • Tab skor • ESC", 13, 0.8)
-	hint.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
-	hint.offset_left = 16; hint.offset_right = -16; hint.offset_top = -34; hint.offset_bottom = -10
-	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	hint.hide()
-	_build_voice_hud(layer, theme)
-	_build_market_hud(layer, theme)
-	_build_upgrade_panel(layer, theme)
-	_build_scoreboard(layer, theme)
-	_build_summary(layer, theme)
-	_build_pause(layer, theme)
+	func _draw() -> void:
+		if intensity <= 0.02:
+			return
+		var center := size * 0.5
+		var max_r := center.length()
+		var count := 28
+		for i in count:
+			var a := float(i) * TAU / float(count) + sin(_t + float(i) * 1.9) * 0.018
+			var jitter := fmod(float(i) * 0.37 + _t * 0.45, 1.0)
+			var r0 := max_r * lerpf(0.62, 0.80, jitter)
+			var r1 := max_r * 1.08
+			var dir := Vector2(cos(a), sin(a))
+			var col := Color(1.0, 0.98, 0.92, intensity * lerpf(0.12, 0.34, 1.0 - jitter))
+			draw_line(center + dir * r0, center + dir * r1, col, 1.8 + intensity * 1.4, true)
 
 
 class MicIcon extends Control:
@@ -412,6 +358,171 @@ class MicIcon extends Control:
 		draw_line(c + Vector2(-7.0, 16.0), c + Vector2(7.0, 16.0), col, 2.5, true)
 		if muted:
 			draw_line(c + Vector2(-14, -14), c + Vector2(14, 14), Color(1.0, 0.28, 0.22), 3.2, true)
+
+
+func _build_ui() -> void:
+	var layer := CanvasLayer.new()
+	add_child(layer)
+	var theme := _make_theme()
+
+	# Koşma hız çizgileri (tüm HUD'un arkasında)
+	speed_lines = SpeedLines.new()
+	speed_lines.set_anchors_preset(Control.PRESET_FULL_RECT)
+	speed_lines.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	layer.add_child(speed_lines)
+
+	ui = Control.new()
+	ui.set_anchors_preset(Control.PRESET_FULL_RECT)
+	ui.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ui.theme = theme
+	layer.add_child(ui)
+	var shade := TextureRect.new()
+	var grad := Gradient.new()
+	grad.set_color(0, Color(0.06, 0.03, 0.02, 0.92))
+	grad.set_color(1, Color(0.06, 0.03, 0.02, 0.0))
+	grad.add_point(0.45, Color(0.06, 0.03, 0.02, 0.55))
+	var gt := GradientTexture2D.new()
+	gt.gradient = grad
+	shade.texture = gt
+	shade.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	shade.stretch_mode = TextureRect.STRETCH_SCALE
+	shade.set_anchors_preset(Control.PRESET_FULL_RECT)
+	shade.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ui.add_child(shade)
+
+	# Ana menü: TEK OYNA + ÇOKLU OYNA (Lobi)
+	var mv := _page("main")
+	_logo(mv, "BAZAR", 116)
+	_lbl(mv, "Gerçek Türk semt pazarı: bağır, teyzelerle pazarlık yap, kazan!", 18, 0.85)
+	_gap(mv, 22)
+	_big(mv, "TEK OYNA  (Solo)", _start_solo)
+	_big(mv, "ÇOKLU OYNA  (Lobi)", _show_page.bind("lobby"))
+	_big(mv, "AYARLAR", _open_pause)
+	_big(mv, "ÇIKIŞ", get_tree().quit)
+	_gap(mv, 20)
+	var st := _lbl(mv, ("●  Steam: " + Net.my_name()) if Net.steam_ok else "●  Steam bağlı değil (Tek Oyna veya Yerel Host ile oynayabilirsin)", 15, 0.82)
+	st.add_theme_color_override("font_color", Color(0.55, 1.0, 0.55) if Net.steam_ok else Color(1.0, 0.72, 0.45))
+
+	# Lobi
+	var lv := _page("lobby")
+	_logo(lv, "LOBİ", 68)
+	_lbl(lv, "Lobi kur, arkadaşlarını çağır, pazarı aç.", 17, 0.75)
+	_gap(lv, 8)
+	var panel := PanelContainer.new()
+	lv.add_child(panel)
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 8)
+	panel.add_child(v)
+	host_btn = _btn(v, "Steam Lobisi Kur", Net.host_steam)
+	_btn(v, "Arkadaşlar  (davet et / lobisine katıl)", _show_friends)
+	var scroll := ScrollContainer.new()
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	friends_box = VBoxContainer.new()
+	friends_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(friends_box)
+	v.add_child(scroll)
+	members = _lbl(v, "", 16)
+	start_btn = _btn(v, "▶  Pazarı Aç", _on_start, 48)
+	start_btn.add_theme_font_size_override("font_size", 21)
+	_btn(v, "▶  Tek Başına Hızlı Başla (Solo)", _start_solo, 40)
+	_btn(v, "Lobiden Çık", Net.leave, 38)
+	var test := HBoxContainer.new()
+	test.add_theme_constant_override("separation", 8)
+	v.add_child(test)
+	var tl := _lbl(test, "Tek PC testi:", 14, 0.6)
+	tl.autowrap_mode = TextServer.AUTOWRAP_OFF
+	for b in [_btn(test, "Yerel Host", Net.host_local, 34), _btn(test, "Yerel Katıl", Net.join_local, 34)]:
+		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_gap(lv, 4)
+	_btn(lv, "◀  Geri", _show_page.bind("main"))
+
+	info = _lbl(ui, "", 15, 0.85)
+	info.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
+	info.offset_left = 80; info.offset_right = -230; info.offset_top = -60; info.offset_bottom = -24
+	var ver := _lbl(ui, "sürüm " + Updater.version(), 14, 0.55)
+	ver.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_RIGHT)
+	ver.offset_left = -200; ver.offset_right = -24; ver.offset_top = -50; ver.offset_bottom = -24
+	ver.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	invite_box = VBoxContainer.new()
+	invite_box.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	invite_box.offset_left = -380; invite_box.offset_right = -30; invite_box.offset_top = 30
+	ui.add_child(invite_box)
+
+	hint = _lbl(layer, "WASD yürü • Shift koş • 1-6 Envanter • P Dükkan • E kasa/sat/korna • Sol Tık diz/kullan • Q fırlat • Tekerlek/Z-X fiyat • B/Mik bağır • R olmaz • Tab skor", 12, 0.82)
+	hint.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
+	hint.offset_left = 12; hint.offset_right = -12; hint.offset_top = -28; hint.offset_bottom = -6
+	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hint.hide()
+
+	_build_hotbar(layer, theme)
+	_build_voice_hud(layer, theme)
+	_build_market_hud(layer, theme)
+	_build_shop_panel(layer, theme)
+	_build_scoreboard(layer, theme)
+	_build_summary(layer, theme)
+	_build_pause(layer, theme)
+
+
+## Alt orta 6 yuvalı kişisel envanter çubuğu (1-6; meyve kasaları buraya alınmaz!).
+func _build_hotbar(layer: CanvasLayer, theme: Theme) -> void:
+	hotbar_wrap = HBoxContainer.new()
+	hotbar_wrap.theme = theme
+	hotbar_wrap.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	hotbar_wrap.offset_left = -270; hotbar_wrap.offset_right = 270
+	hotbar_wrap.offset_top = -104; hotbar_wrap.offset_bottom = -36
+	hotbar_wrap.alignment = BoxContainer.ALIGNMENT_CENTER
+	hotbar_wrap.add_theme_constant_override("separation", 8)
+	hotbar_wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	layer.add_child(hotbar_wrap)
+	hotbar_slots.clear()
+	for i in PlayerScript.INV_SIZE:
+		var p := PanelContainer.new()
+		p.custom_minimum_size = Vector2(82, 64)
+		var sb := _sb(Color(0.08, 0.05, 0.04, 0.82), 10, 6)
+		sb.set_border_width_all(2)
+		sb.border_color = Color(GOLD, 0.32)
+		p.add_theme_stylebox_override("panel", sb)
+		p.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		hotbar_wrap.add_child(p)
+		var vb := VBoxContainer.new()
+		vb.alignment = BoxContainer.ALIGNMENT_CENTER
+		vb.add_theme_constant_override("separation", 0)
+		p.add_child(vb)
+		var num := _lbl(vb, str(i + 1), 11, 0.6)
+		var main_l := _lbl(vb, "—", 13, 0.95)
+		main_l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		main_l.autowrap_mode = TextServer.AUTOWRAP_OFF
+		hotbar_slots.append([p, num, main_l, sb])
+	hotbar_wrap.hide()
+
+
+func _refresh_hotbar() -> void:
+	if players == null or hotbar_slots.is_empty():
+		return
+	var my_id := multiplayer.get_unique_id() if Net.online() else 1
+	var me := players.get_node_or_null(str(my_id))
+	if me == null:
+		return
+	for i in hotbar_slots.size():
+		var sl: Dictionary = me.inventory[i] if i < me.inventory.size() else {}
+		var row: Array = hotbar_slots[i]
+		var num_l: Label = row[1]
+		var main_l: Label = row[2]
+		var sb: StyleBoxFlat = row[3]
+		var active: bool = (int(me.active_slot) == i and not bool(me.held_crate))
+		sb.border_color = Color(1.0, 0.88, 0.25) if active else Color(GOLD, 0.28)
+		sb.bg_color = Color(0.28, 0.16, 0.08, 0.94) if active else Color(0.08, 0.05, 0.04, 0.80)
+		if sl.is_empty():
+			num_l.text = str(i + 1)
+			main_l.text = "—"
+			main_l.modulate.a = 0.4
+		else:
+			var iid := str(sl.get("id", ""))
+			var info_i: Dictionary = Items.CATALOG.get(iid, {"icon": "?", "short": iid, "consumable": false})
+			var cnt := int(sl.get("uses", 1))
+			num_l.text = "%d  %s" % [i + 1, ("x%d" % cnt) if bool(info_i["consumable"]) else ""]
+			main_l.text = "%s %s" % [str(info_i["icon"]), str(info_i["short"])]
+			main_l.modulate.a = 1.0
 
 
 func _build_voice_hud(layer: CanvasLayer, theme: Theme) -> void:
@@ -447,7 +558,6 @@ func _build_voice_hud(layer: CanvasLayer, theme: Theme) -> void:
 
 
 func _build_market_hud(layer: CanvasLayer, theme: Theme) -> void:
-	# Üst orta: Gün saati ve ilerleme çubuğu
 	day_hud = PanelContainer.new()
 	day_hud.theme = theme
 	var dbox := _sb(Color(0.08, 0.05, 0.04, 0.84), 14, 10)
@@ -455,19 +565,19 @@ func _build_market_hud(layer: CanvasLayer, theme: Theme) -> void:
 	dbox.border_color = Color(GOLD, 0.65)
 	day_hud.add_theme_stylebox_override("panel", dbox)
 	day_hud.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	day_hud.offset_left = -175; day_hud.offset_right = 175
-	day_hud.offset_top = 16; day_hud.offset_bottom = 74
+	day_hud.offset_left = -185; day_hud.offset_right = 185
+	day_hud.offset_top = 14; day_hud.offset_bottom = 72
 	day_hud.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	layer.add_child(day_hud)
 	var dv := VBoxContainer.new()
 	dv.add_theme_constant_override("separation", 5)
 	day_hud.add_child(dv)
-	day_lbl = _lbl(dv, "GÜN 1  •  ☀️ 08:00  •  SABAH", 17, 1.0)
+	day_lbl = _lbl(dv, "GÜN 1  •  08:00  •  SABAH", 17, 1.0)
 	day_lbl.add_theme_font_override("font", _font(800))
 	day_lbl.add_theme_color_override("font_color", Color(1.0, 0.95, 0.82))
 	day_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	var bar_bg := ColorRect.new()
-	bar_bg.custom_minimum_size = Vector2(310, 7)
+	bar_bg.custom_minimum_size = Vector2(330, 7)
 	bar_bg.color = Color(0.22, 0.16, 0.12, 0.92)
 	dv.add_child(bar_bg)
 	day_bar = ColorRect.new()
@@ -476,7 +586,6 @@ func _build_market_hud(layer: CanvasLayer, theme: Theme) -> void:
 	bar_bg.add_child(day_bar)
 	day_hud.hide()
 
-	# Üst orta altı: Aktif Pazar Olayı / Rush Hour şeridi
 	event_banner = PanelContainer.new()
 	event_banner.theme = theme
 	var ebox := _sb(Color(0.56, 0.18, 0.08, 0.92), 12, 8)
@@ -484,8 +593,8 @@ func _build_market_hud(layer: CanvasLayer, theme: Theme) -> void:
 	ebox.border_color = Color(1.0, 0.84, 0.3)
 	event_banner.add_theme_stylebox_override("panel", ebox)
 	event_banner.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	event_banner.offset_left = -255; event_banner.offset_right = 255
-	event_banner.offset_top = 80; event_banner.offset_bottom = 116
+	event_banner.offset_left = -265; event_banner.offset_right = 265
+	event_banner.offset_top = 78; event_banner.offset_bottom = 114
 	event_banner.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	layer.add_child(event_banner)
 	event_lbl = _lbl(event_banner, "", 15, 1.0)
@@ -493,16 +602,14 @@ func _build_market_hud(layer: CanvasLayer, theme: Theme) -> void:
 	event_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	event_banner.hide()
 
-	# Sol üst: Bildirim akışı (Toast)
 	toast_box = VBoxContainer.new()
 	toast_box.set_anchors_preset(Control.PRESET_TOP_LEFT)
-	toast_box.offset_left = 20; toast_box.offset_right = 430
-	toast_box.offset_top = 20; toast_box.offset_bottom = 260
+	toast_box.offset_left = 18; toast_box.offset_right = 440
+	toast_box.offset_top = 18; toast_box.offset_bottom = 260
 	toast_box.add_theme_constant_override("separation", 6)
 	toast_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	layer.add_child(toast_box)
 
-	# Sağ üst: Cüzdan
 	money_hud = PanelContainer.new()
 	money_hud.theme = theme
 	var box := _sb(Color(0.08, 0.05, 0.04, 0.85), 14, 12)
@@ -511,7 +618,7 @@ func _build_market_hud(layer: CanvasLayer, theme: Theme) -> void:
 	money_hud.add_theme_stylebox_override("panel", box)
 	money_hud.set_anchors_preset(Control.PRESET_TOP_RIGHT)
 	money_hud.offset_left = -220; money_hud.offset_right = -20
-	money_hud.offset_top = 18; money_hud.offset_bottom = 72
+	money_hud.offset_top = 16; money_hud.offset_bottom = 70
 	money_hud.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	layer.add_child(money_hud)
 	money_lbl = _lbl(money_hud, "120 TL", 26, 1.0)
@@ -539,9 +646,9 @@ func _build_market_hud(layer: CanvasLayer, theme: Theme) -> void:
 	layer.add_child(crosshair)
 	crosshair.hide()
 
-	interact_lbl = _lbl(layer, "", 18, 0.95)
+	interact_lbl = _lbl(layer, "", 18, 0.96)
 	interact_lbl.set_anchors_preset(Control.PRESET_CENTER)
-	interact_lbl.offset_left = -360; interact_lbl.offset_right = 360
+	interact_lbl.offset_left = -380; interact_lbl.offset_right = 380
 	interact_lbl.offset_top = 24; interact_lbl.offset_bottom = 60
 	interact_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	interact_lbl.add_theme_color_override("font_color", Color(1.0, 0.95, 0.78))
@@ -549,51 +656,92 @@ func _build_market_hud(layer: CanvasLayer, theme: Theme) -> void:
 	interact_lbl.hide()
 
 
-## Tezgah Geliştirmeleri (U veya tezgah panosu) modal ekranı.
-func _build_upgrade_panel(layer: CanvasLayer, theme: Theme) -> void:
-	upgrade_wrap = ColorRect.new()
-	upgrade_wrap.color = Color(0, 0, 0, 0.58)
-	upgrade_wrap.set_anchors_preset(Control.PRESET_FULL_RECT)
-	upgrade_wrap.theme = theme
-	layer.add_child(upgrade_wrap)
+## P tuşu ile açılan PAZARCI DÜKKANI: Sol sütun Kişisel Eşyalar (Envanter), Sağ sütun Tezgah Geliştirmeleri.
+func _build_shop_panel(layer: CanvasLayer, theme: Theme) -> void:
+	shop_wrap = ColorRect.new()
+	shop_wrap.color = Color(0, 0, 0, 0.62)
+	shop_wrap.set_anchors_preset(Control.PRESET_FULL_RECT)
+	shop_wrap.theme = theme
+	layer.add_child(shop_wrap)
 	var c := CenterContainer.new()
 	c.set_anchors_preset(Control.PRESET_FULL_RECT)
-	upgrade_wrap.add_child(c)
+	shop_wrap.add_child(c)
 	var panel := PanelContainer.new()
-	panel.custom_minimum_size.x = 580
+	panel.custom_minimum_size.x = 1040
 	c.add_child(panel)
-	var v := VBoxContainer.new()
-	v.add_theme_constant_override("separation", 12)
-	panel.add_child(v)
-	_logo(v, "TEZGAH GELİŞTİRMELERİ", 34).horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	upgrade_wallet_lbl = _lbl(v, "Cüzdan: 120 TL", 18, 1.0)
-	upgrade_wallet_lbl.add_theme_color_override("font_color", GOLD)
-	upgrade_wallet_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	for key in StallScript.UPGRADE_ORDER:
-		var info_u: Dictionary = StallScript.UPGRADES[key]
-		var row_p := PanelContainer.new()
-		var rsb := _sb(Color(0.14, 0.09, 0.07, 0.95), 10, 12)
+	var root_v := VBoxContainer.new()
+	root_v.add_theme_constant_override("separation", 10)
+	panel.add_child(root_v)
+
+	_logo(root_v, "PAZARCI DÜKKANI", 34).horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	shop_wallet_lbl = _lbl(root_v, "Cüzdanın: 120 TL", 18, 1.0)
+	shop_wallet_lbl.add_theme_color_override("font_color", GOLD)
+	shop_wallet_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+
+	var cols := HBoxContainer.new()
+	cols.add_theme_constant_override("separation", 18)
+	root_v.add_child(cols)
+
+	# Sol Sütun: Kişisel Envanter Eşyaları
+	var left_v := VBoxContainer.new()
+	left_v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	left_v.add_theme_constant_override("separation", 8)
+	cols.add_child(left_v)
+	var lh := _lbl(left_v, "🎒 KİŞİSEL EŞYALAR (Envanter 1–6)", 19, 1.0)
+	lh.add_theme_color_override("font_color", Color(0.62, 0.92, 1.0))
+	for iid in Items.ORDER:
+		var info_i: Dictionary = Items.CATALOG[iid]
+		var rp := PanelContainer.new()
+		var rsb := _sb(Color(0.14, 0.09, 0.07, 0.95), 10, 10)
 		rsb.set_border_width_all(1)
 		rsb.border_color = Color(GOLD, 0.3)
-		row_p.add_theme_stylebox_override("panel", rsb)
-		v.add_child(row_p)
+		rp.add_theme_stylebox_override("panel", rsb)
+		left_v.add_child(rp)
 		var hb := HBoxContainer.new()
-		hb.add_theme_constant_override("separation", 12)
-		row_p.add_child(hb)
+		hb.add_theme_constant_override("separation", 10)
+		rp.add_child(hb)
 		var tx := VBoxContainer.new()
 		tx.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		hb.add_child(tx)
-		var nl := _lbl(tx, str(info_u["name"]), 19, 1.0)
+		var nl := _lbl(tx, "%s %s" % [str(info_i["icon"]), str(info_i["name"])], 17, 1.0)
 		nl.add_theme_color_override("font_color", Color(1.0, 0.94, 0.78))
-		var dl := _lbl(tx, str(info_u["desc"]), 14, 0.78)
-		var btn := _btn(hb, "%d TL" % int(info_u["cost"]), _on_buy_upgrade.bind(key), 44)
-		btn.custom_minimum_size.x = 128
+		_lbl(tx, str(info_i["desc"]), 13, 0.78)
+		var btn := _btn(hb, "%d TL" % int(info_i["cost"]), _on_buy_item.bind(iid), 40)
+		btn.custom_minimum_size.x = 112
+		shop_item_btns[iid] = btn
+
+	# Sağ Sütun: Tezgah Geliştirmeleri
+	var right_v := VBoxContainer.new()
+	right_v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	right_v.add_theme_constant_override("separation", 8)
+	cols.add_child(right_v)
+	var rh := _lbl(right_v, "⭐ TEZGAH GELİŞTİRMELERİ", 19, 1.0)
+	rh.add_theme_color_override("font_color", GOLD)
+	for key in StallScript.UPGRADE_ORDER:
+		var info_u: Dictionary = StallScript.UPGRADES[key]
+		var rp := PanelContainer.new()
+		var rsb := _sb(Color(0.14, 0.09, 0.07, 0.95), 10, 10)
+		rsb.set_border_width_all(1)
+		rsb.border_color = Color(GOLD, 0.3)
+		rp.add_theme_stylebox_override("panel", rsb)
+		right_v.add_child(rp)
+		var hb := HBoxContainer.new()
+		hb.add_theme_constant_override("separation", 10)
+		rp.add_child(hb)
+		var tx := VBoxContainer.new()
+		tx.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		hb.add_child(tx)
+		var nl := _lbl(tx, str(info_u["name"]), 17, 1.0)
+		nl.add_theme_color_override("font_color", Color(1.0, 0.94, 0.78))
+		var dl := _lbl(tx, str(info_u["desc"]), 13, 0.78)
+		var btn := _btn(hb, "%d TL" % int(info_u["cost"]), _on_buy_upgrade.bind(key), 40)
+		btn.custom_minimum_size.x = 112
 		upgrade_rows[key] = [btn, dl]
-	_btn(v, "Kapat  [U / ESC]", _close_upgrade_shop, 44)
-	upgrade_wrap.hide()
+
+	_btn(root_v, "Kapat  [P / ESC]", _close_shop, 42)
+	shop_wrap.hide()
 
 
-## Tab ile açılan canlı Esnaf Skor Tablosu.
 func _build_scoreboard(layer: CanvasLayer, theme: Theme) -> void:
 	scoreboard_wrap = ColorRect.new()
 	scoreboard_wrap.color = Color(0, 0, 0, 0.48)
@@ -619,7 +767,6 @@ func _build_scoreboard(layer: CanvasLayer, theme: Theme) -> void:
 	scoreboard_wrap.hide()
 
 
-## Gün sonu "Günün Esnafı" ödül ekranı.
 func _build_summary(layer: CanvasLayer, theme: Theme) -> void:
 	summary_wrap = ColorRect.new()
 	summary_wrap.color = Color(0.03, 0.02, 0.02, 0.74)
@@ -642,7 +789,7 @@ func _build_summary(layer: CanvasLayer, theme: Theme) -> void:
 	v.add_child(summary_list)
 	next_day_btn = _btn(v, "▶  Yeni Günü Başlat", _on_next_day_pressed, 52)
 	next_day_btn.add_theme_font_size_override("font_size", 22)
-	_btn(v, "Lobiye Dön", Net.leave, 40)
+	_btn(v, "Ana Menüye Dön", Net.leave, 40)
 	summary_wrap.hide()
 
 
@@ -680,7 +827,7 @@ func _build_pause(layer: CanvasLayer, theme: Theme) -> void:
 	ingame_box = VBoxContainer.new()
 	ingame_box.add_theme_constant_override("separation", 10)
 	v.add_child(ingame_box)
-	_btn(ingame_box, "Lobiye Dön (oyundan çık)", Net.leave)
+	_btn(ingame_box, "Ana Menüye / Lobiye Dön", Net.leave)
 	_btn(ingame_box, "Oyunu Kapat", get_tree().quit)
 	_btn(v, "Kapat", _close_pause, 46)
 	pause_wrap.hide()
@@ -715,7 +862,7 @@ func _on_money_earned(amount: int, total: int, tip: int) -> void:
 	money_pop.text = ("+%d TL (⭐+%d)" % [amount, tip]) if tip > 0 else ("+%d TL" % amount)
 	money_pop.add_theme_color_override("font_color", Color(0.45, 1.0, 0.55))
 	_animate_money_pop()
-	_refresh_upgrade_panel()
+	_refresh_shop_panel()
 
 
 func _on_money_spent(amount: int, total: int, reason: String) -> void:
@@ -726,7 +873,7 @@ func _on_money_spent(amount: int, total: int, reason: String) -> void:
 		_animate_money_pop()
 	if "Ceza" in reason:
 		show_toast("🚨 " + reason + " (-%d TL)" % amount, Color(1.0, 0.38, 0.34))
-	_refresh_upgrade_panel()
+	_refresh_shop_panel()
 
 
 func _animate_money_pop() -> void:
@@ -739,24 +886,24 @@ func _animate_money_pop() -> void:
 	tw.chain().tween_callback(money_pop.hide)
 
 
-func _toggle_upgrade_shop() -> void:
+func _toggle_shop() -> void:
 	if world == null or day_ended or pause_wrap.visible:
 		return
-	if upgrade_wrap.visible:
-		_close_upgrade_shop()
+	if shop_wrap.visible:
+		_close_shop()
 	else:
-		_refresh_upgrade_panel()
-		upgrade_wrap.show()
+		_refresh_shop_panel()
+		shop_wrap.show()
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 
-func _close_upgrade_shop() -> void:
-	upgrade_wrap.hide()
+func _close_shop() -> void:
+	shop_wrap.hide()
 	if world and not pause_wrap.visible and not day_ended:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 
-func _refresh_upgrade_panel() -> void:
+func _refresh_shop_panel() -> void:
 	if players == null or stalls == null:
 		return
 	var my_id := multiplayer.get_unique_id() if Net.online() else 1
@@ -764,7 +911,19 @@ func _refresh_upgrade_panel() -> void:
 	var st := stalls.get_node_or_null("Stall_%d" % my_id)
 	if me == null or st == null:
 		return
-	upgrade_wallet_lbl.text = "Cüzdanın: %d TL" % int(me.money)
+	shop_wallet_lbl.text = "Cüzdanın: %d TL" % int(me.money)
+	for iid in shop_item_btns:
+		var btn: Button = shop_item_btns[iid]
+		var info_i: Dictionary = Items.CATALOG[iid]
+		var cost: int = int(info_i["cost"])
+		var cons: bool = bool(info_i["consumable"])
+		var owned: bool = me.has_inventory_item(iid) or (iid == "radyo" and st.has_radio)
+		if not cons and owned:
+			btn.text = "✔ VAR"
+			btn.disabled = true
+		else:
+			btn.text = "%d TL" % cost
+			btn.disabled = int(me.money) < cost
 	for key in upgrade_rows:
 		var btn: Button = upgrade_rows[key][0]
 		var cost: int = int(StallScript.UPGRADES[key]["cost"])
@@ -774,6 +933,40 @@ func _refresh_upgrade_panel() -> void:
 		else:
 			btn.text = "%d TL" % cost
 			btn.disabled = int(me.money) < cost
+
+
+func _on_buy_item(item_id: String) -> void:
+	if Net.online():
+		rpc_request_buy_item.rpc_id(1, item_id)
+	else:
+		rpc_request_buy_item(item_id)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func rpc_request_buy_item(item_id: String) -> void:
+	if Net.online() and not multiplayer.is_server():
+		return
+	if not Items.CATALOG.has(item_id) or players == null or stalls == null:
+		return
+	var pid := multiplayer.get_remote_sender_id() if Net.online() else 1
+	if pid == 0:
+		pid = 1
+	var p := players.get_node_or_null(str(pid))
+	var st := stalls.get_node_or_null("Stall_%d" % pid)
+	if p == null or st == null:
+		return
+	var info_i: Dictionary = Items.CATALOG[item_id]
+	var cons: bool = bool(info_i["consumable"])
+	if not cons and (p.has_inventory_item(item_id) or (item_id == "radyo" and st.has_radio)):
+		return
+	var cost: int = int(info_i["cost"])
+	if int(p.money) < cost:
+		_notify_peer(pid, "Yetersiz bakiye! (%d TL gerekli)" % cost, Color(1.0, 0.45, 0.4))
+		return
+	p.spend_money(cost, str(info_i["name"]))
+	p.add_inventory_item_synced(item_id)
+	Sfx.play("upgrade", -4.0)
+	_notify_peer(pid, "%s %s envanterine eklendi!" % [str(info_i["icon"]), str(info_i["name"])], Color(0.55, 1.0, 0.62))
 
 
 func _on_buy_upgrade(key: String) -> void:
@@ -805,6 +998,48 @@ func rpc_request_buy_upgrade(key: String) -> void:
 	_broadcast_toast("⭐ %s tezgahına %s ekledi!" % [Net.display_name(pid), str(StallScript.UPGRADES[key]["name"])], Color(0.58, 1.0, 0.65))
 
 
+## Meyve Bıçağı saldırısı -> Sunucu doğrular ve Zabıta anında saldırganın peşine koşar!
+func request_knife_attack(target_id: int) -> void:
+	if Net.online():
+		rpc_request_knife_attack.rpc_id(1, target_id)
+	else:
+		rpc_request_knife_attack(target_id)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func rpc_request_knife_attack(target_id: int) -> void:
+	if Net.online() and not multiplayer.is_server():
+		return
+	if players == null or world == null:
+		return
+	var attacker_id := multiplayer.get_remote_sender_id() if Net.online() else 1
+	if attacker_id == 0:
+		attacker_id = 1
+	if attacker_id == target_id:
+		return
+	var att := players.get_node_or_null(str(attacker_id)) as Node3D
+	var vic := players.get_node_or_null(str(target_id)) as Node3D
+	if att == null or vic == null or not att.has_inventory_item("bicak"):
+		return
+	if att.global_position.distance_to(vic.global_position) > 3.2:
+		return
+	var knock := (vic.global_position - att.global_position)
+	knock.y = 0.0
+	knock = knock.normalized() if knock.length_squared() > 0.01 else Vector3(1, 0, 0)
+	vic.apply_knife_hit_synced(knock)
+	_broadcast_toast("🔪 %s, %s'e meyve bıçağı çekti! 🚨 ZABITA KOŞUYOR!" % [Net.display_name(attacker_id), Net.display_name(target_id)], Color(1.0, 0.32, 0.26))
+	# Zabıta zaten sahnedeyse saldırgana yönlendir, yoksa hemen en yakın kapıdan koşarak gönder!
+	var existing_z := world.get_node_or_null("Zabita")
+	if existing_z:
+		existing_z.start_chase(attacker_id)
+	else:
+		var from_n := att.global_position.z < 0.0
+		if Net.online():
+			rpc_spawn_zabita.rpc(from_n, attacker_id)
+		else:
+			rpc_spawn_zabita(from_n, attacker_id)
+
+
 func _refresh_scoreboard_rows(target_box: VBoxContainer, show_crown: bool) -> void:
 	for c in target_box.get_children():
 		c.queue_free()
@@ -814,13 +1049,9 @@ func _refresh_scoreboard_rows(target_box: VBoxContainer, show_crown: bool) -> vo
 	for p in players.get_children():
 		var pid := p.name.to_int()
 		rows.append({
-			"id": pid,
-			"name": Net.display_name(pid),
-			"money": int(p.money),
-			"profit": int(p.net_profit()),
-			"sold": int(p.daily_sold),
-			"tips": int(p.daily_tips),
-			"fines": int(p.daily_fines),
+			"id": pid, "name": Net.display_name(pid), "money": int(p.money),
+			"profit": int(p.net_profit()), "sold": int(p.daily_sold),
+			"tips": int(p.daily_tips), "fines": int(p.daily_fines),
 		})
 	rows.sort_custom(func(a, b): return a["profit"] > b["profit"] if a["profit"] != b["profit"] else a["money"] > b["money"])
 	var hdr := _lbl(target_box, "ESNAF                 | CÜZDAN  | NET KÂR | SATIŞ | BAHŞİŞ | CEZA", 14, 0.68)
@@ -843,7 +1074,7 @@ func _on_volume(x: float) -> void:
 
 
 func _open_pause() -> void:
-	upgrade_wrap.hide()
+	shop_wrap.hide()
 	ingame_box.visible = world != null
 	pause_wrap.show()
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
@@ -884,7 +1115,7 @@ func _show_friends() -> void:
 	elif list.is_empty():
 		info.text = "Çevrimiçi Steam arkadaşı yok."
 	elif Net.lobby_id == 0:
-		info.text = "Davet için önce 'Steam Lobisi Kur'a bas. Lobisi olan arkadaşa ▶ ile katılabilirsin."
+		info.text = "Davet için önce 'Steam Lobisi Kur'a bas."
 	(friends_box.get_parent() as Control).custom_minimum_size.y = mini(n, 5) * 41
 
 
@@ -941,33 +1172,37 @@ func _set_menu_bg(on: bool) -> void:
 	add_child(menu_bg)
 	var bz := BazaarScript.new()
 	menu_bg.add_child(bz)
-	bz.set_day_progress(0.42) # menüde canlı güneşli Akdeniz öğleden sonrası
+	bz.set_day_progress(0.40)
 	menu_cam = Camera3D.new()
 	menu_cam.fov = 60
 	menu_bg.add_child(menu_cam)
 	menu_cam.current = true
-	for i in 7:
+	for i in 6:
 		var p: Node3D = PlayerScript.new()
 		p.npc = true
 		p.color_id = i * 3 + 1
 		p.name = "Npc%d" % i
 		menu_bg.add_child(p)
-		walkers.append([p, randf_range(3.8, 5.6), randf() * TAU, randf_range(0.6, 0.85) * (1 if i % 2 == 0 else -1)])
+		walkers.append([p, -1.8 + float(i % 3) * 1.8, -14.0 + float(i) * 5.2, 1.5 * (1.0 if i % 2 == 0 else -1.0)])
 
 
 func _menu_anim(dt: float) -> void:
 	menu_t += dt
-	var a := menu_t * 0.05
-	menu_cam.position = Vector3(sin(a) * 15.0, 5.5 + sin(menu_t * 0.2) * 0.5, cos(a) * 15.0)
-	menu_cam.look_at(Vector3(sin(a + 0.6) * 2.0, 1.2, cos(a + 0.6) * 2.0))
+	var a := menu_t * 0.14
+	# Brandaların altından canlı Türk semt pazarı caddesine bakan sinematik kamera
+	menu_cam.position = Vector3(sin(a) * 2.2, 2.55 + sin(menu_t * 0.35) * 0.15, 11.5 + cos(a * 0.7) * 2.5)
+	menu_cam.look_at(Vector3(0.0, 1.45, -6.0))
 	for w in walkers:
 		var p: Node3D = w[0]
-		w[2] += w[3] * dt * 4.2 / w[1]
-		p.position = Vector3(cos(w[2]) * w[1], 0, sin(w[2]) * w[1])
-		var tangent := Vector3(-sin(w[2]), 0, cos(w[2])) * signf(w[3])
-		p.body_yaw = atan2(tangent.x, tangent.z)
-		p.look_yaw = p.body_yaw + sin(menu_t * 0.7 + w[1]) * 0.5 - PI
-		p.spd = 4.2 * absf(w[3])
+		w[2] += float(w[3]) * dt
+		if w[2] > 17.0:
+			w[2] = -17.0
+		elif w[2] < -17.0:
+			w[2] = 17.0
+		p.position = Vector3(float(w[1]), 0.0, float(w[2]))
+		p.body_yaw = 0.0 if float(w[3]) > 0 else PI
+		p.look_yaw = p.body_yaw + sin(menu_t * 0.7 + float(w[1])) * 0.4 - PI
+		p.spd = absf(float(w[3]))
 
 
 func _process(dt: float) -> void:
@@ -990,16 +1225,17 @@ func _update_hud_frame(dt: float) -> void:
 	if me and voice_hud.visible:
 		var lvl: float = me.talk_smooth
 		var muted: bool = me.mic_muted
+		var eff_sh: float = me.get_effective_shout()
 		voice_icon.level = lvl
 		voice_icon.muted = muted
 		voice_icon.queue_redraw()
 		voice_bar.size.x = 0.0 if muted else 52.0 * lvl
-		voice_bar.color = Color(0.95, 0.3, 0.25) if muted else (Color(1.0, 0.72, 0.2) if lvl > 0.7 else Color(0.4, 0.95, 0.5))
-		voice_lbl.text = "M: KAPALI" if muted else ("BAĞIRIYOR!" if me.shout_power > 0.55 else ("KONUŞUYOR" if lvl > 0.06 else "M: AÇIK"))
-		var hide_interact := pause_wrap.visible or upgrade_wrap.visible or day_ended
+		voice_bar.color = Color(0.95, 0.3, 0.25) if muted else (Color(1.0, 0.72, 0.2) if eff_sh > 0.7 else Color(0.4, 0.95, 0.5))
+		voice_lbl.text = "M: KAPALI" if muted else ("MEGAFON!" if (eff_sh > 0.85 and me.is_holding_item("megafon")) else ("BAĞIRIYOR!" if eff_sh > 0.45 else ("KONUŞUYOR" if lvl > 0.06 else "M: AÇIK")))
+		var hide_interact := pause_wrap.visible or shop_wrap.visible or day_ended
 		interact_lbl.text = me.interact_hint
 		interact_lbl.visible = me.interact_hint != "" and not hide_interact
-		# Nişangah dinamik vurgu
+		speed_lines.intensity = 0.0 if hide_interact else float(me.sprint_k)
 		if me.has_target and not hide_interact:
 			crosshair.color = Color(1.0, 0.85, 0.25, 0.98)
 			crosshair.offset_left = -4; crosshair.offset_right = 4
@@ -1009,33 +1245,32 @@ func _update_hud_frame(dt: float) -> void:
 			crosshair.offset_left = -3; crosshair.offset_right = 3
 			crosshair.offset_top = -3; crosshair.offset_bottom = 3
 
-	# Gün saati HUD'u (08:00 -> 21:30 = 810 dakika)
 	var prog := clampf(day_time / DAY_DURATION, 0.0, 1.0)
 	var mins := int(480.0 + prog * 810.0)
 	var hh := int(mins / 60)
 	var mm := int(mins % 60)
-	var phase_txt := "☀️ SABAH" if prog < 0.30 else ("🌤️ ÖĞLE" if prog < 0.62 else ("🌅 İKİNDİ" if prog < 0.80 else "🌙 AKŞAM PAZARI"))
+	var phase_txt := "SABAH" if prog < 0.30 else ("ÖĞLE" if prog < 0.62 else ("İKİNDİ" if prog < 0.80 else "AKŞAM PAZARI"))
 	day_lbl.text = "GÜN %d  •  %02d:%02d  •  %s" % [day_num, hh, mm, phase_txt]
-	day_bar.size.x = 310.0 * prog
+	day_bar.size.x = 330.0 * prog
 	day_bar.color = Color(1.0, 0.78, 0.32) if prog < 0.72 else Color(1.0, 0.45, 0.22)
 
-	# Aktif olay şeridi
 	if active_event_item != "" and event_timer > 0.0:
 		event_banner.show()
 		event_lbl.text = "%s  (%d sn)" % [active_event_title, ceili(event_timer)]
+	elif _crowd_timer > 0.0:
+		event_banner.show()
+		event_lbl.text = "👥 PAZARDA KALABALIK VAR! Müşteriler akın ediyor!"
 	elif prog >= 0.72 and not day_ended:
 		event_banner.show()
 		event_lbl.text = "🌆 AKŞAM PAZARI AKINI! Müşteri yoğunluğu zirvede!"
 	else:
 		event_banner.hide()
 
-	# Tab skor tablosu
-	var show_sb := Input.is_action_pressed("scoreboard") and not pause_wrap.visible and not upgrade_wrap.visible and not day_ended
+	var show_sb := Input.is_action_pressed("scoreboard") and not pause_wrap.visible and not shop_wrap.visible and not day_ended
 	scoreboard_wrap.visible = show_sb
 	if show_sb:
 		_refresh_scoreboard_rows(scoreboard_list, false)
 
-	# Fiyat renkleri + arka depo acil veresiye etiketlerini saniyede 1 güncelle
 	_price_ui_cd -= dt
 	if _price_ui_cd <= 0.0:
 		_price_ui_cd = 1.0
@@ -1055,8 +1290,8 @@ func _refresh_stall_visual_prices() -> void:
 
 func _unhandled_input(e: InputEvent) -> void:
 	if e.is_action_pressed("ui_cancel"):
-		if upgrade_wrap.visible:
-			_close_upgrade_shop()
+		if shop_wrap.visible:
+			_close_shop()
 		elif pause_wrap.visible:
 			_close_pause()
 		elif world and not day_ended:
@@ -1064,7 +1299,7 @@ func _unhandled_input(e: InputEvent) -> void:
 		elif page == "lobby":
 			_show_page("main")
 		return
-	if world and not pause_wrap.visible and not upgrade_wrap.visible and not day_ended and e is InputEventMouseButton and e.pressed:
+	if world and not pause_wrap.visible and not shop_wrap.visible and not day_ended and e is InputEventMouseButton and e.pressed:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 
@@ -1076,7 +1311,6 @@ func _roll_wholesale_prices() -> void:
 		var base_c: float = float(Produce.ITEMS[item_id]["crate_cost"])
 		wholesale_prices[item_id] = maxi(20, roundi(base_c * randf_range(0.84, 1.16)))
 	deal_item = Produce.ITEM_ORDER.pick_random()
-	# Toptancı fırsat ürünü ek %28 ucuz
 	wholesale_prices[deal_item] = maxi(18, roundi(float(Produce.ITEMS[deal_item]["crate_cost"]) * 0.72))
 	_sync_economy_state()
 
@@ -1097,8 +1331,8 @@ func rpc_sync_economy(prices: Dictionary, deal: String, ev_item: String, ev_titl
 	event_timer = ev_t
 	if world:
 		world.set_meta("event_item", ev_item)
-	if bazaar_node:
-		bazaar_node.update_wholesale_board(wholesale_prices, deal_item, active_event_item)
+	if wholesaler_node:
+		wholesaler_node.update_prices(wholesale_prices, deal_item, active_event_item)
 	_refresh_stall_visual_prices()
 
 
@@ -1113,15 +1347,14 @@ func _is_emergency_credit(peer_id: int) -> bool:
 	return int(p.money) < min_cost and st.total_stock() == 0 and not bool(p.held_crate)
 
 
-## Kasa maliyetini hesaplar (Toptancı Kamyonu temel ürünlerde %12 daha ucuz + fırsat ürünü indirimi).
 func get_crate_cost(peer_id: int, item_id: String, from_truck: bool) -> int:
 	if not Produce.ITEMS.has(item_id):
 		return 50
 	if not from_truck and item_id == "sogan" and _is_emergency_credit(peer_id):
 		return 0
 	var base := int(wholesale_prices.get(item_id, Produce.ITEMS[item_id]["crate_cost"]))
-	if from_truck and item_id != deal_item:
-		return maxi(18, roundi(float(base) * 0.88))
+	if from_truck:
+		return maxi(16, roundi(float(base) * (0.78 if item_id != deal_item else 0.90)))
 	return base
 
 
@@ -1137,6 +1370,8 @@ func rpc_request_buy_crate(item_id: String, from_truck: bool) -> void:
 	if Net.online() and not multiplayer.is_server():
 		return
 	if not Produce.ITEMS.has(item_id) or players == null or stalls == null or day_ended:
+		return
+	if from_truck and (wholesaler_node == null or not wholesaler_node.is_parked()):
 		return
 	var pid := multiplayer.get_remote_sender_id() if Net.online() else 1
 	if pid == 0:
@@ -1162,13 +1397,21 @@ func _tick_day_and_events(dt: float) -> void:
 	if bazaar_node:
 		bazaar_node.set_day_progress(prog)
 
-	# Akşam Pazarı Rush Hour duyurusu
 	if prog >= 0.72 and not rush_announced:
 		rush_announced = true
 		Sfx.play("event", -3.0)
 		_broadcast_toast("🌆 AKŞAM PAZARI BAŞLADI! Müşteriler akın ediyor!", Color(1.0, 0.68, 0.3))
 
-	# Rastgele Pazar Olayı (kıtlık / talep patlaması)
+	# Arada bir gelen Kalabalık Dalgası (18 sn sürer)
+	if _crowd_timer > 0.0:
+		_crowd_timer = maxf(_crowd_timer - dt, 0.0)
+	else:
+		_next_crowd_cd -= dt
+		if _next_crowd_cd <= 0.0 and prog < 0.88:
+			_next_crowd_cd = randf_range(54.0, 78.0)
+			_crowd_timer = 18.0
+			_broadcast_toast("👥 Pazara otobüs indi! İki kapıdan kalabalık geliyor!", Color(1.0, 0.86, 0.42))
+
 	if event_timer > 0.0:
 		event_timer -= dt
 		if event_timer <= 0.0:
@@ -1179,7 +1422,7 @@ func _tick_day_and_events(dt: float) -> void:
 	else:
 		next_event_cd -= dt
 		if next_event_cd <= 0.0 and prog < 0.88:
-			next_event_cd = randf_range(58.0, 82.0)
+			next_event_cd = randf_range(60.0, 86.0)
 			var ev: Dictionary = MARKET_EVENTS.pick_random()
 			active_event_item = str(ev["item"])
 			active_event_title = str(ev["title"])
@@ -1188,33 +1431,21 @@ func _tick_day_and_events(dt: float) -> void:
 			_broadcast_event_sfx("event")
 			_broadcast_toast(active_event_title, Color(1.0, 0.84, 0.28))
 
-	# Periyodik Toptancı fiyat dalgalanması
-	next_price_shift_cd -= dt
-	if next_price_shift_cd <= 0.0:
-		next_price_shift_cd = 78.0
-		_roll_wholesale_prices()
-		_broadcast_toast("🚚 Toptancı Halinde yeni fırsat: %s (%d TL)!" % [
-			Produce.ITEMS[deal_item]["name"], int(wholesale_prices[deal_item])
-		], Color(0.52, 1.0, 0.6))
-
-	# Zabıta devriyesi
 	next_zabita_cd -= dt
 	if next_zabita_cd <= 0.0 and prog < 0.90 and world and not world.has_node("Zabita"):
-		next_zabita_cd = randf_range(68.0, 92.0)
+		next_zabita_cd = randf_range(72.0, 96.0)
 		var from_n := randf() < 0.5
 		if Net.online():
-			rpc_spawn_zabita.rpc(from_n)
+			rpc_spawn_zabita.rpc(from_n, 0)
 		else:
-			rpc_spawn_zabita(from_n)
+			rpc_spawn_zabita(from_n, 0)
 		_broadcast_toast("🚨 ZABITA DENETİME ÇIKTI! Fahiş fiyat & yerdeki kasalara dikkat!", Color(0.58, 0.84, 1.0))
 
-	# İstemcilere gün saatini senkronize et
 	_day_sync_t += dt
 	if Net.online() and _day_sync_t >= 0.5:
 		_day_sync_t = 0.0
-		rpc_sync_day_time.rpc(day_num, day_time, event_timer)
+		rpc_sync_day_time.rpc(day_num, day_time, event_timer, _crowd_timer)
 
-	# Gün sonu!
 	if day_time >= DAY_DURATION:
 		day_ended = true
 		if Net.online():
@@ -1224,20 +1455,26 @@ func _tick_day_and_events(dt: float) -> void:
 
 
 @rpc("authority", "unreliable_ordered")
-func rpc_sync_day_time(d_num: int, d_time: float, ev_t: float) -> void:
+func rpc_sync_day_time(d_num: int, d_time: float, ev_t: float, crowd_t := 0.0) -> void:
 	day_num = d_num
 	day_time = d_time
 	event_timer = ev_t
+	_crowd_timer = crowd_t
 	if bazaar_node:
 		bazaar_node.set_day_progress(clampf(day_time / DAY_DURATION, 0.0, 1.0))
 
 
 @rpc("authority", "call_local", "reliable")
-func rpc_spawn_zabita(from_north: bool) -> void:
-	if world == null or world.has_node("Zabita"):
+func rpc_spawn_zabita(from_north: bool, attacker_id := 0) -> void:
+	if world == null:
+		return
+	var ex := world.get_node_or_null("Zabita")
+	if ex:
+		if attacker_id > 0:
+			ex.start_chase(attacker_id)
 		return
 	var z := InspectorScript.new()
-	z.init_inspector(from_north)
+	z.init_inspector(from_north, attacker_id)
 	world.add_child(z)
 
 
@@ -1245,7 +1482,7 @@ func rpc_spawn_zabita(from_north: bool) -> void:
 func rpc_day_ended(finished_day: int) -> void:
 	day_ended = true
 	day_num = finished_day
-	upgrade_wrap.hide()
+	shop_wrap.hide()
 	scoreboard_wrap.hide()
 	pause_wrap.hide()
 	Sfx.play("day_end", -2.0)
@@ -1273,12 +1510,13 @@ func rpc_start_next_day(new_day: int) -> void:
 	day_time = 0.0
 	day_ended = false
 	rush_announced = false
+	_crowd_timer = 0.0
+	_next_crowd_cd = 45.0
 	active_event_item = ""
 	active_event_title = ""
 	event_timer = 0.0
-	next_event_cd = 36.0
-	next_zabita_cd = 58.0
-	next_price_shift_cd = 75.0
+	next_event_cd = 38.0
+	next_zabita_cd = 62.0
 	summary_wrap.hide()
 	if customers:
 		for c in customers.get_children():
@@ -1328,7 +1566,15 @@ func rpc_play_sfx(clip: String) -> void:
 	Sfx.play(clip, -3.0)
 
 
-# ---------- Oyun akışı ve Multiplayer Senkronu ----------
+# ---------- Tek Oyna + Çoklu Oyun Akışı ----------
+
+## Anında tek kişilik solo oyun başlat (Steam/lobi beklemeden test & oyun!).
+func _start_solo() -> void:
+	if Net.online():
+		Net.leave()
+	_stall_spots.clear()
+	start_game([1], {1: 0}, {})
+
 
 func _player_ids() -> Array:
 	var ids := [1]
@@ -1371,6 +1617,19 @@ func start_game(ids: Array, spot_map := {}, snapshot := {}) -> void:
 	bazaar_node = BazaarScript.new()
 	bazaar_node.interactive = true
 	world.add_child(bazaar_node)
+
+	# Ford Transit Toptancı ("GARDAŞLAR SEBZE MEYVE")
+	wholesaler_node = WholesalerScript.new()
+	world.add_child(wholesaler_node)
+	if (not Net.online()) or multiplayer.is_server():
+		wholesaler_node.arrived.connect(func():
+			_broadcast_toast("🚚 GARDAŞLAR TOPTANCI PARK ETTİ! Taze & ucuz hal kasaları arka kapakta!", Color(0.55, 1.0, 0.62)))
+		wholesaler_node.departing.connect(func():
+			_broadcast_toast("📣 Toptancı Ford Transit 8 saniye sonra kalkıyor!", Color(1.0, 0.72, 0.3)))
+		wholesaler_node.restock_needed.connect(func():
+			_roll_wholesale_prices()
+			_broadcast_toast("🚚 GARDAŞLAR TOPTANCI yeni kasalar ve taze fırsatlarla geliyor!", GOLD))
+
 	stalls = Node3D.new()
 	stalls.name = "Stalls"
 	world.add_child(stalls)
@@ -1383,7 +1642,9 @@ func start_game(ids: Array, spot_map := {}, snapshot := {}) -> void:
 
 	_stall_spots.clear()
 	_cust_seq = 0
-	_cust_cd = 1.5
+	_cust_cd = 2.0
+	_crowd_timer = 0.0
+	_next_crowd_cd = 48.0
 	day_num = 1
 	day_time = 0.0
 	day_ended = false
@@ -1391,9 +1652,8 @@ func start_game(ids: Array, spot_map := {}, snapshot := {}) -> void:
 	active_event_item = ""
 	active_event_title = ""
 	event_timer = 0.0
-	next_event_cd = 38.0
-	next_zabita_cd = 62.0
-	next_price_shift_cd = 75.0
+	next_event_cd = 40.0
+	next_zabita_cd = 68.0
 
 	for id in ids:
 		var sp := int(spot_map.get(id, _alloc_spot(id)))
@@ -1407,9 +1667,10 @@ func start_game(ids: Array, spot_map := {}, snapshot := {}) -> void:
 
 	ui.hide()
 	summary_wrap.hide()
-	upgrade_wrap.hide()
+	shop_wrap.hide()
 	scoreboard_wrap.hide()
 	hint.show()
+	hotbar_wrap.show()
 	voice_hud.show()
 	day_hud.show()
 	var my_id := multiplayer.get_unique_id() if Net.online() else 1
@@ -1417,8 +1678,9 @@ func start_game(ids: Array, spot_map := {}, snapshot := {}) -> void:
 	money_lbl.text = "%d TL" % (int(me.money) if me else PlayerScript.STARTING_MONEY)
 	money_hud.show()
 	crosshair.show()
+	_refresh_hotbar()
 	Sfx.set_ambience(true)
-	show_toast("☀️ Pazara hoş geldin! Arka depodan veya Batıdaki Toptancı Kamyonundan kasa al!", GOLD)
+	show_toast("☀️ Pazara hoş geldin! [1] Sigara iç, [P] Dükkan aç, Toptancı Ford Transit korna çalıp geliyor!", GOLD)
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 
@@ -1443,34 +1705,44 @@ func _spawn(id: int, spot_idx := -1) -> void:
 	if p.is_multiplayer_authority():
 		p.money_earned.connect(_on_money_earned)
 		p.money_spent.connect(_on_money_spent)
-		p.open_upgrade_shop.connect(_toggle_upgrade_shop)
+		p.open_shop.connect(_toggle_shop)
+		p.inventory_changed.connect(_refresh_hotbar)
 
 
+## İki kapıdan (Kuzey & Güney) sakin tempoyla gelen NPC'ler + arada bir Kalabalık Dalgası + bolca Teyze!
 func _tick_customers(dt: float) -> void:
 	_cust_cd -= dt
 	var prog := clampf(day_time / DAY_DURATION, 0.0, 1.0)
-	var rush := prog >= 0.72
-	var max_cust := 11 if rush else 8
+	var crowded := (_crowd_timer > 0.0) or (prog >= 0.72)
+	var max_cust := 15 if crowded else 7
 	if _cust_cd > 0.0 or customers.get_child_count() >= max_cust:
 		return
-	_cust_cd = randf_range(1.5, 2.5) if rush else randf_range(2.8, 4.6)
-	_cust_seq += 1
-	var from_north := randf() < 0.5
-	var x_lane := randf_range(-2.5, 2.5)
-	var start_p := Vector3(x_lane, 0.0, -19.5 if from_north else 19.5)
-	var exit_p := Vector3(randf_range(-2.4, 2.4), 0.0, 19.5 if from_north else -19.5)
+	_cust_cd = randf_range(1.8, 3.0) if crowded else randf_range(4.0, 6.8)
+	var batch := randi_range(2, 3) if crowded else 1
+	for _b in batch:
+		if customers.get_child_count() >= max_cust:
+			break
+		_spawn_one_customer(crowded)
 
-	# Müşteri tipi seçimi
+
+func _spawn_one_customer(crowded: bool) -> void:
+	_cust_seq += 1
+	# Rastgele Kuzey Kapısı veya Güney Kapısı (giriş/çıkış iki yönlü!)
+	var from_north := randf() < 0.5
+	var x_lane := randf_range(-3.1, -1.7) if randf() < 0.5 else randf_range(1.7, 3.1)
+	var start_p := Vector3(x_lane, 0.0, -21.2 if from_north else 21.2)
+	var exit_p := Vector3(randf_range(-3.0, 3.0), 0.0, 21.2 if from_north else -21.2)
+
+	# %30 Teyze, %16 Aceleci, %12 VIP, %42 Normal!
 	var r := randf()
 	var arch: int = CustomerScript.Archetype.NORMAL
-	if r < 0.14 + (0.06 if rush else 0.0):
-		arch = CustomerScript.Archetype.VIP
-	elif r < 0.34:
-		arch = CustomerScript.Archetype.BARGAINER
-	elif r < 0.52:
+	if r < 0.30:
+		arch = CustomerScript.Archetype.BARGAINER # Pazar Teyzesi!
+	elif r < 0.46:
 		arch = CustomerScript.Archetype.IMPATIENT
+	elif r < 0.58 + (0.05 if crowded else 0.0):
+		arch = CustomerScript.Archetype.VIP
 
-	# Talep havuzu: temel 4 ürün + herhangi bir tezgahta stoklu egzotik ürünler + aktif olay ürünü
 	var item_pool := Produce.BASIC_ORDER.duplicate()
 	if stalls:
 		for ex in Produce.EXOTIC_ORDER:
@@ -1478,7 +1750,7 @@ func _tick_customers(dt: float) -> void:
 				if st.has_item(ex) and not (ex in item_pool):
 					item_pool.append(ex)
 					break
-	if arch == CustomerScript.Archetype.VIP:
+	if arch == CustomerScript.Archetype.VIP or arch == CustomerScript.Archetype.BARGAINER:
 		for ex in Produce.EXOTIC_ORDER:
 			if not (ex in item_pool):
 				item_pool.append(ex)
@@ -1512,7 +1784,6 @@ func rpc_spawn_customer(cname: String, seed_val: int, start_p: Vector3, exit_p: 
 	customers.add_child(c)
 
 
-## Geç katılan oyuncu için tam dünya fotoğrafı (tezgahlar, yükseltmeler, cüzdanlar, müşteriler, ekonomi, gün).
 func _build_world_snapshot() -> Dictionary:
 	var st_snaps := []
 	if stalls:
@@ -1527,17 +1798,11 @@ func _build_world_snapshot() -> Dictionary:
 		for c in customers.get_children():
 			cu_snaps.append(c.export_snapshot())
 	return {
-		"day_num": day_num,
-		"day_time": day_time,
-		"day_ended": day_ended,
-		"prices": wholesale_prices.duplicate(),
-		"deal": deal_item,
-		"event_item": active_event_item,
-		"event_title": active_event_title,
-		"event_timer": event_timer,
-		"stalls": st_snaps,
-		"players": pl_snaps,
-		"customers": cu_snaps,
+		"day_num": day_num, "day_time": day_time, "day_ended": day_ended,
+		"prices": wholesale_prices.duplicate(), "deal": deal_item,
+		"event_item": active_event_item, "event_title": active_event_title, "event_timer": event_timer,
+		"truck": wholesaler_node.export_snapshot() if wholesaler_node else {},
+		"stalls": st_snaps, "players": pl_snaps, "customers": cu_snaps,
 	}
 
 
@@ -1552,8 +1817,10 @@ func _apply_world_snapshot(snap: Dictionary) -> void:
 	event_timer = float(snap.get("event_timer", 0.0))
 	if world:
 		world.set_meta("event_item", active_event_item)
-	if bazaar_node:
-		bazaar_node.update_wholesale_board(wholesale_prices, deal_item, active_event_item)
+	if wholesaler_node:
+		if snap.has("truck") and not (snap["truck"] as Dictionary).is_empty():
+			wholesaler_node.apply_snapshot(snap["truck"])
+		wholesaler_node.update_prices(wholesale_prices, deal_item, active_event_item)
 	for sd: Dictionary in snap.get("stalls", []):
 		var st := stalls.get_node_or_null("Stall_%d" % int(sd.get("owner_id", -1)))
 		if st:
@@ -1567,14 +1834,13 @@ func _apply_world_snapshot(snap: Dictionary) -> void:
 		if cn != "" and not customers.has_node(cn):
 			var c := CustomerScript.new()
 			c.init_customer(cn, int(cd.get("seed", 1)), cd.get("pos", Vector3.ZERO),
-				cd.get("exit", Vector3(0, 0, 20)), cd.get("wants", {}), int(cd.get("archetype", 0)))
+				cd.get("exit", Vector3(0, 0, 21.2)), cd.get("wants", {}), int(cd.get("archetype", 0)))
 			customers.add_child(c)
 			c.apply_snapshot(cd)
 	if day_ended:
 		rpc_day_ended(day_num)
 
 
-## Pazar açıkken gelen arkadaş: ona tam dünya durumunu gönder, herkese yeni oyuncuyu ve tezgahını ekle.
 func _on_peer_joined(id: int) -> void:
 	if not multiplayer.is_server() or world == null:
 		return
@@ -1630,6 +1896,7 @@ func _clear_world() -> void:
 		world.queue_free()
 	world = null
 	bazaar_node = null
+	wholesaler_node = null
 	players = null
 	stalls = null
 	customers = null
@@ -1639,11 +1906,13 @@ func _clear_world() -> void:
 func _back_to_menu() -> void:
 	_clear_world()
 	Sfx.set_ambience(false)
+	speed_lines.intensity = 0.0
 	pause_wrap.hide()
-	upgrade_wrap.hide()
+	shop_wrap.hide()
 	scoreboard_wrap.hide()
 	summary_wrap.hide()
 	hint.hide()
+	hotbar_wrap.hide()
 	voice_hud.hide()
 	day_hud.hide()
 	event_banner.hide()

@@ -245,6 +245,7 @@ var _say_t := 0.0
 var _emote_t := 0.0
 var _chat_cd := 6.0
 var _pause_t := 0.0
+var _switch_cd := 0.0 # daha yüksek sesli tezgaha geçiş soğuması
 var _browse_cd := 8.0
 var _bought_here := 0
 var _patience_stage := 0
@@ -1211,7 +1212,7 @@ func _update_weather(instant: bool) -> void:
 
 
 func _speed_mult() -> float:
-	return 1.15 if _raining else 1.0
+	return (1.15 if _raining else 1.0) * 0.92 # sakin tempo
 
 
 func _say(txt: String, dur := 3.2) -> void:
@@ -1286,6 +1287,7 @@ func _rep(owner_id: int, delta: float) -> void:
 
 func _tick_ai(dt: float) -> void:
 	var sm := _speed_mult()
+	_switch_cd = maxf(_switch_cd - dt, 0.0)
 	match state:
 		State.STROLL:
 			if _pause_t > 0.0:
@@ -1329,6 +1331,14 @@ func _tick_ai(dt: float) -> void:
 			if archetype == Archetype.AILE and wait_timer < max_wait * 0.5:
 				drain = 1.25 # çocuk sıkılıyor!
 			wait_timer -= dt * drain
+			# Başka tezgahtan çok daha yüksek bağıran varsa ona dönebilir
+			if _bought_here == 0 and wait_timer > 3.0:
+				eval_timer -= dt
+				if eval_timer <= 0.0:
+					eval_timer = 1.2
+					_evaluate_stalls(true)
+					if state == State.APPROACH:
+						return
 			var st := _find_stall(target_owner_id)
 			if st == null or not _stall_has_any_want(st) or _total_wants() <= 0 or wait_timer <= 0.0:
 				var owner := target_owner_id
@@ -1424,7 +1434,8 @@ func _move_toward_target(dt: float, speed: float) -> void:
 		if absf(rel_x) < 2.25 and absf(rel_z) < 4.5:
 			var push_x := 1.0 if rel_x >= 0.0 else -1.0
 			dir = (dir + Vector3(push_x * 1.3, 0.0, 0.0)).normalized()
-	position += dir * minf(speed * dt, dist)
+	dir = StallScript.steer_all(self, position, dir, dist - 0.2) # tezgah içine girme, kenarından dolan
+	position = StallScript.keepout_all(self, position + dir * minf(speed * dt, dist))
 	_body_yaw = lerp_angle(_body_yaw, atan2(dir.x, dir.z), minf(dt * 8.0, 1.0))
 	_spd = speed
 
@@ -1450,11 +1461,11 @@ func _evaluate_stalls(only_louder_override: bool) -> void:
 	for st in stalls:
 		var owner := _find_player(st.owner_id)
 		var eff_shout := 0.0
-		var hearing_range := 22.0
-		if owner and owner.global_position.distance_to(st.global_position) < 6.0:
+		var hearing_range := 35.0 # 22 x 1.6
+		if owner and owner.global_position.distance_to(st.global_position) < 9.6:
 			eff_shout = owner.get_effective_shout() if owner.has_method("get_effective_shout") else float(owner.shout_power)
 			if owner.has_method("is_holding_item") and owner.is_holding_item("megafon"):
-				hearing_range = 34.0
+				hearing_range = 54.0
 		var dist := global_position.distance_to(st.global_position)
 		if dist > hearing_range:
 			continue
@@ -1482,7 +1493,7 @@ func _evaluate_stalls(only_louder_override: bool) -> void:
 		var shout_score := 0.0
 		if owner and eff_shout > 0.08:
 			var heard := global_position.distance_to(owner.global_position)
-			var falloff := 0.045 if hearing_range > 25.0 else 0.08
+			var falloff := 0.028 if hearing_range > 40.0 else 0.05
 			shout_score = clampf(pow(eff_shout, 1.3) / (1.0 + heard * falloff), 0.0, 2.4)
 		if st.bell_boost > 0.0:
 			shout_score = maxf(shout_score, clampf(1.55 / (1.0 + dist * 0.05), 0.45, 1.6))
@@ -1516,10 +1527,16 @@ func _evaluate_stalls(only_louder_override: bool) -> void:
 		return
 	if only_louder_override:
 		# Başka bir pazarcı açık ara daha güçlü bağırıyorsa ona çevril!
-		if best_stall.owner_id != target_owner_id and best_shout > cur_shout + 0.50 and best_shout >= 0.70:
+		# Soğuma süresi + olasılık: titrek davranmasın
+		if _switch_cd <= 0.0 and best_stall.owner_id != target_owner_id and best_shout > cur_shout + 0.35 and best_shout >= 0.55 \
+				and _rng.randf() < 0.55:
+			_switch_cd = 7.0
 			target_owner_id = best_stall.owner_id
+			state = State.APPROACH
+			_pause_t = 0.0
+			_bought_here = 0
 			var busy_n := _count_customers_at(target_owner_id)
-			target_pos = best_stall.customer_spot(float(busy_n % 3 - 1) * 0.68)
+			target_pos = best_stall.customer_spot(best_stall.spot_offset(busy_n))
 			_emote("❗")
 			_say(_rand_line("lure"), 2.2)
 		return
@@ -1528,7 +1545,7 @@ func _evaluate_stalls(only_louder_override: bool) -> void:
 	if best_score > 0.24 and _rng.randf() < lure_prob:
 		target_owner_id = best_stall.owner_id
 		var busy_n := _count_customers_at(target_owner_id)
-		var side_off := float(busy_n % 3 - 1) * 0.68
+		var side_off: float = best_stall.spot_offset(busy_n)
 		target_pos = best_stall.customer_spot(side_off)
 		state = State.APPROACH
 		_pause_t = 0.0

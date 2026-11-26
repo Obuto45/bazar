@@ -1,6 +1,6 @@
 extends Node3D
 ## Toptancı Ford Transit ("GARDAŞLAR SEBZE MEYVE"): Kuzey Kapısından havalı korna çalarak pazara girer,
-## tekerlekleri dönerek orta meydana park eder, dörtlülerini yakıp arkasından 11 çeşit taze kasa tedarik eder,
+## tekerlekleri dönerek orta meydana park eder, dörtlülerini yakıp arkasından her çeşitten bir kasa (farklı fiyat / indirimli) satar,
 ## süresi dolunca korna çalıp Güney Kapısından çıkar ve yeni fiyatlarla geri gelir!
 
 const TRUCK_MODEL := preload("res://models/ford_transit/ford_transit_complete.glb")
@@ -20,7 +20,13 @@ const EXIT_Z := 29.0
 const DRIVE_SPEED := 5.6
 # Tek kasa kaynağı toptancı: daha uzun durur, daha çabuk döner
 const PARK_DURATION := 80.0
-const AWAY_DURATION := 16.0
+# Oyun başına TEK ziyaret: sabah, oyun başladıktan bu kadar sn sonra gelir
+const ARRIVE_DELAY := 45.0
+## Ürün emojileri (HUD, dükkan, ipuçları)
+const ITEM_EMOJI := {
+	"domates": "🍅", "elma": "🍎", "sogan": "🧅", "portakal": "🍊", "salatalik": "🥒", "biber": "🌶️",
+	"patlican": "🍆", "muz": "🍌", "karpuz": "🍉", "cilek": "🍓", "limon": "🍋",
+}
 const CRATE_COLORS := [
 	Color(0.88, 0.18, 0.16), Color(0.16, 0.62, 0.26), Color(0.94, 0.72, 0.12),
 	Color(0.96, 0.48, 0.08), Color(0.10, 0.46, 0.88), Color(0.18, 0.56, 0.30),
@@ -35,8 +41,10 @@ const RACK_LAYOUT := {
 	"cilek": Vector3(0.82, 0.0, -3.72), "limon": Vector3(1.64, 0.0, -3.6),
 }
 
-var state: int = State.ENTERING
-var state_timer := 0.0
+var state: int = State.AWAY
+var state_timer := ARRIVE_DELAY
+var _used := false # ziyaret bitti, bir daha gelmez (sadece host)
+var stock := {} # item_id -> [adet, fiyat] (host yetkili, herkese senkron)
 var _honked_arrive := false
 var _honked_warn := false
 var _sync_t := 0.0
@@ -110,6 +118,7 @@ func _ready() -> void:
 	add_child(_voice_audio)
 	if DisplayServer.get_name() != "headless":
 		_engine_audio.play()
+	visible = false
 	_set_rack_active(false)
 
 
@@ -244,7 +253,22 @@ func _set_rack_active(on: bool) -> void:
 	if _rack_root:
 		_rack_root.visible = on
 	for a in _crate_areas:
-		a.collision_layer = 4 if on else 0
+		var iid := str(a.get_meta("item_id"))
+		var n := stock_left(iid)
+		a.collision_layer = 4 if (on and n > 0) else 0
+		var spot := a.get_parent() as Node3D
+		if spot:
+			spot.visible = n > 0
+		var lbl: Label3D = _crate_labels.get(iid)
+		if lbl and n > 0:
+			lbl.text = "%s ×%d
+%d TL" % [ITEM_EMOJI.get(iid, "📦"), n, price_of(iid)]
+			var dp := discount_of(iid)
+			if dp > 0:
+				lbl.text += "\n%%%d indirim" % dp
+				lbl.modulate = Color(0.55, 1.0, 0.5)
+			else:
+				lbl.modulate = Color(1.0, 0.96, 0.82)
 
 
 func is_parked() -> bool:
@@ -255,24 +279,75 @@ func is_present() -> bool:
 	return state != State.AWAY
 
 
-func update_prices(prices: Dictionary, deal: String, event_item: String) -> void:
-	_prices = prices.duplicate()
-	_deal_item = deal
-	_event_item = event_item
-	for item_id in _crate_labels:
-		var lbl: Label3D = _crate_labels[item_id]
-		var nm: String = Produce.ITEMS[item_id]["name"]
-		var base := int(prices.get(item_id, Produce.ITEMS[item_id]["crate_cost"]))
-		var cost := maxi(16, roundi(float(base) * (0.78 if item_id != deal else 0.90)))
-		if item_id == deal:
-			lbl.text = "🔥 FIRSAT!\n%s\n%d TL" % [nm, cost]
-			lbl.modulate = Color(0.45, 1.0, 0.52)
-		elif item_id == event_item:
-			lbl.text = "⭐ TALEP!\n%s\n%d TL" % [nm, cost]
-			lbl.modulate = Color(1.0, 0.85, 0.25)
-		else:
-			lbl.text = "%s\n%d TL" % [nm, cost]
-			lbl.modulate = Color(1.0, 0.96, 0.82)
+## Eski API (fiyat/fırsat artık kamyonun kendi sınırlı stokundan gelir).
+func update_prices(_prices: Dictionary, _deal: String, _event_item: String) -> void:
+	pass
+
+
+func stock_left(item_id: String) -> int:
+	return int((stock.get(item_id, [0, 0]) as Array)[0])
+
+
+func price_of(item_id: String) -> int:
+	return int((stock.get(item_id, [0, 0]) as Array)[1])
+
+
+func discount_of(item_id: String) -> int:
+	var a: Array = stock.get(item_id, [0, 0, 0])
+	return int(a[2]) if a.size() > 2 else 0
+
+
+func total_left() -> int:
+	var n := 0
+	for k in stock:
+		n += int((stock[k] as Array)[0])
+	return n
+
+
+## Geliş öncesi geri sayım (sn); 0 = yok / ziyaret bitti.
+func countdown_left() -> float:
+	return maxf(state_timer, 0.0) if state == State.AWAY else 0.0
+
+
+## Host: bir kasa düş (ilk gelen alır). Başarılıysa true.
+func take_stock(item_id: String) -> bool:
+	if stock_left(item_id) <= 0:
+		return false
+	var d := stock.duplicate(true)
+	d[item_id][0] = int(d[item_id][0]) - 1
+	if Net.online():
+		rpc_sync_stock.rpc(d)
+	else:
+		rpc_sync_stock(d)
+	return true
+
+
+## Host: her ürün çeşidinden TEK kasa; fiyatlar farklı (ucuz / pahalı), birkaçı "%X indirim" etiketli.
+## stock: item_id -> [adet, fiyat, indirim_yüzdesi]
+func _gen_stock() -> void:
+	var ids: Array = Produce.ITEM_ORDER.duplicate()
+	var disc: Array = ids.duplicate()
+	disc.shuffle()
+	var disc_pct := {}
+	for k in 4:
+		disc_pct[disc[k]] = [20, 30, 40].pick_random()
+	var d := {}
+	for iid: String in ids:
+		var info: Dictionary = Produce.ITEMS[iid]
+		# Temel ürünler ucuz (başlangıç parasıyla alınır), özel ürünler pahalı
+		var mult := randf_range(0.45, 0.75) if int(info.get("tier", 0)) == 0 else randf_range(0.95, 1.3)
+		var pct: int = int(disc_pct.get(iid, 0))
+		d[iid] = [1, maxi(12, roundi(float(info["crate_cost"]) * mult * (1.0 - float(pct) / 100.0))), pct]
+	if Net.online():
+		rpc_sync_stock.rpc(d)
+	else:
+		rpc_sync_stock(d)
+
+
+@rpc("authority", "call_local", "reliable")
+func rpc_sync_stock(d: Dictionary) -> void:
+	stock = d.duplicate(true)
+	_set_rack_active(state == State.PARKED)
 
 
 func _physics_process(dt: float) -> void:
@@ -367,15 +442,19 @@ func _tick_host(dt: float) -> void:
 			position.z += minf(accel * dt, maxf(dist_out, 0.0))
 			if position.z >= EXIT_Z - 0.1:
 				state = State.AWAY
-				state_timer = AWAY_DURATION
+				state_timer = 0.0
+				_used = true
 				if Net.online():
 					rpc_state_changed.rpc(state, state_timer)
 				else:
 					rpc_state_changed(state, state_timer)
 		State.AWAY:
+			if _used:
+				return
 			state_timer -= dt
 			if state_timer <= 0.0:
 				position = Vector3(0.0, 0.0, ENTER_Z)
+				_gen_stock()
 				state = State.ENTERING
 				_honked_arrive = false
 				restock_needed.emit()
@@ -390,14 +469,13 @@ func _update_sign() -> void:
 		return
 	match state:
 		State.ENTERING:
-			_sign_lbl.text = "🚚 GARDAŞLAR TOPTANCI GELİYOR!"
+			_sign_lbl.text = "🚚 Toptancı geliyor!"
 			_sign_lbl.modulate = Color(1.0, 0.88, 0.32)
 		State.PARKED:
-			var deal_nm := str(Produce.ITEMS.get(_deal_item, {"name": "Domates"})["name"]).to_upper()
-			_sign_lbl.text = "🚚 GARDAŞLAR HAL  •  🔥 FIRSAT: %s  •  %d sn" % [deal_nm, ceili(maxf(state_timer, 0.0))]
+			_sign_lbl.text = "🚚 %d kasa  •  ⏱ %d" % [total_left(), ceili(maxf(state_timer, 0.0))]
 			_sign_lbl.modulate = Color(0.55, 1.0, 0.58) if state_timer > 10.0 else Color(1.0, 0.52, 0.32)
 		State.DEPARTING:
-			_sign_lbl.text = "📣 TOPTANCI KALKIYOR! GÖRÜŞÜRÜZ!"
+			_sign_lbl.text = "📣 Gidiyor!"
 			_sign_lbl.modulate = Color(1.0, 0.68, 0.32)
 		State.AWAY:
 			_sign_lbl.text = ""
@@ -501,7 +579,7 @@ func rpc_sync_truck(p: Vector3, st: int, t: float) -> void:
 
 
 func export_snapshot() -> Dictionary:
-	return {"pos": position, "state": state, "timer": state_timer}
+	return {"pos": position, "state": state, "timer": state_timer, "stock": stock.duplicate(true)}
 
 
 func apply_snapshot(d: Dictionary) -> void:
@@ -509,4 +587,6 @@ func apply_snapshot(d: Dictionary) -> void:
 	_net_pos = position
 	state = int(d.get("state", State.ENTERING))
 	state_timer = float(d.get("timer", 0.0))
+	stock = (d.get("stock", {}) as Dictionary).duplicate(true)
+	_used = state == State.AWAY and state_timer <= 0.0
 	_set_rack_active(state == State.PARKED)

@@ -102,9 +102,21 @@ const CATALOG := {
 		"right_hint": "Şişeyi Çalkala",
 		"desc": "4 fıs. Tezgahına bakıp sol tıkla: ürünler ışıl ışıl tazelenir (+%35 tazelik), sağ tıkla çalkala!",
 	},
+	"sopa": {
+		"name": "Beyzbol Sopası",
+		"short": "Sopa",
+		"icon": "🏏",
+		"cost": 60,
+		"uses": 1,
+		"puffs_per_use": 1,
+		"consumable": false,
+		"left_hint": "Salla (vurulan bayılır)",
+		"right_hint": "[Q] Fırlat",
+		"desc": "Sol tıkla salla (1.8 m menzil), [Q] ile fırlat. Vurduğun pazarcı 2 sn bayılıp yere yığılır!",
+	},
 }
 
-const ORDER := ["sigara", "puro", "cay", "simit", "megafon", "bicak", "radyo", "spray"]
+const ORDER := ["sigara", "puro", "cay", "simit", "megafon", "bicak", "radyo", "spray", "sopa"]
 
 
 ## Sürekli tüten duman (sigara/puro) veya sıcak buhar (çay) yayan lokal-olmayan partikül yayıcı.
@@ -312,6 +324,15 @@ static func build_item_model(item_id: String, burn_ratio := 0.0) -> Node3D:
 			LP.add(root, LP.box(Vector3(0.085, 0.065, 0.018)), Vector3(0, 0.072, 0.056), Color(0.12, 0.12, 0.14))
 			LP.add(root, LP.box(Vector3(0.24, 0.018, 0.02)), Vector3(0, 0.215, 0), Color(0.75, 0.76, 0.8), Vector3.ZERO, 0.25, 0.85)
 			LP.add(root, LP.cyl(0.004, 0.006, 0.26, 6), Vector3(0.13, 0.29, -0.02), Color(0.84, 0.86, 0.9), Vector3(0, 0, -0.28), 0.2, 0.9)
+
+		"sopa":
+			# Ahşap beyzbol sopası: sap +Z, kalın uç -Z (uzunluk ~0.56 m)
+			var wood := Color(0.78, 0.58, 0.32)
+			LP.add(root, LP.sphere(0.02, 6, 4), Vector3(0, 0, 0.075), wood, Vector3.ZERO, 0.7)
+			LP.add(root, LP.cyl(0.013, 0.018, 0.22, 8), Vector3(0, 0, -0.04), wood, Vector3(PI / 2, 0, 0), 0.7)
+			LP.add(root, LP.cyl(0.0145, 0.0155, 0.10, 8), Vector3(0, 0, 0.0), Color(0.12, 0.12, 0.13), Vector3(PI / 2, 0, 0), 0.9)
+			LP.add(root, LP.cyl(0.018, 0.037, 0.30, 9), Vector3(0, 0, -0.26), wood, Vector3(PI / 2, 0, 0), 0.7)
+			LP.add(root, LP.cyl(0.037, 0.034, 0.07, 9), Vector3(0, 0, -0.445), wood, Vector3(PI / 2, 0, 0), 0.7)
 
 		"spray":
 			# Yarı saydam mavi plastik fısfıs şişesi + içinde su + beyaz tetikli başlık ve uzun nozul

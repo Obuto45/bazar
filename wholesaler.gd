@@ -1,6 +1,6 @@
 extends Node3D
 ## Toptancı Ford Transit ("GARDAŞLAR SEBZE MEYVE"): Kuzey Kapısından havalı korna çalarak pazara girer,
-## tekerlekleri dönerek orta meydana park eder, dörtlülerini yakıp arkasından 7 çeşit taze kasa tedarik eder,
+## tekerlekleri dönerek orta meydana park eder, dörtlülerini yakıp arkasından 11 çeşit taze kasa tedarik eder,
 ## süresi dolunca korna çalıp Güney Kapısından çıkar ve yeni fiyatlarla geri gelir!
 
 const TRUCK_MODEL := preload("res://models/ford_transit/ford_transit_complete.glb")
@@ -22,8 +22,17 @@ const PARK_DURATION := 56.0
 const AWAY_DURATION := 28.0
 const CRATE_COLORS := [
 	Color(0.88, 0.18, 0.16), Color(0.16, 0.62, 0.26), Color(0.94, 0.72, 0.12),
-	Color(0.96, 0.48, 0.08), Color(0.44, 0.18, 0.62), Color(0.96, 0.82, 0.14), Color(0.10, 0.46, 0.88),
+	Color(0.96, 0.48, 0.08), Color(0.10, 0.46, 0.88), Color(0.18, 0.56, 0.30),
+	Color(0.44, 0.18, 0.62), Color(0.96, 0.82, 0.14), Color(0.16, 0.5, 0.22),
+	Color(0.86, 0.2, 0.3), Color(0.12, 0.4, 0.78),
 ]
+# Kasa yerleşimi: temel ürünler kamyonun iki yanında (3+3), özel ürünler arka kapağın önünde (5'li yay).
+const RACK_LAYOUT := {
+	"domates": Vector3(-1.58, 0.0, -0.55), "elma": Vector3(-1.58, 0.0, -1.5), "sogan": Vector3(-1.58, 0.0, -2.45),
+	"portakal": Vector3(1.58, 0.0, -0.55), "salatalik": Vector3(1.58, 0.0, -1.5), "biber": Vector3(1.58, 0.0, -2.45),
+	"patlican": Vector3(-1.64, 0.0, -3.6), "muz": Vector3(-0.82, 0.0, -3.72), "karpuz": Vector3(0.0, 0.0, -3.78),
+	"cilek": Vector3(0.82, 0.0, -3.72), "limon": Vector3(1.64, 0.0, -3.6),
+}
 
 var state: int = State.ENTERING
 var state_timer := 0.0
@@ -128,36 +137,30 @@ func _build_supply_rack() -> void:
 	_crate_areas.clear()
 	_crate_labels.clear()
 
-	# 4 temel ürün sol/sağ arka köşelerde, 3 özel ürün (patlıcan, muz, karpuz) tam arka kapağın önünde!
-	var layout := [
-		["domates", Vector3(-1.55, 0.0, -1.0)],
-		["elma", Vector3(-1.55, 0.0, -2.05)],
-		["sogan", Vector3(1.55, 0.0, -1.0)],
-		["portakal", Vector3(1.55, 0.0, -2.05)],
-		["patlican", Vector3(-0.95, 0.0, -3.55)],
-		["muz", Vector3(0.0, 0.0, -3.55)],
-		["karpuz", Vector3(0.95, 0.0, -3.55)],
-	]
-	for idx in layout.size():
-		var item_id: String = layout[idx][0]
-		var pos: Vector3 = layout[idx][1]
+	# Katalogdaki her ürün için bir kasa; düzende tanımlı değilse en arka sıraya eklenir.
+	var extra := 0
+	for idx in Produce.ITEM_ORDER.size():
+		var item_id: String = Produce.ITEM_ORDER[idx]
+		var pos: Vector3 = RACK_LAYOUT.get(item_id, Vector3(-1.6 + float(extra) * 0.8, 0.0, -4.7))
+		if not RACK_LAYOUT.has(item_id):
+			extra += 1
 		var info: Dictionary = Produce.ITEMS[item_id]
 		var c_col: Color = CRATE_COLORS[idx % CRATE_COLORS.size()]
 		var spot := Node3D.new()
 		spot.position = pos
+		# Arka sıra kamyona doğru yelpaze gibi hafif açılı
+		spot.rotation.y = pos.x * 0.12 if pos.z < -3.0 else 0.0
 		_rack_root.add_child(spot)
-		# Renkli plastik hal kasası
-		LP.add(spot, LP.box(Vector3(0.66, 0.30, 0.56)), Vector3(0, 0.16, 0), c_col, Vector3.ZERO, 0.52)
-		LP.add(spot, LP.box(Vector3(0.70, 0.05, 0.60)), Vector3(0, 0.31, 0), c_col.darkened(0.22), Vector3.ZERO, 0.5)
-		for j in 6:
-			var ox := -0.16 + float(j % 3) * 0.16
-			var oz := -0.10 + float(int(j / 3)) * 0.20
-			Produce.build_mesh(spot, item_id, Vector3(ox, 0.36, oz), 0.072)
+		# Renkli plastik hal kasası (içi dolu, tepeden taşan ürün yığını)
+		LP.add(spot, LP.box(Vector3(0.62, 0.28, 0.52)), Vector3(0, 0.15, 0), c_col, Vector3.ZERO, 0.52)
+		LP.add(spot, LP.box(Vector3(0.66, 0.05, 0.56)), Vector3(0, 0.29, 0), c_col.darkened(0.22), Vector3.ZERO, 0.5)
+		LP.add(spot, LP.box(Vector3(0.22, 0.05, 0.02)), Vector3(0, 0.19, 0.265), c_col.darkened(0.45))
+		Produce.build_crate_fill(spot, item_id, Vector3(0, 0.31, 0), 0.54, 0.44, 0.84, 2, idx)
 		var lbl := Label3D.new()
 		lbl.text = "%s\n%d TL" % [info["name"], int(info["crate_cost"])]
-		lbl.position = Vector3(0, 0.68, 0)
+		lbl.position = Vector3(0, 0.72 if (idx % 2 == 0 or pos.z > -3.0) else 0.98, 0)
 		lbl.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-		lbl.font_size = 24
+		lbl.font_size = 22
 		lbl.outline_size = 7
 		lbl.modulate = Color(1.0, 0.96, 0.82)
 		spot.add_child(lbl)
@@ -169,11 +172,11 @@ func _build_supply_rack() -> void:
 		area.collision_mask = 0
 		area.set_meta("kind", "wholesale_crate")
 		area.set_meta("item_id", item_id)
-		area.set_meta("hl_size", Vector3(0.72, 0.44, 0.62))
+		area.set_meta("hl_size", Vector3(0.68, 0.44, 0.58))
 		area.position = Vector3(0, 0.32, 0)
 		var cs := CollisionShape3D.new()
 		var sh := BoxShape3D.new()
-		sh.size = Vector3(0.76, 0.72, 0.68)
+		sh.size = Vector3(0.68, 0.72, 0.6)
 		cs.shape = sh
 		area.add_child(cs)
 		spot.add_child(area)

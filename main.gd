@@ -94,6 +94,9 @@ var ingame_box: VBoxContainer
 var speed_lines: Control
 var hotbar_wrap: HBoxContainer
 var hotbar_slots: Array = [] # [[PanelContainer, Label, Label, StyleBoxFlat], ...]
+var item_hint_lbl: Label
+var buff_box: HBoxContainer
+var buff_pills: Dictionary = {} # "tea"/"simit"/"smoke" -> [PanelContainer, Label]
 var day_hud: PanelContainer
 var day_lbl: Label
 var day_bar: ColorRect
@@ -620,22 +623,22 @@ func _build_ui() -> void:
 	layer.add_child(fade_rect)
 
 
-## Alt orta 6 yuvalı kişisel envanter çubuğu (1-6; meyve kasaları buraya alınmaz!).
+## Alt orta 8 yuvalı kişisel envanter çubuğu (1-8; meyve kasaları buraya alınmaz!).
 func _build_hotbar(layer: CanvasLayer, theme: Theme) -> void:
 	hotbar_wrap = HBoxContainer.new()
 	hotbar_wrap.theme = theme
 	hotbar_wrap.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
-	hotbar_wrap.offset_left = -270; hotbar_wrap.offset_right = 270
+	hotbar_wrap.offset_left = -350; hotbar_wrap.offset_right = 350
 	hotbar_wrap.offset_top = -104; hotbar_wrap.offset_bottom = -36
 	hotbar_wrap.alignment = BoxContainer.ALIGNMENT_CENTER
-	hotbar_wrap.add_theme_constant_override("separation", 8)
+	hotbar_wrap.add_theme_constant_override("separation", 6)
 	hotbar_wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	layer.add_child(hotbar_wrap)
 	hotbar_slots.clear()
 	for i in PlayerScript.INV_SIZE:
 		var p := PanelContainer.new()
-		p.custom_minimum_size = Vector2(82, 64)
-		var sb := _sb(Color(0.08, 0.05, 0.04, 0.82), 10, 6)
+		p.custom_minimum_size = Vector2(78, 64)
+		var sb := _sb(Color(0.08, 0.05, 0.04, 0.82), 10, 5)
 		sb.set_border_width_all(2)
 		sb.border_color = Color(GOLD, 0.32)
 		p.add_theme_stylebox_override("panel", sb)
@@ -645,12 +648,54 @@ func _build_hotbar(layer: CanvasLayer, theme: Theme) -> void:
 		vb.alignment = BoxContainer.ALIGNMENT_CENTER
 		vb.add_theme_constant_override("separation", 0)
 		p.add_child(vb)
-		var num := _lbl(vb, str(i + 1), 11, 0.6)
+		var num := _lbl(vb, str(i + 1), 11, 0.65)
 		var main_l := _lbl(vb, "—", 13, 0.95)
 		main_l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		main_l.autowrap_mode = TextServer.AUTOWRAP_OFF
 		hotbar_slots.append([p, num, main_l, sb])
 	hotbar_wrap.hide()
+
+	# Seçili eşyanın Sol / Sağ Tık aksiyon ipucu (hotbar'ın hemen üstünde)
+	item_hint_lbl = _lbl(layer, "", 13, 0.95)
+	item_hint_lbl.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	item_hint_lbl.offset_left = -340; item_hint_lbl.offset_right = 340
+	item_hint_lbl.offset_top = -128; item_hint_lbl.offset_bottom = -106
+	item_hint_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	item_hint_lbl.autowrap_mode = TextServer.AUTOWRAP_OFF
+	item_hint_lbl.add_theme_color_override("font_color", Color(1.0, 0.93, 0.68))
+	item_hint_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	item_hint_lbl.hide()
+
+	# Aktif güçlendirme rozetleri (Çay, Simit, Keyif — sağ üstte para HUD'unun altında)
+	buff_box = HBoxContainer.new()
+	buff_box.theme = theme
+	buff_box.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	buff_box.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	buff_box.offset_left = -520; buff_box.offset_right = -20
+	buff_box.offset_top = 114; buff_box.offset_bottom = 148
+	buff_box.alignment = BoxContainer.ALIGNMENT_END
+	buff_box.add_theme_constant_override("separation", 6)
+	buff_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	layer.add_child(buff_box)
+	buff_pills.clear()
+	for spec: Array in [
+		["tea", Color(0.95, 0.45, 0.22)],
+		["simit", Color(1.0, 0.78, 0.28)],
+		["smoke", Color(0.68, 0.84, 1.0)],
+	]:
+		var bp := PanelContainer.new()
+		var bsb := _sb(Color(0.09, 0.06, 0.04, 0.86), 10, 6)
+		bsb.set_border_width_all(2)
+		bsb.border_color = Color(spec[1] as Color, 0.82)
+		bp.add_theme_stylebox_override("panel", bsb)
+		bp.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var bl := _lbl(bp, "", 13, 1.0)
+		bl.autowrap_mode = TextServer.AUTOWRAP_OFF
+		bl.add_theme_color_override("font_color", Color(1.0, 0.96, 0.86))
+		bp.hide()
+		buff_box.add_child(bp)
+		buff_pills[str(spec[0])] = [bp, bl]
+	buff_box.hide()
 
 
 func _refresh_hotbar() -> void:
@@ -675,9 +720,19 @@ func _refresh_hotbar() -> void:
 			main_l.modulate.a = 0.4
 		else:
 			var iid := str(sl.get("id", ""))
-			var info_i: Dictionary = Items.CATALOG.get(iid, {"icon": "?", "short": iid, "consumable": false})
+			var info_i: Dictionary = Items.CATALOG.get(iid, {"icon": "?", "short": iid, "consumable": false, "puffs_per_use": 1})
 			var cnt := int(sl.get("uses", 1))
-			num_l.text = "%d  %s" % [i + 1, ("x%d" % cnt) if bool(info_i["consumable"]) else ""]
+			var max_p := int(info_i.get("puffs_per_use", 1))
+			var rem_p := maxi(max_p - int(sl.get("puffs", 0)), 1)
+			var badge := ""
+			if bool(info_i["consumable"]):
+				if max_p > 1 and cnt == 1:
+					badge = "%d/%d" % [rem_p, max_p]
+				elif max_p > 1 and int(sl.get("puffs", 0)) > 0:
+					badge = "x%d (%d)" % [cnt, rem_p]
+				else:
+					badge = "x%d" % cnt
+			num_l.text = "%d  %s" % [i + 1, badge]
 			main_l.text = "%s %s" % [str(info_i["icon"]), str(info_i["short"])]
 			main_l.modulate.a = 1.0
 
@@ -903,7 +958,7 @@ func _build_meta_hud(layer: CanvasLayer, theme: Theme) -> void:
 	tut_panel.add_theme_stylebox_override("panel", tb)
 	tut_panel.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
 	tut_panel.offset_left = -350; tut_panel.offset_right = 350
-	tut_panel.offset_top = -114; tut_panel.offset_bottom = -114
+	tut_panel.offset_top = -136; tut_panel.offset_bottom = -136
 	tut_panel.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	tut_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	tut_panel.pivot_offset = Vector2(350, 40)
@@ -946,32 +1001,42 @@ func _build_shop_panel(layer: CanvasLayer, theme: Theme) -> void:
 	cols.add_theme_constant_override("separation", 18)
 	root_v.add_child(cols)
 
-	# Sol Sütun: Kişisel Envanter Eşyaları
+	# Sol Sütun: Kişisel Envanter Eşyaları (kaydırılabilir, 720p'de taşmaz)
+	var left_col := VBoxContainer.new()
+	left_col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	left_col.add_theme_constant_override("separation", 6)
+	cols.add_child(left_col)
+	var lh := _lbl(left_col, "🎒 KİŞİSEL EŞYALAR (Envanter 1–8)", 18, 1.0)
+	lh.add_theme_color_override("font_color", Color(0.62, 0.92, 1.0))
+	var left_scroll := ScrollContainer.new()
+	left_scroll.custom_minimum_size = Vector2(0, 468)
+	left_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	left_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	left_col.add_child(left_scroll)
 	var left_v := VBoxContainer.new()
 	left_v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	left_v.add_theme_constant_override("separation", 8)
-	cols.add_child(left_v)
-	var lh := _lbl(left_v, "🎒 KİŞİSEL EŞYALAR (Envanter 1–6)", 19, 1.0)
-	lh.add_theme_color_override("font_color", Color(0.62, 0.92, 1.0))
+	left_v.add_theme_constant_override("separation", 4)
+	left_scroll.add_child(left_v)
 	for iid in Items.ORDER:
 		var info_i: Dictionary = Items.CATALOG[iid]
 		var rp := PanelContainer.new()
-		var rsb := _sb(Color(0.14, 0.09, 0.07, 0.95), 10, 10)
+		var rsb := _sb(Color(0.14, 0.09, 0.07, 0.95), 8, 5)
 		rsb.set_border_width_all(1)
 		rsb.border_color = Color(GOLD, 0.3)
 		rp.add_theme_stylebox_override("panel", rsb)
 		left_v.add_child(rp)
 		var hb := HBoxContainer.new()
-		hb.add_theme_constant_override("separation", 10)
+		hb.add_theme_constant_override("separation", 8)
 		rp.add_child(hb)
 		var tx := VBoxContainer.new()
 		tx.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		tx.add_theme_constant_override("separation", 0)
 		hb.add_child(tx)
-		var nl := _lbl(tx, "%s %s" % [str(info_i["icon"]), str(info_i["name"])], 17, 1.0)
+		var nl := _lbl(tx, "%s %s" % [str(info_i["icon"]), str(info_i["name"])], 14, 1.0)
 		nl.add_theme_color_override("font_color", Color(1.0, 0.94, 0.78))
-		_lbl(tx, str(info_i["desc"]), 13, 0.78)
-		var btn := _btn(hb, "%d TL" % int(info_i["cost"]), _on_buy_item.bind(iid), 40)
-		btn.custom_minimum_size.x = 112
+		_lbl(tx, str(info_i["desc"]), 11, 0.78)
+		var btn := _btn(hb, "%d TL" % int(info_i["cost"]), _on_buy_item.bind(iid), 32)
+		btn.custom_minimum_size.x = 96
 		shop_item_btns[iid] = btn
 
 	# Sağ Sütun: Tezgah Geliştirmeleri
@@ -2329,6 +2394,10 @@ func _back_to_menu() -> void:
 	summary_wrap.hide()
 	hint.hide()
 	hotbar_wrap.hide()
+	if item_hint_lbl:
+		item_hint_lbl.hide()
+	if buff_box:
+		buff_box.hide()
 	voice_hud.hide()
 	day_hud.hide()
 	event_banner.hide()
@@ -3042,6 +3111,40 @@ func _update_meta_hud(dt: float, me: Node) -> void:
 		if _tut_cd <= 0.0:
 			_tut_cd = 0.15
 			_tut_check(me, st)
+	# Seçili eşya aksiyon ipucu + aktif Çay / Simit / Keyif güçlendirme rozetleri
+	var hide_ui := pause_wrap.visible or shop_wrap.visible or day_ended
+	if item_hint_lbl:
+		var eq_id: String = str(me.equipped_item_id()) if me.has_method("equipped_item_id") else ""
+		if eq_id != "" and Items.CATALOG.has(eq_id) and not hide_ui:
+			var ci: Dictionary = Items.CATALOG[eq_id]
+			var lh_t := str(ci.get("left_hint", ""))
+			var rh_t := str(ci.get("right_hint", ""))
+			item_hint_lbl.text = "[Sol Tık] %s   •   [Sağ Tık] %s   •   [0] Cebe Koy" % [lh_t, rh_t]
+			item_hint_lbl.show()
+		else:
+			item_hint_lbl.hide()
+	if buff_box and not buff_pills.is_empty():
+		var tea_s := float(me.get("tea_buff")) if me.get("tea_buff") != null else 0.0
+		var sim_s := float(me.get("simit_buff")) if me.get("simit_buff") != null else 0.0
+		var smk_s := float(me.get("smoke_buff")) if me.get("smoke_buff") != null else 0.0
+		var any_b := false
+		for entry: Array in [
+			["tea", tea_s, "🍵 Çay %dsn (+%%25)"],
+			["simit", sim_s, "🥯 Simit %dsn (+%%15)"],
+			["smoke", smk_s, "🚬 Keyif %dsn"],
+		]:
+			var row: Array = buff_pills[str(entry[0])]
+			var p: PanelContainer = row[0]
+			var l: Label = row[1]
+			var secs: float = float(entry[1])
+			if secs > 0.1 and not hide_ui:
+				l.text = str(entry[2]) % ceili(secs)
+				p.show()
+				any_b = true
+			else:
+				p.hide()
+		buff_box.visible = any_b
+
 	# Bağlamsal ipucu
 	_hint_cd -= dt
 	if _hint_cd <= 0.0:

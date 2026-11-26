@@ -481,6 +481,16 @@ func _build_all_clips() -> void:
 	_add("air_horn_short", _synth_air_horn_short)
 	_add("truck_engine", _synth_truck_engine_loop.bind(1.6))
 	_add("puff", _synth_smoke_puff)
+	_add("smoke_inhale", _synth_smoke_inhale)
+	_add("smoke_exhale", _synth_smoke_exhale)
+	_add("ash_flick", _synth_ash_flick)
+	_add("tea_sip", _synth_tea_sip)
+	_add("tea_stir", _synth_tea_stir)
+	_add("bite_crunch", _synth_bite_crunch)
+	_add("bottle_shake", _synth_bottle_shake)
+	_add("radio_tune", _synth_radio_tune)
+	_add("mega_chirp", _synth_mega_chirp)
+	_add("knife_spin", _synth_knife_spin)
 	_add("megaphone_pop", _synth_megaphone_pop)
 	_add("knife_swing", _synth_knife_swing)
 	_add("knife_hit", _synth_knife_hit)
@@ -601,6 +611,228 @@ func _synth_smoke_puff() -> AudioStreamWAV:
 			buf[i] = (lp1 - lp2) * env * 0.55
 		else:
 			buf[i] = 0.0
+	return _make_wav(buf)
+
+
+## Sigara / puro derin nefes çekme: hava akışı + tütün kor çıtırtıları.
+func _synth_smoke_inhale() -> AudioStreamWAV:
+	var dur := 0.50
+	var n := int(RATE * dur)
+	var buf := PackedFloat32Array()
+	buf.resize(n)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 711
+	var lp := 0.0
+	var hp := 0.0
+	for i in n:
+		var t := float(i) / float(RATE)
+		var w := rng.randf_range(-1.0, 1.0)
+		var env := sin(clampf(t / dur, 0.0, 1.0) * PI)
+		lp += 0.24 * (w - lp)
+		hp += 0.04 * (lp - hp)
+		var crack := (rng.randf_range(-1.0, 1.0) * 0.95) if rng.randf() < (0.018 + 0.03 * env) else 0.0
+		buf[i] = clampf(((lp - hp) * 0.42 + crack * 0.34) * env, -0.92, 0.92)
+	return _make_wav(buf)
+
+
+## Ağızdan duman üfleme: sıcak, yumuşak nefesli üfleme sesi.
+func _synth_smoke_exhale() -> AudioStreamWAV:
+	var dur := 0.76
+	var n := int(RATE * dur)
+	var buf := PackedFloat32Array()
+	buf.resize(n)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 719
+	var lp1 := 0.0
+	var lp2 := 0.0
+	for i in n:
+		var t := float(i) / float(RATE)
+		var u := t / dur
+		var w := rng.randf_range(-1.0, 1.0)
+		var env := minf(u / 0.14, 1.0) * pow(maxf(1.0 - u, 0.0), 1.35)
+		var cut := lerpf(0.16, 0.06, u)
+		lp1 += cut * (w - lp1)
+		lp2 += 0.025 * (lp1 - lp2)
+		buf[i] = clampf((lp1 - lp2) * env * 0.85, -0.92, 0.92)
+	return _make_wav(buf)
+
+
+## Sigara / puro kül silkme: ince tırnak çıtırtısı.
+func _synth_ash_flick() -> AudioStreamWAV:
+	var dur := 0.14
+	var n := int(RATE * dur)
+	var buf := PackedFloat32Array()
+	buf.resize(n)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 733
+	for i in n:
+		var t := float(i) / float(RATE)
+		var tap := sin(TAU * lerpf(920.0, 460.0, minf(t / 0.03, 1.0)) * t) * exp(-t * 85.0)
+		var snap := rng.randf_range(-1.0, 1.0) * exp(-t * 140.0) * 0.55
+		buf[i] = clampf((tap * 0.55 + snap) * 0.72, -0.9, 0.9)
+	return _make_wav(buf)
+
+
+## Sıcak Türk çayı yudumlama: hafif hüpürdetme + sıcak yutkunma.
+func _synth_tea_sip() -> AudioStreamWAV:
+	var dur := 0.66
+	var n := int(RATE * dur)
+	var buf := PackedFloat32Array()
+	buf.resize(n)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 1938
+	var bp1 := 0.0
+	var bp2 := 0.0
+	for i in n:
+		var t := float(i) / float(RATE)
+		var v := 0.0
+		if t < 0.36:
+			# İnce sıcak yudum + hafif fokurtulu hava çekişi
+			var u := t / 0.36
+			var env := sin(u * PI)
+			var w := rng.randf_range(-1.0, 1.0)
+			bp1 += 0.22 * (w - bp1)
+			bp2 += 0.07 * (bp1 - bp2)
+			var mod := 0.65 + 0.35 * sin(TAU * lerpf(24.0, 38.0, u) * t)
+			var tone := sin(TAU * lerpf(580.0, 1120.0, u) * t) * 0.22
+			v += ((bp1 - bp2) * 0.85 * mod + tone) * env * 0.75
+		elif t >= 0.40:
+			# Yumuşak yutkunma + rahat nefes
+			var dt := t - 0.40
+			var gulp := sin(TAU * lerpf(220.0, 130.0, minf(dt / 0.14, 1.0)) * dt) * exp(-dt * 18.0) * 0.42
+			var sigh := rng.randf_range(-1.0, 1.0) * 0.12 * exp(-dt * 10.0)
+			v += gulp + sigh
+		buf[i] = clampf(v, -0.92, 0.92)
+	return _make_wav(buf)
+
+
+## İnce belli bardakta çay kaşığı şıngırdatarak karıştırma (6 hızlı cam-metal tınısı).
+func _synth_tea_stir() -> AudioStreamWAV:
+	var dur := 0.82
+	var n := int(RATE * dur)
+	var buf := PackedFloat32Array()
+	buf.resize(n)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 1945
+	var hits := [[0.03, 0.85], [0.15, 0.72], [0.27, 0.95], [0.39, 0.78], [0.51, 0.90], [0.63, 0.62]]
+	for h in hits:
+		var s0 := int(float(h[0]) * RATE)
+		var g: float = float(h[1])
+		var dv := 1.0 + rng.randf_range(-0.035, 0.035)
+		for k in int(0.18 * RATE):
+			var j := s0 + k
+			if j >= n:
+				break
+			var t := float(k) / float(RATE)
+			var clink := sin(TAU * 2520.0 * dv * t) * exp(-t * 26.0) \
+				+ sin(TAU * 5620.0 * dv * t) * exp(-t * 38.0) * 0.55 \
+				+ sin(TAU * 8400.0 * dv * t) * exp(-t * 55.0) * 0.25
+			buf[j] += clink * g * 0.42
+	for i in n:
+		buf[i] = clampf(buf[i], -0.92, 0.92)
+	return _make_wav(buf)
+
+
+## Çıtır susamlı simit ısırma: katmanlı kuru kabuk çıtırtısı!
+func _synth_bite_crunch() -> AudioStreamWAV:
+	var dur := 0.36
+	var n := int(RATE * dur)
+	var buf := PackedFloat32Array()
+	buf.resize(n)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 808
+	var bursts := [[0.01, 0.10, 1.0], [0.09, 0.09, 0.85], [0.18, 0.11, 0.72]]
+	var lp := 0.0
+	for i in n:
+		var t := float(i) / float(RATE)
+		var w := rng.randf_range(-1.0, 1.0)
+		lp += 0.32 * (w - lp)
+		var v := 0.0
+		for b in bursts:
+			var t0: float = float(b[0])
+			var len_b: float = float(b[1])
+			var g: float = float(b[2])
+			if t >= t0 and t < t0 + len_b:
+				var dt := t - t0
+				var env := sin((dt / len_b) * PI)
+				var pop := (rng.randf_range(-1.0, 1.0) * 1.4) if rng.randf() < 0.14 else 0.0
+				v += (lp * 0.55 + (w - lp) * 0.65 + pop * 0.5) * env * g
+		buf[i] = clampf(v * 0.75, -0.94, 0.94)
+	return _make_wav(buf)
+
+
+## Su fısfısı şişesi çalkalama: plastik içinde çalkalanan su sesi.
+func _synth_bottle_shake() -> AudioStreamWAV:
+	var dur := 0.48
+	var n := int(RATE * dur)
+	var buf := PackedFloat32Array()
+	buf.resize(n)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 616
+	var lp := 0.0
+	for i in n:
+		var t := float(i) / float(RATE)
+		var w := rng.randf_range(-1.0, 1.0)
+		var slosh := absf(sin(TAU * 4.5 * t))
+		lp += lerpf(0.08, 0.24, slosh) * (w - lp)
+		var glug := sin(TAU * lerpf(260.0, 520.0, slosh) * t) * 0.22 * slosh
+		var env := sin(clampf(t / dur, 0.0, 1.0) * PI)
+		buf[i] = clampf((lp * 0.75 + glug) * env * 0.78, -0.9, 0.9)
+	return _make_wav(buf)
+
+
+## Arabesk radyo frekans çevirme: kısa analog parazit + taşıyıcı ıslığı.
+func _synth_radio_tune() -> AudioStreamWAV:
+	var dur := 0.28
+	var n := int(RATE * dur)
+	var buf := PackedFloat32Array()
+	buf.resize(n)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 909
+	var lp := 0.0
+	for i in n:
+		var t := float(i) / float(RATE)
+		var u := t / dur
+		var w := rng.randf_range(-1.0, 1.0)
+		lp += 0.35 * (w - lp)
+		var env := sin(u * PI)
+		var whistle := sin(TAU * lerpf(1850.0, 720.0, u) * t) * 0.35 * sin(u * PI)
+		buf[i] = clampf(((w - lp) * 0.65 + whistle) * env * 0.7, -0.9, 0.9)
+	return _make_wav(buf)
+
+
+## El megafonu kısa çift-ton dikkat sireni.
+func _synth_mega_chirp() -> AudioStreamWAV:
+	var dur := 0.40
+	var n := int(RATE * dur)
+	var buf := PackedFloat32Array()
+	buf.resize(n)
+	for i in n:
+		var t := float(i) / float(RATE)
+		var f := lerpf(620.0, 1380.0, fmod(t * 5.0, 1.0))
+		var env := minf(t / 0.02, 1.0) * minf((dur - t) / 0.04, 1.0)
+		var sq := tanh((sin(TAU * f * t) + 0.45 * sin(TAU * f * 2.0 * t)) * 1.9)
+		buf[i] = clampf(sq * env * 0.62, -0.92, 0.92)
+	return _make_wav(buf)
+
+
+## Meyve bıçağı pazarcı usulü hızlı çevirme vınlaması (çift metalik savurma).
+func _synth_knife_spin() -> AudioStreamWAV:
+	var dur := 0.32
+	var n := int(RATE * dur)
+	var buf := PackedFloat32Array()
+	buf.resize(n)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 414
+	var lp := 0.0
+	for i in n:
+		var t := float(i) / float(RATE)
+		var w := rng.randf_range(-1.0, 1.0)
+		lp += 0.25 * (w - lp)
+		var pulse := pow(absf(sin(TAU * 3.2 * t)), 1.6)
+		var ping := sin(TAU * lerpf(2100.0, 2900.0, t / dur) * t) * 0.18 * pulse
+		var env := sin(clampf(t / dur, 0.0, 1.0) * PI)
+		buf[i] = clampf(((w - lp) * 0.65 * pulse + ping) * env * 0.78, -0.9, 0.9)
 	return _make_wav(buf)
 
 

@@ -124,6 +124,136 @@ static func spawn_ember_sparks(parent: Node, world_pos: Vector3) -> void:
 		Color(1.0, 0.58, 0.14), 0.35, 0.95, 75.0, Vector3(0, -1.8, 0))
 
 
+## Ağızdan ileri üflenen hacimli sigara / Küba purosu duman bulutu (ileri savrulur, yavaşlayıp yukarı açılır!).
+static func spawn_exhale_cloud(parent: Node, world_pos: Vector3, fwd_dir: Vector3, thick := false) -> void:
+	if not _ok(parent):
+		return
+	var d := fwd_dir.normalized() if fwd_dir.length() > 0.01 else Vector3.FORWARD
+	var p := CPUParticles3D.new()
+	p.one_shot = true
+	p.explosiveness = 0.25
+	p.amount = 28 if thick else 18
+	p.lifetime = 2.6 if thick else 2.0
+	p.mesh = LP.sphere(0.068 if thick else 0.048, 6, 4)
+	var m := _vcol_mat(0.95, 0.0, true, true)
+	p.material_override = m
+	p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	p.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
+	p.emission_sphere_radius = 0.03
+	p.direction = (d + Vector3(0, 0.10, 0)).normalized()
+	p.spread = 20.0 if thick else 15.0
+	p.initial_velocity_min = 1.15 if thick else 1.05
+	p.initial_velocity_max = 2.35 if thick else 1.95
+	p.damping_min = 1.45
+	p.damping_max = 2.2
+	p.gravity = Vector3(0.08, 0.38, 0.06)
+	p.scale_amount_curve = _scale_curve(0.35, 1.55 if thick else 1.25, 2.85 if thick else 2.25, 0.42)
+	var grad := Gradient.new()
+	var base_c := Color(0.80, 0.84, 0.90, 0.62) if thick else Color(0.88, 0.90, 0.94, 0.50)
+	grad.set_color(0, Color(base_c.r, base_c.g, base_c.b, 0.0))
+	grad.add_point(0.10, base_c)
+	grad.add_point(0.55, Color(base_c.r, base_c.g, base_c.b, base_c.a * 0.48))
+	grad.set_color(1, Color(base_c.r, base_c.g, base_c.b, 0.0))
+	p.color_ramp = grad
+	parent.add_child(p)
+	p.global_position = world_pos
+	p.emitting = true
+	var tw := p.create_tween()
+	tw.tween_interval(p.lifetime + 0.45)
+	tw.tween_callback(p.queue_free)
+
+
+## Küba purosu üflerken ağızdan çıkıp büyüyerek süzülen 3D duman halkası!
+static func spawn_smoke_ring(parent: Node, world_pos: Vector3, fwd_dir: Vector3) -> void:
+	if not _ok(parent):
+		return
+	var d := fwd_dir.normalized() if fwd_dir.length() > 0.01 else Vector3.FORWARD
+	var mi := MeshInstance3D.new()
+	mi.mesh = LP.torus(0.042, 0.066, 16, 6)
+	var m := StandardMaterial3D.new()
+	m.albedo_color = Color(0.84, 0.87, 0.92, 0.56)
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mi.material_override = m
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	parent.add_child(mi)
+	mi.global_position = world_pos + d * 0.16
+	# Torus eksenini üfleme yönüne hizala
+	var up := Vector3.UP if absf(d.y) < 0.95 else Vector3.RIGHT
+	mi.look_at(mi.global_position + d, up)
+	mi.rotate_object_local(Vector3.RIGHT, PI * 0.5)
+	mi.scale = Vector3(0.45, 0.45, 0.45)
+	var tw := mi.create_tween().set_parallel()
+	tw.tween_property(mi, "global_position", mi.global_position + d * 1.45 + Vector3(0, 0.52, 0), 1.85).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tw.tween_property(mi, "scale", Vector3(3.4, 2.2, 3.4), 1.85).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tw.tween_property(m, "albedo_color:a", 0.0, 1.75).set_delay(0.15)
+	tw.chain().tween_callback(mi.queue_free)
+
+
+## Sigara/puro kül silkme: gri kül parçaları + 2 minik sönmekte olan kor.
+static func spawn_ash_drop(parent: Node, world_pos: Vector3) -> void:
+	if not _ok(parent):
+		return
+	var ash_mesh := LP.box(Vector3(0.012, 0.008, 0.012))
+	var am := _vcol_mat(0.95, 0.0, false, true)
+	_spawn_oneshot(parent, world_pos, 9, 0.72, ash_mesh, am,
+		Color(0.55, 0.54, 0.56, 0.92), 0.18, 0.65, 65.0, Vector3(0.08, -3.4, 0.04), Vector3.DOWN, 0.65, 1.35)
+	var spark := LP.box(Vector3(0.010, 0.010, 0.010))
+	var sm := _vcol_mat(0.2, 0.0, true, false)
+	sm.emission_enabled = true
+	sm.emission = Color(1.0, 0.42, 0.06)
+	sm.emission_energy_multiplier = 2.8
+	_spawn_oneshot(parent, world_pos, 3, 0.36, spark, sm,
+		Color(1.0, 0.55, 0.12), 0.15, 0.55, 55.0, Vector3(0, -2.6, 0), Vector3.DOWN, 0.6, 1.0)
+
+
+## Sıcak Türk çayından yükselen yumuşak buhar dalgası (yudum veya kaşık karıştırma anında).
+static func spawn_tea_steam(parent: Node, world_pos: Vector3, burst := false) -> void:
+	if not _ok(parent):
+		return
+	var p := CPUParticles3D.new()
+	p.one_shot = true
+	p.explosiveness = 0.45 if burst else 0.25
+	p.amount = 14 if burst else 8
+	p.lifetime = 1.45 if burst else 1.15
+	p.mesh = LP.sphere(0.026 if burst else 0.020, 5, 3)
+	p.material_override = _vcol_mat(0.95, 0.0, true, true)
+	p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	p.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
+	p.emission_sphere_radius = 0.025
+	p.direction = Vector3.UP
+	p.spread = 28.0
+	p.initial_velocity_min = 0.20
+	p.initial_velocity_max = 0.48 if burst else 0.34
+	p.gravity = Vector3(0.05, 0.28, 0.04)
+	p.damping_min = 0.35
+	p.damping_max = 0.65
+	p.scale_amount_curve = _scale_curve(0.4, 1.5, 2.3, 0.4)
+	var g := Gradient.new()
+	g.set_color(0, Color(1.0, 0.98, 0.94, 0.42 if burst else 0.30))
+	g.set_color(1, Color(1.0, 0.98, 0.94, 0.0))
+	p.color_ramp = g
+	parent.add_child(p)
+	p.global_position = world_pos
+	p.emitting = true
+	var tw := p.create_tween()
+	tw.tween_interval(p.lifetime + 0.35)
+	tw.tween_callback(p.queue_free)
+
+
+## Çıtır simit ısırırken dökülen altın kabuk ve susam kırıntıları.
+static func spawn_crumbs(parent: Node, world_pos: Vector3) -> void:
+	if not _ok(parent):
+		return
+	var crust := LP.box(Vector3(0.015, 0.011, 0.012))
+	var cm := _vcol_mat(0.85, 0.0, false, false)
+	_spawn_oneshot(parent, world_pos, 10, 0.62, crust, cm,
+		Color(0.84, 0.54, 0.20), 0.35, 1.15, 95.0, Vector3(0, -6.2, 0), Vector3(0, 0.2, 0), 0.6, 1.25)
+	var ses := LP.box(Vector3(0.008, 0.006, 0.006))
+	_spawn_oneshot(parent, world_pos, 8, 0.55, ses, cm,
+		Color(0.96, 0.90, 0.72), 0.25, 0.95, 110.0, Vector3(0, -5.4, 0), Vector3(0, 0.15, 0), 0.6, 1.1)
+
+
 ## Meyve bıçağı darbe efekti (kırmızı kıvılcım + şok).
 static func spawn_hit_burst(parent: Node, world_pos: Vector3) -> void:
 	var mesh := LP.prism(Vector3(0.08, 0.09, 0.03))

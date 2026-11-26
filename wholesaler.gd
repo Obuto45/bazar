@@ -46,6 +46,18 @@ var _blink_t := 0.0
 var _horn_cd := 0.0
 var _last_horn_idx := -1
 
+## Şoförün seslendirilmiş repliklerinden (VoxCPM2, kamyoncu sesi) her an için 3 çeşit.
+const VOICE_LINES := {
+	"geldi": [preload("res://audio/voices/toptanci/geldi_1.ogg"), preload("res://audio/voices/toptanci/geldi_2.ogg"),
+		preload("res://audio/voices/toptanci/geldi_3.ogg")],
+	"uyari": [preload("res://audio/voices/toptanci/uyari_1.ogg"), preload("res://audio/voices/toptanci/uyari_2.ogg"),
+		preload("res://audio/voices/toptanci/uyari_3.ogg")],
+	"kalkiyor": [preload("res://audio/voices/toptanci/kalkiyor_1.ogg"),
+		preload("res://audio/voices/toptanci/kalkiyor_2.ogg"), preload("res://audio/voices/toptanci/kalkiyor_3.ogg")],
+}
+var _voice_audio: AudioStreamPlayer3D
+var _last_voice := {}
+
 const HORN_CALLOUTS: Array[String] = [
 	"📣 FİİİUUUV! ISLIK KORNA — TOPTANCI GELDİ!",
 	"📣 DÜÜÜT! SALYANGOZ KORNA — TOPTANCI GELDİ!",
@@ -88,6 +100,14 @@ func _ready() -> void:
 	_horn_audio.attenuation_model = AudioStreamPlayer3D.ATTENUATION_INVERSE_DISTANCE
 	_horn_audio.volume_db = 1.5
 	add_child(_horn_audio)
+	_voice_audio = AudioStreamPlayer3D.new()
+	_voice_audio.bus = Sfx.BUS_SFX
+	_voice_audio.position = Vector3(0.55, 1.75, 1.9)  # şoför camı
+	_voice_audio.unit_size = 6.5
+	_voice_audio.max_distance = 48.0
+	_voice_audio.attenuation_model = AudioStreamPlayer3D.ATTENUATION_INVERSE_DISTANCE
+	_voice_audio.volume_db = 2.0
+	add_child(_voice_audio)
 	if DisplayServer.get_name() != "headless":
 		_engine_audio.play()
 	_set_rack_active(false)
@@ -323,17 +343,20 @@ func _tick_host(dt: float) -> void:
 					rpc_state_changed.rpc(state, state_timer)
 				else:
 					rpc_state_changed(state, state_timer)
+				_say_voice("geldi", 0.3)
 				arrived.emit()
 		State.PARKED:
 			state_timer -= dt
 			if not _honked_warn and state_timer <= 8.0:
 				_honked_warn = true
 				_fire_horn(true)
+				_say_voice("uyari", 1.1)
 				departing.emit()
 			if state_timer <= 0.0:
 				state = State.DEPARTING
 				_set_rack_active(false)
 				_fire_horn(true)
+				_say_voice("kalkiyor", 1.1)
 				if Net.online():
 					rpc_state_changed.rpc(state, 0.0)
 				else:
@@ -430,6 +453,33 @@ func rpc_play_horn(short_blast: bool, horn_idx: int = -1) -> void:
 	VFX.spawn_sound_ring(self, horn_pos, 6.2, Color(1.0, 0.78, 0.22))
 	var callout := "📣 DÜT DÜÜÜT! TOPTANCI KALKIYOR!" if short_blast else HORN_CALLOUTS[posmod(idx, HORN_CALLOUTS.size())]
 	VFX.spawn_floating_text(self, horn_pos + Vector3(0, 0.85, 0), callout, Color(1.0, 0.88, 0.28), 46)
+
+
+## Host seçer (art arda aynı replik gelmez), herkes aynı repliği kamyonun şoför camından duyar.
+func _say_voice(kind: String, delay: float) -> void:
+	var n: int = VOICE_LINES[kind].size()
+	var idx := randi() % n
+	if n > 1 and idx == int(_last_voice.get(kind, -1)):
+		idx = (idx + 1 + randi() % (n - 1)) % n
+	_last_voice[kind] = idx
+	if Net.online():
+		rpc_say_voice.rpc(kind, idx, delay)
+	else:
+		rpc_say_voice(kind, idx, delay)
+
+
+@rpc("authority", "call_local", "reliable")
+func rpc_say_voice(kind: String, idx: int, delay: float) -> void:
+	if DisplayServer.get_name() == "headless" or _voice_audio == null or not VOICE_LINES.has(kind):
+		return
+	if delay > 0.0:
+		await get_tree().create_timer(delay).timeout
+		if not is_instance_valid(_voice_audio) or not _voice_audio.is_inside_tree():
+			return
+	var lines: Array = VOICE_LINES[kind]
+	_voice_audio.stop()
+	_voice_audio.stream = lines[posmod(idx, lines.size())]
+	_voice_audio.play()
 
 
 @rpc("authority", "call_local", "reliable")

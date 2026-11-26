@@ -33,13 +33,9 @@ const WEATHER := {
 		"toast": "🌧️ Yağmur bastı! Müşteri az ve aceleci — hızlı sat, tazeliği koru!"},
 }
 
-## Günlük görev havuzu. "end": gün sonunda değerlendirilir. "need": gereken başka-ajan API'si.
-const QUEST_POOL := ["earn", "sell_item", "sold", "combo", "catch", "rep", "teyze", "no_fine", "tips"]
-
 const MENU_TIPS := [
 	"İpucu: Fiyatı adil fiyatın biraz altında tutarsan teyzeler sıraya girer.",
 	"İpucu: Toptancı Ford Transit'ten alınan kasalar %22 daha ucuz!",
-	"İpucu: Arka arkaya hızlı satış kombo yapar; kombo 3'ten sonra kazanç artar.",
 	"İpucu: Yağmurlu günlerde müşteri azdır ama acelecidir.",
 	"İpucu: Kapkaççı görürsen ona bak ve [E] ile yakala: 30 TL ödül!",
 	"İpucu: Bayatlayan ürünü 💦 Su Fısfısı ile tazele, müşteri kaçmasın.",
@@ -160,15 +156,8 @@ var _thief_seq := 0
 var _next_thief_cd := 150.0
 var _thief_spawned_today := 0
 
-# v0.6: Günlük görevler (tanımlar host'tan gelir; ilerleme her oyuncuda yerel)
-var daily_quests: Array = [] # [{"k": String, "item": String, "n": int, "r": int}]
-var quest_done: Array = [] # bool
-var _quest_paid := {} # host: peer_id -> [bool...]
 var qstats := {} # yerel günlük sayaçlar
-var _last_stock := {}
 var _last_thief_look := -100.0
-var _quest_eval_cd := 0.0
-var _pending_rewards: Array = [] # bekleyen görev ödülleri (para pop-up eşlemesi)
 
 # v0.6: Kariyer (solo)
 var career := {} # yüklü/aktif kariyer verisi (boş = kariyer yok / çoklu oyun)
@@ -186,12 +175,6 @@ var _tut_cd := 0.0
 # v0.6: HUD
 var rep_lbl: Label
 var _rep_shown := -1.0
-var combo_lbl: Label
-var combo_sub: Label
-var combo_wrap: VBoxContainer
-var _combo_now := 0
-var quests_panel: PanelContainer
-var quest_rows: Array = [] # [[Label, ColorRect(bar), Label(reward)]]
 var tut_panel: PanelContainer
 var tut_title: Label
 var tut_text: Label
@@ -909,68 +892,8 @@ func _hud_box(border_a := 0.55, bg := PANEL_BG, radius := 14, margin := 10) -> S
 	return b
 
 
-## v0.6 HUD: kombo patlaması, günlük görevler paneli ve ilk açılış rehberi kartı.
+## v0.6 HUD: ilk açılış rehberi kartı.
 func _build_meta_hud(layer: CanvasLayer, theme: Theme) -> void:
-	# Kombo: ekranın üst-ortasında, olay bandının altında zıplayan büyük yazı
-	combo_wrap = VBoxContainer.new()
-	combo_wrap.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	combo_wrap.offset_left = -220; combo_wrap.offset_right = 220
-	combo_wrap.offset_top = 112; combo_wrap.offset_bottom = 170
-	combo_wrap.alignment = BoxContainer.ALIGNMENT_BEGIN
-	combo_wrap.add_theme_constant_override("separation", -4)
-	combo_wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	combo_wrap.pivot_offset = Vector2(220, 30)
-	layer.add_child(combo_wrap)
-	combo_lbl = _logo(combo_wrap, "KOMBO x3", 28, Color(1.0, 0.62, 0.18))
-	combo_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	combo_sub = _lbl(combo_wrap, "", 13, 1.0)
-	combo_sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	combo_sub.add_theme_color_override("font_color", Color(1.0, 0.92, 0.6))
-	combo_wrap.hide()
-
-	# Günlük Görevler: sol kenar, bildirimlerin altında
-	quests_panel = PanelContainer.new()
-	quests_panel.theme = theme
-	quests_panel.add_theme_stylebox_override("panel", _hud_box(0.35, PANEL_BG, 10, 6))
-	quests_panel.set_anchors_preset(Control.PRESET_TOP_LEFT)
-	quests_panel.offset_left = 12; quests_panel.offset_right = 210
-	quests_panel.offset_top = 80; quests_panel.offset_bottom = 80
-	quests_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	layer.add_child(quests_panel)
-	var qv := VBoxContainer.new()
-	qv.add_theme_constant_override("separation", 3)
-	qv.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	quests_panel.add_child(qv)
-	var qt := _lbl(qv, "🎯", 12, 1.0)
-	qt.add_theme_font_override("font", _font(900))
-	qt.add_theme_color_override("font_color", GOLD)
-	quest_rows.clear()
-	for i in 3:
-		var row := VBoxContainer.new()
-		row.add_theme_constant_override("separation", 2)
-		row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		qv.add_child(row)
-		var top := HBoxContainer.new()
-		top.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		row.add_child(top)
-		var ql := _lbl(top, "", 11, 1.0)
-		ql.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		var rl := _lbl(top, "", 11, 0.9)
-		rl.autowrap_mode = TextServer.AUTOWRAP_OFF
-		rl.add_theme_color_override("font_color", GOLD)
-		var bg := ColorRect.new()
-		bg.custom_minimum_size = Vector2(0, 4)
-		bg.color = Color(0.25, 0.18, 0.13, 0.9)
-		bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		row.add_child(bg)
-		var bar := ColorRect.new()
-		bar.color = Color(1.0, 0.7, 0.28)
-		bar.size = Vector2(0, 4)
-		bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		bg.add_child(bar)
-		quest_rows.append([ql, bar, rl, row])
-	quests_panel.hide()
-
 	# Rehber kartı: hotbar'ın hemen üstünde
 	tut_panel = PanelContainer.new()
 	tut_panel.theme = theme
@@ -1210,7 +1133,7 @@ func _build_pause(layer: CanvasLayer, theme: Theme) -> void:
 	kh.add_theme_font_override("font", _font(900))
 	var keys_l := _lbl(kv, CONTROLS_TEXT, 15, 0.92)
 	keys_l.add_theme_constant_override("line_spacing", 5)
-	var goal := _lbl(kv, "Amaç: Tezgahını doldur, adil fiyat koy, bağırarak müşteri çek, günlük görevleri bitir ve Günün Esnafı ol!", 14, 0.75)
+	var goal := _lbl(kv, "Amaç: Tezgahını doldur, adil fiyat koy, bağırarak müşteri çek ve Günün Esnafı ol!", 14, 0.75)
 	goal.add_theme_color_override("font_color", Color(1.0, 0.86, 0.6))
 	vol_lbl = _lbl(v, "", 17)
 	var vol := HSlider.new()
@@ -1274,16 +1197,6 @@ func show_toast(msg: String, color := Color(1.0, 0.94, 0.78)) -> void:
 func _on_money_earned(amount: int, total: int, tip: int) -> void:
 	money_lbl.text = "%d TL" % total
 	var sale := amount - tip
-	var rw := tip if (sale <= 0 and tip in _pending_rewards) else (sale if (tip == 0 and sale in _pending_rewards) else -1)
-	if rw > 0:
-		# Görev ödülü (is_sale=false ya da bahşiş yolu): satış sayılmaz
-		_pending_rewards.erase(rw)
-		qstats["rewards"] = int(qstats.get("rewards", 0)) + rw
-		money_pop.text = "🎯 +%d TL Görev Ödülü" % rw
-		money_pop.add_theme_color_override("font_color", GOLD)
-		_animate_money_pop()
-		_refresh_shop_panel()
-		return
 	money_pop.text = ("+%d TL (⭐+%d)" % [amount, tip]) if tip > 0 else ("+%d TL" % amount)
 	money_pop.add_theme_color_override("font_color", Color(0.45, 1.0, 0.55))
 	_animate_money_pop()
@@ -2014,8 +1927,7 @@ func rpc_day_ended(finished_day: int) -> void:
 	scoreboard_wrap.hide()
 	pause_wrap.hide()
 	Sfx.play("day_end", -2.0)
-	combo_wrap.hide()
-	_evaluate_end_quests()
+	_evaluate_end_fines()
 	_save_career_day_end()
 	summary_title.text = "🏆 GÜN %d SONU — GÜNÜN ESNAFI" % day_num
 	_refresh_scoreboard_rows(summary_list, true)
@@ -2193,9 +2105,6 @@ func start_game(ids: Array, spot_map := {}, snapshot := {}) -> void:
 	world.set_meta("weather", weather)
 	world.set_meta("difficulty", 0.0)
 	_thief_seq = 0
-	daily_quests = []
-	quest_done = []
-	_quest_paid.clear()
 	_reset_local_day_stats()
 	_apply_quality(Settings.quality_high)
 	_menu_music(false)
@@ -2233,7 +2142,6 @@ func start_game(ids: Array, spot_map := {}, snapshot := {}) -> void:
 	money_hud.show()
 	crosshair.show()
 	_refresh_hotbar()
-	_refresh_quests_panel()
 	Sfx.set_ambience(true)
 	if day_num <= 1:
 		show_toast("☀️ Hoş geldin! [ESC] tuşlar", GOLD)
@@ -2265,8 +2173,6 @@ func _spawn(id: int, spot_idx := -1) -> void:
 		p.money_spent.connect(_on_money_spent)
 		p.open_shop.connect(_toggle_shop)
 		p.inventory_changed.connect(_refresh_hotbar)
-		if p.has_signal("combo_changed"):
-			p.connect("combo_changed", _on_combo_changed)
 
 
 ## İki kapıdan (Kuzey & Güney) sakin tempoyla gelen NPC'ler + arada bir Kalabalık Dalgası + bolca Teyze!
@@ -2360,7 +2266,7 @@ func _build_world_snapshot() -> Dictionary:
 		"event_item": active_event_item, "event_title": active_event_title, "event_timer": event_timer,
 		"truck": wholesaler_node.export_snapshot() if wholesaler_node else {},
 		"stalls": st_snaps, "players": pl_snaps, "customers": cu_snaps,
-		"weather": weather, "quests": daily_quests.duplicate(true), "thieves": _export_thieves(),
+		"weather": weather, "thieves": _export_thieves(),
 	}
 
 
@@ -2396,9 +2302,6 @@ func _apply_world_snapshot(snap: Dictionary) -> void:
 			customers.add_child(c)
 			c.apply_snapshot(cd)
 	_apply_weather(str(snap.get("weather", "clear")), false)
-	var qs = snap.get("quests", [])
-	if qs is Array:
-		rpc_set_quests(qs)
 	var ts = snap.get("thieves", [])
 	if ts is Array:
 		for td in ts:
@@ -2480,8 +2383,6 @@ func _back_to_menu() -> void:
 	_career_active = false
 	tut_step = -1
 	tut_panel.hide()
-	quests_panel.hide()
-	combo_wrap.hide()
 	rep_lbl.hide()
 	career = _load_career()
 	for t in toast_box.get_children():
@@ -2515,7 +2416,7 @@ func _back_to_menu() -> void:
 
 
 # =====================================================================
-# v0.6 BÜYÜK PAZAR: hava, kapkaççı, zorluk, görevler, kariyer, rehber
+# v0.6 BÜYÜK PAZAR: hava, kapkaççı, zorluk, kariyer, rehber
 # =====================================================================
 
 const TUT_STEPS := [
@@ -2617,17 +2518,11 @@ func _begin_day_host() -> void:
 	next_zabita_cd = (115.0 if day_num == 1 else lerpf(72.0, 48.0, d)) + randf_range(-6.0, 6.0)
 	_next_thief_cd = randf_range(0.0, 20.0)
 	_thief_spawned_today = 0
-	_quest_paid.clear()
 	var w := _roll_weather()
 	if Net.online():
 		rpc_set_weather.rpc(w, d)
 	else:
 		rpc_set_weather(w, d)
-	var qs := _roll_quests()
-	if Net.online():
-		rpc_set_quests.rpc(qs)
-	else:
-		rpc_set_quests(qs)
 
 
 # ---------- Hava durumu ----------
@@ -2799,123 +2694,8 @@ func _clear_thieves() -> void:
 			t.queue_free()
 
 
-# ---------- Günlük görevler ----------
-
-func _script_has_signal(s: Script, sig: String) -> bool:
-	for d in s.get_script_signal_list():
-		if str(d.get("name", "")) == sig:
-			return true
-	return false
-
-
-func _script_has_prop(s: Script, prop: String) -> bool:
-	for d in s.get_script_property_list():
-		if str(d.get("name", "")) == prop:
-			return true
-	return false
-
-
-func _roll_quests() -> Array:
-	var d := _difficulty()
-	var avail := ["earn", "sell_item", "sold", "teyze", "no_fine", "tips"]
-	if _script_has_signal(PlayerScript, "combo_changed") or _script_has_prop(PlayerScript, "combo"):
-		avail.append("combo")
-	if _get_thief_script() != null and day_num >= 2:
-		avail.append("catch")
-	if _script_has_prop(StallScript, "reputation"):
-		avail.append("rep")
-	avail.shuffle()
-	# Günde en fazla bir "gün sonu" görevi; ilk gün kolay görevler önde
-	var picked := []
-	var end_taken := false
-	for k in avail:
-		if picked.size() >= 3:
-			break
-		var is_end: bool = k == "rep" or k == "no_fine"
-		if is_end and end_taken:
-			continue
-		if day_num == 1 and k in ["tips", "rep"]:
-			continue
-		end_taken = end_taken or is_end
-		picked.append(k)
-	var day_mult := 1.0 + 0.12 * float(mini(day_num - 1, 6))
-	var out := []
-	for k in picked:
-		var q := {"k": k, "item": "", "n": 1, "r": 30}
-		match k:
-			"earn":
-				q["n"] = int(snappedf(lerpf(160.0, 420.0, d), 10.0)); q["r"] = 35
-			"sell_item":
-				q["item"] = Produce.BASIC_ORDER.pick_random()
-				q["n"] = 5 + roundi(5.0 * d); q["r"] = 30
-			"sold":
-				q["n"] = 10 + roundi(12.0 * d); q["r"] = 35
-			"teyze":
-				q["n"] = 3 + roundi(4.0 * d); q["r"] = 35
-			"no_fine":
-				q["n"] = 1; q["r"] = 30
-			"tips":
-				q["n"] = 12 + roundi(24.0 * d); q["r"] = 35
-			"combo":
-				q["n"] = 3 + roundi(2.0 * d); q["r"] = 40
-			"catch":
-				q["n"] = 1; q["r"] = 50
-			"rep":
-				q["n"] = 3 if day_num <= 3 else 4; q["r"] = 45
-		q["r"] = roundi(float(q["r"]) * day_mult)
-		out.append(q)
-	return out
-
-
-@rpc("authority", "call_local", "reliable")
-func rpc_set_quests(list: Array) -> void:
-	daily_quests = []
-	for q in list:
-		if q is Dictionary and QUEST_POOL.has(str(q.get("k", ""))):
-			daily_quests.append({"k": str(q["k"]), "item": str(q.get("item", "")),
-				"n": clampi(int(q.get("n", 1)), 1, 9999), "r": clampi(int(q.get("r", 0)), 0, 500)})
-		if daily_quests.size() >= 3:
-			break
-	quest_done = []
-	for _i in daily_quests.size():
-		quest_done.append(false)
-	_refresh_quests_panel()
-
-
 func _reset_local_day_stats() -> void:
-	qstats = {"earned": 0, "sold": 0, "items": {}, "teyze": 0, "catches": 0, "best_combo": 0, "fined": false, "tips": 0, "rewards": 0}
-	for i in quest_done.size():
-		quest_done[i] = false
-	_combo_now = 0
-	_last_stock = {}
-	_pending_rewards.clear()
-	if combo_wrap:
-		combo_wrap.hide()
-
-
-func _quest_text(q: Dictionary) -> String:
-	var n := int(q["n"])
-	match str(q["k"]):
-		"earn":
-			return "%d TL kazan" % n
-		"sell_item":
-			var it := str(q["item"])
-			return "%d %s sat" % [n, str(WholesalerScript.ITEM_EMOJI.get(it, it))]
-		"sold":
-			return "%d satış yap" % n
-		"teyze":
-			return "Teyzelere %d satış yap" % n
-		"no_fine":
-			return "Zabıtaya ceza yeme"
-		"tips":
-			return "%d TL bahşiş topla" % n
-		"combo":
-			return "x%d kombo yakala" % n
-		"catch":
-			return "Bir kapkaççı yakala"
-		"rep":
-			return "Günü %d★ itibarla bitir" % n
-	return "?"
+	qstats = {"earned": 0, "sold": 0, "catches": 0, "fined": false, "tips": 0}
 
 
 func _my_reputation() -> float:
@@ -2925,164 +2705,22 @@ func _my_reputation() -> float:
 	return -1.0
 
 
-## [şu an, hedef]
-func _quest_progress(q: Dictionary) -> Array:
-	var n := int(q["n"])
-	match str(q["k"]):
-		"earn":
-			return [int(qstats.get("earned", 0)), n]
-		"sell_item":
-			return [int((qstats.get("items", {}) as Dictionary).get(str(q["item"]), 0)), n]
-		"sold":
-			return [int(qstats.get("sold", 0)), n]
-		"teyze":
-			return [int(qstats.get("teyze", 0)), n]
-		"tips":
-			return [int(qstats.get("tips", 0)), n]
-		"combo":
-			return [int(qstats.get("best_combo", 0)), n]
-		"catch":
-			return [int(qstats.get("catches", 0)), n]
-		"rep":
-			return [maxi(int(floor(_my_reputation() + 0.001)), 0), n]
-		"no_fine":
-			return [0 if bool(qstats.get("fined", false)) else 1, 1]
-	return [0, n]
-
-
-func _quest_is_end(q: Dictionary) -> bool:
-	return str(q["k"]) in ["rep", "no_fine"]
-
-
-func _evaluate_quests() -> void:
-	if day_ended:
-		return
-	for i in daily_quests.size():
-		if quest_done[i] or _quest_is_end(daily_quests[i]):
-			continue
-		var pr := _quest_progress(daily_quests[i])
-		if int(pr[0]) >= int(pr[1]):
-			_complete_quest(i)
-
-
-func _evaluate_end_quests() -> void:
-	if world == null or players == null:
-		return
+func _evaluate_end_fines() -> void:
 	var me := _my_player()
 	if me and int(me.daily_fines) > 0:
 		qstats["fined"] = true
-	for i in daily_quests.size():
-		if quest_done[i]:
-			continue
-		var pr := _quest_progress(daily_quests[i])
-		if int(pr[0]) >= int(pr[1]):
-			_complete_quest(i)
 
 
-func _complete_quest(i: int) -> void:
-	if i < 0 or i >= daily_quests.size() or quest_done[i]:
-		return
-	quest_done[i] = true
-	var q: Dictionary = daily_quests[i]
-	var r := int(q["r"])
-	Sfx.play("quest_done", -3.0)
-	show_toast("🎯 +%d TL" % r, GOLD)
-	if r > 0:
-		_pending_rewards.append(r)
-		if Net.online() and not multiplayer.is_server():
-			rpc_request_quest_reward.rpc_id(1, i)
-		else:
-			rpc_request_quest_reward(i)
-	_refresh_quests_panel()
-	if i < quest_rows.size():
-		var row: Control = quest_rows[i][3]
-		row.modulate = Color(1.6, 1.5, 0.8)
-		row.create_tween().tween_property(row, "modulate", Color.WHITE, 0.8)
-
-
-## Host: görev ödülünü doğrula ve bahşiş yolundan öde (satış/kombo sayılmaz).
-@rpc("any_peer", "call_local", "reliable")
-func rpc_request_quest_reward(idx: int) -> void:
-	if Net.online() and not multiplayer.is_server():
-		return
-	if players == null or idx < 0 or idx >= daily_quests.size():
-		return
-	var pid := multiplayer.get_remote_sender_id() if Net.online() else 1
-	if pid == 0:
-		pid = 1
-	var p := players.get_node_or_null(str(pid))
-	if p == null:
-		return
-	var paid: Array = _quest_paid.get(pid, [false, false, false])
-	if idx >= paid.size() or bool(paid[idx]):
-		return
-	var q: Dictionary = daily_quests[idx]
-	# Basit makullük kontrolü: kazanç görevi host'un bildiği ciroyla doğrulanır
-	if str(q["k"]) == "earn" and int(p.daily_revenue) < int(q["n"]):
-		return
-	paid[idx] = true
-	_quest_paid[pid] = paid
-	# D'nin award_money(amount, tip, haggle, is_sale) imzası varsa satış/kombo sayılmadan öde
-	if p.get_method_argument_count("award_money") >= 4:
-		p.call("award_money", int(q["r"]), 0, false, false)
-	else:
-		p.award_money(0, int(q["r"]), false)
-
-
-func _refresh_quests_panel() -> void:
-	if quests_panel == null:
-		return
-	quests_panel.visible = world != null and not daily_quests.is_empty()
-	for i in quest_rows.size():
-		var row: Array = quest_rows[i]
-		var ql: Label = row[0]
-		var bar: ColorRect = row[1]
-		var rl: Label = row[2]
-		var box: Control = row[3]
-		if i >= daily_quests.size():
-			box.hide()
-			continue
-		box.show()
-		var q: Dictionary = daily_quests[i]
-		var pr := _quest_progress(q)
-		var cur := int(pr[0])
-		var n := maxi(int(pr[1]), 1)
-		var done: bool = quest_done[i] if i < quest_done.size() else false
-		var failed: bool = str(q["k"]) == "no_fine" and bool(qstats.get("fined", false))
-		var txt := _quest_text(q)
-		if done:
-			ql.text = "✔ " + txt
-			ql.add_theme_color_override("font_color", GOOD)
-		elif failed:
-			ql.text = "✖ " + txt
-			ql.add_theme_color_override("font_color", BAD)
-		else:
-			var prog_txt := ""
-			if _quest_is_end(q):
-				prog_txt = "  ⏳" if str(q["k"]) == "no_fine" else "  (%d/%d★)" % [mini(cur, 5), n]
-			else:
-				prog_txt = "  %d/%d" % [mini(cur, n), n]
-			ql.text = "• " + txt + prog_txt
-			ql.add_theme_color_override("font_color", CREAM)
-		rl.text = "+%d TL" % int(q["r"])
-		rl.modulate.a = 0.45 if (done or failed) else 1.0
-		var ratio := 1.0 if done else (0.0 if failed else clampf(float(cur) / float(n), 0.0, 1.0))
-		var parent_w := (bar.get_parent() as Control).size.x
-		bar.size = Vector2(parent_w * ratio, 4)
-		bar.color = GOOD if done else (BAD if failed else Color(1.0, 0.7, 0.28))
-
-
-## thief.gd rpc_on_caught her peer'da çağırır; yakalayan bensem görev sayacı artar.
+## thief.gd rpc_on_caught her peer'da çağırır; yakalayan bensem sayaç artar.
 func on_thief_caught_by(catcher_id: int) -> void:
 	var my_id := multiplayer.get_unique_id() if Net.online() else 1
 	if catcher_id != my_id:
 		return
 	qstats["catches"] = int(qstats.get("catches", 0)) + 1
 	show_toast("🕵️ Yakaladın!", GOOD)
-	_last_stock = _stock_map(_my_stall())
 
 
-## Para geliri geldiğinde yerel istatistikler: satış, ürün, teyze.
+## Para geliri geldiğinde yerel istatistikler.
 func _track_income(sale: int, tip: int) -> void:
 	if sale <= 0 and tip <= 0:
 		return
@@ -3091,23 +2729,6 @@ func _track_income(sale: int, tip: int) -> void:
 	if sale <= 0:
 		return
 	qstats["sold"] = int(qstats.get("sold", 0)) + 1
-	var st := _my_stall()
-	var cur := _stock_map(st)
-	for k in _last_stock:
-		if int(cur.get(k, 0)) < int(_last_stock[k]):
-			var items: Dictionary = qstats.get("items", {})
-			items[k] = int(items.get(k, 0)) + 1
-			qstats["items"] = items
-			break
-	_last_stock = cur
-	# Teyze satışı: oyuncunun baktığı müşteri Pazar Teyzesi mi?
-	var me := _my_player()
-	if me and me.has_method("_ray_target") and customers:
-		var area = me.call("_ray_target")
-		if area is Area3D and str(area.get_meta("kind", "")) == "customer":
-			var c := customers.get_node_or_null(str(area.get_meta("customer_name", "")))
-			if c and int(c.get("archetype")) == CustomerScript.Archetype.BARGAINER:
-				qstats["teyze"] = int(qstats.get("teyze", 0)) + 1
 
 
 func _stock_map(st: Node) -> Dictionary:
@@ -3121,38 +2742,7 @@ func _stock_map(st: Node) -> Dictionary:
 	return m
 
 
-# ---------- HUD (kombo, itibar, ipucu, rehber) ----------
-
-func _on_combo_changed(n: int) -> void:
-	var prev := _combo_now
-	_combo_now = n
-	qstats["best_combo"] = maxi(int(qstats.get("best_combo", 0)), n)
-	if combo_wrap == null or day_ended:
-		return
-	if n >= 2:
-		var bonus := clampi((n - 2) * 10, 0, 50)
-		combo_lbl.text = "KOMBO x%d" % n
-		combo_lbl.add_theme_color_override("font_color", Color(1.0, 0.62, 0.18).lerp(Color(1.0, 0.28, 0.2), clampf(float(n - 2) / 5.0, 0.0, 1.0)))
-		combo_sub.text = ("+%%%d kazanç bonusu!" % bonus) if bonus > 0 else "Hızlı sat, kombo büyüsün!"
-		combo_wrap.show()
-		combo_wrap.modulate.a = 1.0
-		combo_wrap.scale = Vector2(1.35, 1.35)
-		var tw := combo_wrap.create_tween()
-		tw.tween_property(combo_wrap, "scale", Vector2.ONE, 0.32).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-		if n >= 3 and n > prev:
-			Sfx.play("combo", -3.0, 1.0 + 0.04 * float(mini(n, 10)))
-		combo_wrap.set_meta("t", 6.5)
-	elif prev >= 2:
-		_fade_combo()
-
-
-func _fade_combo() -> void:
-	if combo_wrap == null or not combo_wrap.visible:
-		return
-	var tw := combo_wrap.create_tween()
-	tw.tween_property(combo_wrap, "modulate:a", 0.0, 0.4)
-	tw.tween_callback(combo_wrap.hide)
-
+# ---------- HUD (itibar, ipucu, rehber) ----------
 
 func _stars(r: float) -> String:
 	var n := clampi(roundi(r), 0, 5)
@@ -3169,16 +2759,6 @@ func _update_meta_hud(dt: float, me: Node) -> void:
 		if area is Area3D and str(area.get_meta("kind", "")) == "thief" \
 				and (me as Node3D).global_position.distance_to((area as Area3D).global_position) < 3.8:
 			_last_thief_look = Time.get_ticks_msec() / 1000.0
-	# Kombo (sinyal yoksa değişkenden)
-	var cb = me.get("combo")
-	if cb != null and int(cb) != _combo_now:
-		_on_combo_changed(int(cb))
-	if combo_wrap.visible and combo_wrap.has_meta("t"):
-		var t := float(combo_wrap.get_meta("t")) - dt
-		combo_wrap.set_meta("t", t)
-		if t <= 0.0:
-			combo_wrap.remove_meta("t")
-			_fade_combo()
 	# İtibar yıldızları
 	var rep := _my_reputation()
 	if rep >= 0.0:
@@ -3195,12 +2775,6 @@ func _update_meta_hud(dt: float, me: Node) -> void:
 		_rep_shown = rep
 	else:
 		rep_lbl.hide()
-	# Görevler
-	_quest_eval_cd -= dt
-	if _quest_eval_cd <= 0.0:
-		_quest_eval_cd = 0.25
-		_evaluate_quests()
-		_refresh_quests_panel()
 	# Rehber
 	if tut_step >= 0:
 		_tut_cd -= dt
@@ -3250,8 +2824,6 @@ func _update_meta_hud(dt: float, me: Node) -> void:
 			hint.text = h
 			hint.modulate.a = 0.0
 			hint.create_tween().tween_property(hint, "modulate:a", 0.9, 0.25)
-	# Stok haritası (satılan ürünü bulmak için kare sonu durumu)
-	_last_stock = _stock_map(st)
 
 
 func _context_hint(me: Node, st: Node) -> String:
@@ -3403,7 +2975,7 @@ func _fresh_career() -> Dictionary:
 		"version": CAREER_VERSION, "day_num": 0, "money": PlayerScript.STARTING_MONEY,
 		"inventory": [], "upgrades": [], "has_radio": false, "reputation": 2.5,
 		"best_day_profit": 0, "total_earned": 0, "tutorial_done": Settings.tutorial_done,
-		"best_combo": 0, "best_day_sold": 0, "thieves_caught": 0, "quests_done": 0,
+		"best_day_sold": 0, "thieves_caught": 0,
 	}
 
 
@@ -3467,7 +3039,7 @@ static func validate_career(d) -> Dictionary:
 	if not _is_num(rep) or float(rep) < 0.0 or float(rep) > 5.0:
 		return {}
 	out["reputation"] = float(rep)
-	for k in ["best_day_profit", "total_earned", "best_combo", "best_day_sold", "thieves_caught", "quests_done"]:
+	for k in ["best_day_profit", "total_earned", "best_day_sold", "thieves_caught"]:
 		var v = d.get(k, 0)
 		if not _is_num(v) or absf(float(v)) > 1.0e9:
 			return {}
@@ -3575,7 +3147,6 @@ func _save_career_day_end() -> void:
 	c["total_earned"] = int(c.get("total_earned", 0)) + maxi(int(me.daily_revenue), 0)
 	var profit := int(me.net_profit())
 	var sold := int(me.daily_sold)
-	var combo := maxi(int(qstats.get("best_combo", 0)), int(me.get("best_combo_today")) if me.get("best_combo_today") != null else 0)
 	if profit > int(c.get("best_day_profit", 0)):
 		c["best_day_profit"] = profit
 		if had_prev:
@@ -3584,12 +3155,7 @@ func _save_career_day_end() -> void:
 		c["best_day_sold"] = sold
 		if had_prev:
 			_new_records.append("sold")
-	if combo > int(c.get("best_combo", 0)):
-		c["best_combo"] = combo
-		if had_prev and combo >= 3:
-			_new_records.append("combo")
 	c["thieves_caught"] = int(c.get("thieves_caught", 0)) + int(qstats.get("catches", 0))
-	c["quests_done"] = int(c.get("quests_done", 0)) + quest_done.count(true)
 	c["tutorial_done"] = Settings.tutorial_done
 	if write_career_file(CAREER_PATH, c):
 		career = c
@@ -3607,9 +3173,9 @@ func _open_solo_page() -> void:
 		solo_continue_btn.hide()
 		solo_new_btn.text = "▶  Yeni Pazar Kur"
 	else:
-		solo_info.text = "📒 KAYITLI PAZARIN\nGün %d tamamlandı   •   💰 %d TL\n🏅 En iyi gün kârı %d TL   •   Toplam ciro %d TL\n⭐ İtibar %.1f   •   🕵️ %d kapkaççı   •   🎯 %d görev" % [
+		solo_info.text = "📒 KAYITLI PAZARIN\nGün %d tamamlandı   •   💰 %d TL\n🏅 En iyi gün kârı %d TL   •   Toplam ciro %d TL\n⭐ İtibar %.1f   •   🕵️ %d kapkaççı" % [
 			int(career["day_num"]), int(career["money"]), int(career["best_day_profit"]), int(career["total_earned"]),
-			float(career["reputation"]), int(career["thieves_caught"]), int(career["quests_done"])]
+			float(career["reputation"]), int(career["thieves_caught"])]
 		solo_continue_btn.show()
 		solo_continue_btn.text = "▶  Devam Et  (Gün %d)" % (int(career["day_num"]) + 1)
 		solo_new_btn.text = "✚  Yeni Pazar"
@@ -3655,22 +3221,14 @@ func _build_summary_side() -> void:
 	_sum_head("📊 SENİN GÜNÜN   %s %s" % [str(wi["icon"]), str(wi["name"])])
 	_sum_line("💰 Ciro %d TL   •   Net kâr %+d TL" % [int(me.daily_revenue), int(me.net_profit())])
 	_sum_line("📦 %d satış   •   ⭐ %d TL bahşiş   •   🚨 %d TL ceza" % [int(me.daily_sold), int(qstats.get("tips", 0)), int(me.daily_fines)])
-	if int(qstats.get("rewards", 0)) > 0:
-		_sum_line("🎯 Görev ödülleri: +%d TL" % int(qstats["rewards"]), 15, GOLD)
-	var extra := "🔥 En iyi kombo x%d" % int(qstats.get("best_combo", 0))
+	var extra := ""
 	if _get_thief_script() != null:
-		extra += "   •   🕵️ %d kapkaççı" % int(qstats.get("catches", 0))
+		extra += "🕵️ %d kapkaççı" % int(qstats.get("catches", 0))
 	var rep := _my_reputation()
 	if rep >= 0.0:
-		extra += "   •   %s" % _stars(rep)
-	_sum_line(extra)
-	_sum_head("🎯 GÖREVLER  (%d/%d)" % [quest_done.count(true), daily_quests.size()])
-	for i in daily_quests.size():
-		var q: Dictionary = daily_quests[i]
-		if quest_done[i]:
-			_sum_line("✔ %s   +%d TL" % [_quest_text(q), int(q["r"])], 15, GOOD)
-		else:
-			_sum_line("✖ %s" % _quest_text(q), 15, Color(CREAM, 0.55))
+		extra += ("   •   " if extra != "" else "") + _stars(rep)
+	if extra != "":
+		_sum_line(extra)
 	if _career_active and not career.is_empty():
 		_sum_head("🏅 REKORLAR")
 		var rec := func(key: String, text: String):
@@ -3678,7 +3236,6 @@ func _build_summary_side() -> void:
 			_sum_line(("🆕 YENİ REKOR!  " if nr else "") + text, 15, GOLD if nr else CREAM)
 		rec.call("profit", "En iyi gün kârı: %d TL" % int(career.get("best_day_profit", 0)))
 		rec.call("sold", "En çok satış: %d" % int(career.get("best_day_sold", 0)))
-		rec.call("combo", "En iyi kombo: x%d" % int(career.get("best_combo", 0)))
 		_sum_line("Toplam ciro: %d TL   •   💾 Gün %d kaydedildi" % [int(career.get("total_earned", 0)), int(career.get("day_num", day_num))], 14, Color(CREAM, 0.7))
 		if not _new_records.is_empty():
 			Sfx.play("cash_register", -3.0)

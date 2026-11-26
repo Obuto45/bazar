@@ -483,11 +483,12 @@ func _build_radio_slot() -> void:
 	_radio_node.add_child(_radio_area)
 
 
-func set_radio_synced(placed: bool, playing: bool) -> void:
+## idx/pos >= 0: elden devralınan şarkı ve çalma konumu (kesintisiz geçiş).
+func set_radio_synced(placed: bool, playing: bool, idx := -1, pos := -1.0) -> void:
 	if Net.online():
-		rpc_set_stall_radio.rpc(placed, playing)
+		rpc_set_stall_radio.rpc(placed, playing, idx, pos)
 	else:
-		rpc_set_stall_radio(placed, playing)
+		rpc_set_stall_radio(placed, playing, idx, pos)
 
 
 ## Tezgah radyosunda şarkı değiştir (herkes aynı şarkıyı duyar). Yeni şarkının adını döndürür.
@@ -506,7 +507,7 @@ func rpc_set_radio_track(idx: int) -> void:
 
 
 @rpc("any_peer", "call_local", "reliable")
-func rpc_set_stall_radio(placed: bool, playing: bool) -> void:
+func rpc_set_stall_radio(placed: bool, playing: bool, idx := -1, pos := -1.0) -> void:
 	has_radio = placed
 	radio_playing = placed and playing
 	if _radio_node:
@@ -514,9 +515,11 @@ func rpc_set_stall_radio(placed: bool, playing: bool) -> void:
 	if _radio_area:
 		_radio_area.collision_layer = 4 if placed else 0
 	if _radio_audio:
+		if idx >= 0 and not _radio_audio.playing:
+			Sfx.radio_set(_radio_audio, idx)
 		if radio_playing and DisplayServer.get_name() != "headless":
 			if not _radio_audio.playing:
-				_radio_audio.play()
+				_radio_audio.play(maxf(pos, 0.0))
 		elif _radio_audio.playing:
 			_radio_audio.stop()
 

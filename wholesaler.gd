@@ -1,6 +1,6 @@
 extends Node3D
 ## Toptancı Ford Transit ("GARDAŞLAR SEBZE MEYVE"): Kuzey Kapısından havalı korna çalarak pazara girer,
-## tekerlekleri dönerek orta meydana park eder, dörtlülerini yakıp arkasından 11 çeşit taze kasa tedarik eder,
+## tekerlekleri dönerek orta meydana park eder, dörtlülerini yakıp arkasından her çeşitten bir kasa (farklı fiyat / indirimli) satar,
 ## süresi dolunca korna çalıp Güney Kapısından çıkar ve yeni fiyatlarla geri gelir!
 
 const TRUCK_MODEL := preload("res://models/ford_transit/ford_transit_complete.glb")
@@ -263,6 +263,12 @@ func _set_rack_active(on: bool) -> void:
 		if lbl and n > 0:
 			lbl.text = "%s ×%d
 %d TL" % [ITEM_EMOJI.get(iid, "📦"), n, price_of(iid)]
+			var dp := discount_of(iid)
+			if dp > 0:
+				lbl.text += "\n%%%d indirim" % dp
+				lbl.modulate = Color(0.55, 1.0, 0.5)
+			else:
+				lbl.modulate = Color(1.0, 0.96, 0.82)
 
 
 func is_parked() -> bool:
@@ -284,6 +290,11 @@ func stock_left(item_id: String) -> int:
 
 func price_of(item_id: String) -> int:
 	return int((stock.get(item_id, [0, 0]) as Array)[1])
+
+
+func discount_of(item_id: String) -> int:
+	var a: Array = stock.get(item_id, [0, 0, 0])
+	return int(a[2]) if a.size() > 2 else 0
 
 
 func total_left() -> int:
@@ -311,19 +322,22 @@ func take_stock(item_id: String) -> bool:
 	return true
 
 
-## Host: oyuncu sayısına göre (kişi başı ~2.5-3 kasa) karışık, her biri farklı indirimli sınırlı stok.
+## Host: her ürün çeşidinden TEK kasa; fiyatlar farklı (ucuz / pahalı), birkaçı "%X indirim" etiketli.
+## stock: item_id -> [adet, fiyat, indirim_yüzdesi]
 func _gen_stock() -> void:
-	var peers := (multiplayer.get_peers().size() + 1) if Net.online() else 1
-	var total := roundi(float(peers) * randf_range(2.5, 3.0))
-	var pool: Array = Produce.ITEM_ORDER.duplicate()
-	pool.shuffle()
-	var kinds := mini(pool.size(), maxi(2, ceili(float(total) / 2.0)))
+	var ids: Array = Produce.ITEM_ORDER.duplicate()
+	var disc: Array = ids.duplicate()
+	disc.shuffle()
+	var disc_pct := {}
+	for k in 4:
+		disc_pct[disc[k]] = [20, 30, 40].pick_random()
 	var d := {}
-	for i in total:
-		var iid: String = pool[i % kinds]
-		if not d.has(iid):
-			d[iid] = [0, maxi(14, roundi(float(Produce.ITEMS[iid]["crate_cost"]) * randf_range(0.5, 0.72)))]
-		d[iid][0] = int(d[iid][0]) + 1
+	for iid: String in ids:
+		var info: Dictionary = Produce.ITEMS[iid]
+		# Temel ürünler ucuz (başlangıç parasıyla alınır), özel ürünler pahalı
+		var mult := randf_range(0.45, 0.75) if int(info.get("tier", 0)) == 0 else randf_range(0.95, 1.3)
+		var pct: int = int(disc_pct.get(iid, 0))
+		d[iid] = [1, maxi(12, roundi(float(info["crate_cost"]) * mult * (1.0 - float(pct) / 100.0))), pct]
 	if Net.online():
 		rpc_sync_stock.rpc(d)
 	else:

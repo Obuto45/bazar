@@ -28,8 +28,8 @@ Oyun her açılışta yeni sürüm var mı bakar; varsa kendini günceller ve ye
 | WASD / Shift / Boşluk / Fare | yürü / koş (hız çizgileri + FOV) / zıpla / bak |
 | **1–6**, `0` | kişisel envanter, el boş |
 | **E** | kasa al / müşteriye sat / kapkaççıyı yakala / korna / radyo koy |
-| **Sol Tık** (basılı) | ürün diz / eldeki eşyayı kullan (sigara, megafon, 💦 fısfıs...) |
-| **Q** | kasayı fırlat |
+| **Sol Tık** (basılı) | ürün diz / eldeki eşyayı kullan (sigara, megafon, 💦 fısfıs...); 🏏 sopa elindeyken sol tık = savur |
+| **Q** | kasayı / eldeki eşyayı fırlat (sopa dahil) |
 | Tekerlek / **Z**-**X** | fiyat düşür / artır |
 | **B** veya mikrofon | bağır (müşteri çek) |
 | **R** | pazarlığa "olmaz" de / radyoyu geri al |
@@ -45,21 +45,20 @@ Oyun içinde alttaki ipucu satırı duruma göre değişir (kasa elde, tezgah bo
 ## v0.6 Büyük Pazar Güncellemesi
 
 - **Kariyer (Tek Oyna):** Her gün sonunda `user://career.json` dosyasına kaydedilir (gün, para, envanter, tezgah geliştirmeleri, itibar, rekorlar). Menüde **Devam Et (Gün N)** veya **Yeni Pazar**. Kayıt atomik yazılır, bozuk dosya yok sayılır.
-- **Günlük Görevler:** Her gün 3 görev (X TL kazan, N domates sat, teyzelere sat, kombo yap, kapkaççı yakala, ≥4★ itibarla bitir, cezasız bitir...). Tamamlayınca TL ödülü ve fanfar.
 - **Hava Durumu:** Her gün güneşli / bulutlu / yağmurlu (çoklu oyunda herkes için aynı). Yağmurda müşteri az ama acelecidir.
 - **Kapkaççılar:** Kapüşonlu yaramaz çocuklar tezgahlardan ürün aşırır; bak ve **E** ile yakala, 30 TL ödül!
 - **Tazelik & İtibar:** Ürünler gün içinde bayatlar (💦 Su Fısfısı ile tazele); mutlu müşteri tezgah itibarını (★) yükseltir, itibar müşteri çeker.
-- **Kombo:** Arka arkaya hızlı satışlar kombo yapar; 3'ten itibaren +%10 … +%50 kazanç. Ekranda büyük kombo yazısı.
+- **Sopa 🏏 (60 TL):** Sol tıkla savur, **Q** ile fırlat; vurulan oyuncu 2 sn boyunca ragdoll olup yere yığılır.
 - **Zorluk eğrisi:** 1. gün sakin (güneşli, geç zabıta, tek kapkaççı); sonraki günler daha kalabalık, daha seçici müşteriler, daha sık zabıta ve kapkaççı.
 - **İlk açılış rehberi:** Kasayı al → diz → fiyatla → bağır → sat → toptancıdan al → fısfısla; her adım oyun durumundan algılanır, **H** ile geçilebilir, ESC menüsünden baştan gösterilebilir.
-- **Gün sonu özeti:** Skor tablosu, günün istatistikleri, görevler, kariyer rekorları (🆕 YENİ REKOR!).
+- **Gün sonu özeti:** Skor tablosu, günün istatistikleri, kariyer rekorları (🆕 YENİ REKOR!).
 - **Ayarlar:** Yüksek/düşük grafik kalitesi, menü müziği, ekran ölçeklemesi (UI her çözünürlükte okunur).
 - Paralel yerel test için: `-- --mptest host port=7791` (varsayılan port 7777), hava zorlama: `weather=rain`.
 
 ## Oynanış
 
 - **Gerçekçi Türk Semt Pazarı:** Dokulu asfalt cadde, kaldırım bordürleri, demir iskele üstü mavi/yeşil/çizgili brandalar, sallanan ampuller, plastik hal kasaları, Türk mahalle apartmanları ve Kuzey/Güney Giriş-Çıkış kapıları.
-- **Ford Transit Toptancı ("GARDAŞLAR SEBZE MEYVE"):** Havalı korna çalarak Kuzey Kapısından pazara girer, dörtlülerini yakıp park eder, 7 çeşit taze meyve/sebze kasası tedarik eder (`Domates, Elma, Soğan, Portakal, Patlıcan, Muz, Karpuz`), süresi dolunca korna çalıp Güney Kapısından çıkar ve yeni fırsat fiyatlarıyla geri gelir! Kabine `[E]` ile korna çaldırabilirsin.
+- **Ford Transit Toptancı ("GARDAŞLAR SEBZE MEYVE"):** Havalı korna çalarak Kuzey Kapısından pazara girer, dörtlülerini yakıp park eder ve oyun başına bir kez gelir (geri sayım HUD'da). Her çeşitten **tek kasa** satar; fiyatlar farklıdır (ucuz / pahalı), bazıları **%20-40 indirimli** etiketlidir. İlk gelen alır, stok sınırlıdır. Kabine `[E]` ile korna çaldırabilirsin.
 - **Kişisel Envanter (`1–6`) & Pazarcı Dükkanı (`P`):** Meyve kasaları elde taşınır, envantere girmez. Her pazarcı 1 paket **Sigara** ile başlar. Kazandığın parayla `P` mağazasından alabileceklerin:
   - **🚬 Sigara Paketi (15 TL):** Sol tıkla nefes çek; ucu korlanır, yanarak kısalır ve 3D duman çıkarır.
   - **🪵 Küba Purosu (45 TL):** Kalın altın bantlı, uzun yanan, yoğun dumanlı puro + Ağır Abi prestiji.
@@ -75,12 +74,12 @@ Oyun içinde alttaki ipucu satırı duruma göre değişir (kasa elde, tezgah bo
 |---|---|
 | `net.gd` | Steam lobi, davet, SteamMultiplayerPeer, ENet yedeği (autoload `Net`) |
 | `sfx.gd` | Prosedürel SFX, Türk kamyonet havalı kornası, Hicaz Arabesk müzik ve ambiyans (autoload `Sfx`) |
-| `main.gd` | Menü, kariyer kaydı, `P` Dükkanı, HUD (görevler, kombo, itibar, rehber), gün döngüsü, hava, kapkaççı, zorluk, MP senkronu |
+| `main.gd` | Menü, kariyer kaydı, `P` Dükkanı, HUD (itibar, rehber), gün döngüsü, hava, kapkaççı, zorluk, MP senkronu |
 | `player.gd` | Envanter (`1–6`), sigara/puro/megafon/bıçak/radyo mekaniği, bağırma, düşük sarsıntı, koşma FOV |
 | `items.gd` | Kişisel envanter eşyaları kataloğu ve 3D modelleri |
-| `wholesaler.gd` | Sürüşlü Ford Transit Toptancı AI, dörtlüler, havalı korna ve 7 çeşit kasa tedariği |
+| `wholesaler.gd` | Sürüşlü Ford Transit Toptancı AI, dörtlüler, havalı korna, her çeşitten tek kasa (farklı fiyat / indirim) |
 | `stall.gd` | Dokulu oyuncu tezgahı, çift taraflı fiyat etiketi, terazi, tezgah radyosu ve 3D yükseltmeler |
-| `produce.gd` | 7 meyve/sebze kataloğu ve özgün low-poly 3D modeller |
+| `produce.gd` | 11 meyve/sebze kataloğu ve özgün low-poly 3D modeller |
 | `customer.gd` | Pazar Teyzesi + 3 müşteri tipi, pop-up konuşma kartları, güçlü bağırma çekimi, pazarlık, bahşiş |
 | `inspector.gd` | Zabıta AI: cadde devriyesi ve bıçak saldırısında acil kovalama müdahalesi |
 | `bazaar.gd` | Fıskiyesiz Türk semt pazarı: asfalt, branda, iskele, ampuller, mahalle apartmanları, gün ışığı |

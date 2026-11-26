@@ -565,6 +565,7 @@ func _build_all_clips() -> void:
 	_add("megaphone_pop", _synth_megaphone_pop)
 	_add("knife_swing", _synth_knife_swing)
 	_add("knife_hit", _synth_knife_hit)
+	_add("thud", _synth_thud)
 	# v0.6 efektleri arka planda üretilir (bkz. _bg_generate / make_radio_player).
 
 
@@ -934,6 +935,22 @@ func _synth_knife_hit() -> AudioStreamWAV:
 		var punch := sin(TAU * lerpf(210.0, 68.0, minf(t / 0.18, 1.0)) * t) * exp(-t * 14.0)
 		var sting := sin(TAU * 980.0 * t) * exp(-t * 24.0) * 0.28
 		buf[i] = clampf((punch * 0.72 + lp * exp(-t * 20.0) * 0.4 + sting) * 0.85, -0.95, 0.95)
+	return _make_wav(buf)
+
+
+## Yumuşak, kısık "tok" çarpma (sopa darbesi / yere yığılma).
+func _synth_thud() -> AudioStreamWAV:
+	var n := int(RATE * 0.28)
+	var buf := PackedFloat32Array()
+	buf.resize(n)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 331
+	var lp := 0.0
+	for i in n:
+		var t := float(i) / float(RATE)
+		lp += 0.12 * (rng.randf_range(-1.0, 1.0) - lp)
+		var body := sin(TAU * lerpf(95.0, 42.0, minf(t / 0.15, 1.0)) * t) * exp(-t * 15.0)
+		buf[i] = clampf((body * 0.7 + lp * exp(-t * 24.0) * 0.5) * 0.6, -0.9, 0.9)
 	return _make_wav(buf)
 
 

@@ -174,6 +174,8 @@ var look_pitch := 0.0
 var body_yaw := 0.0
 var turning := false
 var spd := 0.0
+var tea_buff := 0.0 # çaycıdan çay: bağırma +%25
+var simit_buff := 0.0 # simitçiden simit: %15 hızlı yürüyüş
 var air := false
 var phase := 0.0
 var land_t := 0.0
@@ -876,13 +878,15 @@ func _physics_process(dt: float) -> void:
 
 
 func _local(dt: float) -> void:
+	tea_buff = maxf(tea_buff - dt, 0.0)
+	simit_buff = maxf(simit_buff - dt, 0.0)
 	var inp := Vector2.ZERO
 	var captured := Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
 	if captured and _stun_t <= 0.0:
 		inp = Input.get_vector("left", "right", "fwd", "back")
 	var dir := (Basis(Vector3.UP, look_yaw) * Vector3(inp.x, 0, inp.y)).normalized()
 	var running := Input.is_action_pressed("run") and inp.y < 0.0 and _stun_t <= 0.0
-	var target := dir * (RUN if running else WALK)
+	var target := dir * (RUN if running else WALK) * (1.15 if simit_buff > 0.0 else 1.0)
 	var accel := (14.0 if target != Vector3.ZERO else 18.0) if is_on_floor() else 3.0
 	velocity.x = move_toward(velocity.x, target.x, accel * dt * WALK)
 	velocity.z = move_toward(velocity.z, target.z, accel * dt * WALK)
@@ -931,7 +935,9 @@ func _local(dt: float) -> void:
 	var mic_shout := 0.0 if mic_muted else \
 		clampf(((talk_db + db_boost) - SHOUT_DB_MIN) / (SHOUT_DB_MAX - SHOUT_DB_MIN), 0.0, 1.0) * 1.45
 	var burst := 1.05 if _mega_burst > 0.0 else 0.0
-	shout_power = lerpf(shout_power, maxf(maxf(manual_shout, mic_shout), burst), minf(dt * 14.0, 1.0))
+	# Çay: senkronlanan shout_power'a uygulanır ki host da görsün
+	var tea_k := 1.25 if tea_buff > 0.0 else 1.0
+	shout_power = lerpf(shout_power, maxf(maxf(manual_shout, mic_shout), burst) * tea_k, minf(dt * 14.0, 1.0))
 	if Net.online():
 		sync_state.rpc(global_position, body_yaw, look_yaw, look_pitch, spd, air, shout_power)
 
@@ -1503,7 +1509,7 @@ func _process_interaction(dt: float) -> void:
 				elif is_holding_item("radyo") and not st.has_radio:
 					parts_txt.append("[E] Radyoyu Tezgaha Koy")
 				elif not held_crate and sl["count"] == 0:
-					parts_txt.append("Ford Transit Toptancıdan veya arkadan [E] kasa al")
+					parts_txt.append("Ford Transit Toptancıdan [E] kasa al")
 				if sl["item"] != "" and int(sl["count"]) > 0:
 					var badge := _price_badge(sl["item"], int(sl["price"]))
 					parts_txt.append("[Tekerlek / Z-X] %d TL (%s)" % [int(sl["price"]), badge])
@@ -1537,6 +1543,9 @@ func _process_interaction(dt: float) -> void:
 				if h != "":
 					show_hl = true
 					interact_hint = h
+		"vendor":
+			show_hl = true
+			interact_hint = str(area.get_meta("offer", "[E] Satın al"))
 	_update_highlight(area, show_hl)
 
 
@@ -1623,6 +1632,29 @@ func _do_interact() -> void:
 			_do_sell_to_customer(false)
 		"thief":
 			_do_catch_thief(area)
+		"vendor":
+			_do_buy_from_vendor(area, main)
+
+
+## Çaycı/simitçiden satın alma: parayı düş, 40 sn güçlendirme ver, satıcı teşekkür etsin.
+func _do_buy_from_vendor(area: Area3D, main: Node) -> void:
+	var price := int(area.get_meta("price", 5))
+	var is_tea := str(area.get_meta("vendor", "")) == "cay"
+	if money < price:
+		if main and main.has_method("show_toast"):
+			main.show_toast("Cebinde %d TL yok abi!" % price, Color(1.0, 0.5, 0.4))
+		return
+	spend_money(price, "Çay" if is_tea else "Simit")
+	if is_tea:
+		tea_buff = 40.0
+	else:
+		simit_buff = 40.0
+	Sfx.play("tea" if is_tea else "happy", -6.0)
+	if main and main.has_method("show_toast"):
+		main.show_toast("🍵 Çay keyfi: 40 sn bağırma +%25!" if is_tea else "🥯 Simit enerjisi: 40 sn %15 hızlı!", Color(1.0, 0.86, 0.5))
+	var amb := area.get_parent().get_parent() if area.get_parent() else null
+	if amb and amb.has_method("vendor_purchase"):
+		amb.vendor_purchase(area)
 
 
 ## Kapkaççı yakalama: hırsız düğümünü bulup host'a istek gönderir (doğrulama thief.gd'de).

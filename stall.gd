@@ -41,7 +41,6 @@ const UPGRADES := {
 }
 const UPGRADE_ORDER := ["megaphone", "lights", "big_crate", "bell"]
 const SLOT_XS := [-1.2, -0.4, 0.4, 1.2]
-const SUPPLY_XS := [-1.45, -0.87, -0.29, 0.29, 0.87, 1.45]
 const MAX_SLOT_COUNT := 10
 const CRATE_CAPACITY := 10
 const GOUGE_RATIO := 1.75
@@ -118,7 +117,6 @@ func _ready() -> void:
 		slots.append({"item": "", "count": 0, "price": 10, "fresh": 1.0})
 	_build_geometry()
 	_build_slots()
-	_build_supply_crates()
 	_build_scale()
 	_build_upgrade_board()
 	_build_upgrade_attachments()
@@ -269,22 +267,22 @@ func _build_geometry() -> void:
 	# Galvaniz çelik pazarcı direkleri
 	for x in [-1.62, 1.62]:
 		for z in [-0.75, 0.85]:
-			LP.add(self, LP.cyl(0.042, 0.048, 2.28, 6), Vector3(x, 1.14, z), STEEL, Vector3.ZERO, 0.42, 0.7)
-		LP.add(self, LP.box(Vector3(0.05, 0.05, 1.62)), Vector3(x, 2.14, 0.05), STEEL, Vector3.ZERO, 0.42, 0.7)
-	LP.add(self, LP.box(Vector3(3.36, 0.06, 0.06)), Vector3(0, 2.18, 0.85), STEEL, Vector3.ZERO, 0.42, 0.7)
+			LP.add(self, LP.cyl(0.042, 0.048, 2.88, 6), Vector3(x, 1.44, z), STEEL, Vector3.ZERO, 0.42, 0.7)
+		LP.add(self, LP.box(Vector3(0.05, 0.05, 1.62)), Vector3(x, 2.74, 0.05), STEEL, Vector3.ZERO, 0.42, 0.7)
+	LP.add(self, LP.box(Vector3(3.36, 0.06, 0.06)), Vector3(0, 2.78, 0.85), STEEL, Vector3.ZERO, 0.42, 0.7)
 
 	# Çizgili dokulu branda tente
 	for i in 5:
 		var m := tarp_a if i % 2 == 0 else tarp_w
-		LP.add_mat(self, LP.box(Vector3(0.73, 0.05, 2.18)), Vector3(-1.46 + float(i) * 0.73, 2.33, 0.12), m, Vector3(0.18, 0, 0))
-	LP.add_mat(self, LP.box(Vector3(3.68, 0.22, 0.04)), Vector3(0, 2.11, 1.17), tarp_a)
+		LP.add_mat(self, LP.box(Vector3(0.73, 0.05, 2.18)), Vector3(-1.46 + float(i) * 0.73, 2.93, 0.12), m, Vector3(0.18, 0, 0))
+	LP.add_mat(self, LP.box(Vector3(3.68, 0.22, 0.04)), Vector3(0, 2.71, 1.17), tarp_a)
 	for i in 9:
 		var fc := awning_color.darkened(0.12) if i % 2 == 0 else Color(0.96, 0.94, 0.88)
-		LP.add(self, LP.prism(Vector3(0.38, 0.13, 0.04)), Vector3(-1.52 + float(i) * 0.38, 1.95, 1.17), fc, Vector3(0, 0, PI))
+		LP.add(self, LP.prism(Vector3(0.38, 0.13, 0.04)), Vector3(-1.52 + float(i) * 0.38, 2.55, 1.17), fc, Vector3(0, 0, PI))
 
 	_sign_label = Label3D.new()
 	_sign_label.text = (owner_name + " Tezgahı") if owner_name != "" else "Tezgah"
-	_sign_label.position = Vector3(0, 2.12, 1.22)
+	_sign_label.position = Vector3(0, 2.72, 1.22)
 	_sign_label.font_size = 34
 	_sign_label.outline_size = 8
 	_sign_label.modulate = Color(1.0, 0.96, 0.84)
@@ -292,7 +290,7 @@ func _build_geometry() -> void:
 
 	# İtibar yıldızları: tabelanın üstünde, uzaktan okunur altın yıldızlar
 	_rep_label = Label3D.new()
-	_rep_label.position = Vector3(0, 2.42, 1.2)
+	_rep_label.position = Vector3(0, 3.02, 1.2)
 	_rep_label.font_size = 40
 	_rep_label.pixel_size = 0.0042
 	_rep_label.outline_size = 10
@@ -411,7 +409,7 @@ func _build_upgrade_attachments() -> void:
 	_light_bulbs.clear()
 
 	var mega := Node3D.new()
-	mega.position = Vector3(-1.62, 1.92, 0.92)
+	mega.position = Vector3(-1.62, 2.52, 0.92)
 	mega.rotation = Vector3(-0.1, 0.25, 0.0)
 	LP.add(mega, LP.cyl(0.05, 0.16, 0.32, 8), Vector3(0, 0, 0.14), Color(0.92, 0.24, 0.18), Vector3(PI / 2, 0, 0), 0.35, 0.2)
 	LP.add(mega, LP.torus(0.14, 0.17, 10, 5), Vector3(0, 0, 0.30), BRASS, Vector3(PI / 2, 0, 0), 0.25, 0.8)
@@ -424,15 +422,15 @@ func _build_upgrade_attachments() -> void:
 	for i in 7:
 		var lx := -1.5 + float(i) * 0.5
 		var col := Color(1.0, 0.84, 0.36) if i % 2 == 0 else Color(1.0, 0.6, 0.28)
-		var bulb := LP.add(lights, LP.sphere(0.062, 6, 4), Vector3(lx, 1.88, 1.18), col, Vector3.ZERO, 0.15)
+		var bulb := LP.add(lights, LP.sphere(0.062, 6, 4), Vector3(lx, 2.48, 1.18), col, Vector3.ZERO, 0.15)
 		var bm := bulb.material_override as StandardMaterial3D
 		bm.emission_enabled = true
 		bm.emission = col
 		bm.emission_energy_multiplier = 2.2
 		_light_bulbs.append(bm)
-	LP.add(lights, LP.box(Vector3(3.68, 0.05, 0.06)), Vector3(0, 2.24, 1.19), BRASS, Vector3.ZERO, 0.25, 0.8)
+	LP.add(lights, LP.box(Vector3(3.68, 0.05, 0.06)), Vector3(0, 2.84, 1.19), BRASS, Vector3.ZERO, 0.25, 0.8)
 	var glow := OmniLight3D.new()
-	glow.position = Vector3(0, 1.84, 0.72)
+	glow.position = Vector3(0, 2.44, 0.72)
 	glow.light_color = Color(1.0, 0.82, 0.45)
 	glow.light_energy = 1.45
 	glow.omni_range = 5.5
@@ -603,61 +601,6 @@ func _make_tag_label(parent: Node3D, pos: Vector3, fsize: int, back: bool) -> La
 	l.outline_modulate = Color(1.0, 0.97, 0.88)
 	parent.add_child(l)
 	return l
-
-
-func _build_supply_crates() -> void:
-	crate_available.clear()
-	_crate_visuals.clear()
-	_crate_labels.clear()
-	var crate_cols := [Color(0.86, 0.22, 0.18), Color(0.18, 0.58, 0.26), Color(0.88, 0.68, 0.14),
-		Color(0.12, 0.46, 0.84), Color(0.16, 0.5, 0.3), Color(0.94, 0.5, 0.12)]
-	for i in BASIC_ORDER.size():
-		var item_id: String = BASIC_ORDER[i]
-		var info: Dictionary = ITEMS[item_id]
-		crate_available[item_id] = true
-		var cx: float = SUPPLY_XS[i % SUPPLY_XS.size()]
-		var spot := Node3D.new()
-		spot.position = Vector3(cx, 0.0, -1.28)
-		spot.rotation.y = (float(i % 3) - 1.0) * 0.05
-		add_child(spot)
-		LP.add(spot, LP.box(Vector3(0.54, 0.03, 0.5)), Vector3(0, 0.015, 0), WOOD.darkened(0.38))
-		var c := Node3D.new()
-		spot.add_child(c)
-		var cc: Color = crate_cols[i % crate_cols.size()]
-		LP.add(c, LP.box(Vector3(0.5, 0.26, 0.44)), Vector3(0, 0.15, 0), cc, Vector3.ZERO, 0.52)
-		LP.add(c, LP.box(Vector3(0.53, 0.04, 0.47)), Vector3(0, 0.28, 0), cc.darkened(0.22), Vector3.ZERO, 0.5)
-		LP.add(c, LP.box(Vector3(0.2, 0.05, 0.02)), Vector3(0, 0.2, 0.225), cc.darkened(0.45))
-		Produce.build_crate_fill(c, item_id, Vector3(0, 0.295, 0), 0.44, 0.38, 0.8, 2, i + spot_idx * 7)
-		_crate_visuals[item_id] = c
-		var lbl := Label3D.new()
-		lbl.text = "%s\n%d TL" % [info["name"], int(info["crate_cost"])]
-		lbl.position = Vector3(0, 0.58 if i % 2 == 0 else 0.74, 0)
-		lbl.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-		lbl.font_size = 18
-		lbl.pixel_size = 0.0028
-		lbl.outline_size = 6
-		lbl.modulate = Color(1.0, 0.96, 0.85)
-		# Yalnızca tezgah sahibinin yakınından okunur; müşteri tarafında kalabalık yapmaz
-		lbl.visibility_range_end = 2.9
-		lbl.visibility_range_end_margin = 0.4
-		lbl.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
-		spot.add_child(lbl)
-		_crate_labels[item_id] = lbl
-		var area := Area3D.new()
-		area.name = "CrateArea_%s" % item_id
-		area.collision_layer = 4
-		area.collision_mask = 0
-		area.set_meta("kind", "crate")
-		area.set_meta("stall_owner", owner_id)
-		area.set_meta("item_id", item_id)
-		area.set_meta("hl_size", Vector3(0.54, 0.4, 0.48))
-		area.position = Vector3(0, 0.3, 0)
-		var cs := CollisionShape3D.new()
-		var sh := BoxShape3D.new()
-		sh.size = Vector3(0.56, 0.66, 0.56)
-		cs.shape = sh
-		area.add_child(cs)
-		spot.add_child(area)
 
 
 ## Eski API (tekil ürün yerleşimi) — geriye uyumluluk için korunur.

@@ -1703,7 +1703,8 @@ func _is_emergency_credit(peer_id: int) -> bool:
 func get_crate_cost(peer_id: int, item_id: String, from_truck: bool) -> int:
 	if not Produce.ITEMS.has(item_id):
 		return 50
-	if not from_truck and item_id == "sogan" and _is_emergency_credit(peer_id):
+	# Tezgah arkası kasalar kalktı: beş parasız kalana toptancıdan veresiye soğan
+	if item_id == "sogan" and _is_emergency_credit(peer_id):
 		return 0
 	var base := int(wholesale_prices.get(item_id, Produce.ITEMS[item_id]["crate_cost"]))
 	if from_truck:
@@ -2110,12 +2111,12 @@ func _tick_customers(dt: float) -> void:
 	var crowded := (_crowd_timer > 0.0) or (prog >= 0.72)
 	var d := _difficulty()
 	var rate: float = float(WEATHER.get(weather, WEATHER["clear"])["rate"])
-	var base_max := (14 + roundi(4.0 * d)) if crowded else (7 + roundi(2.0 * d))
+	var base_max := (10 + roundi(3.0 * d)) if crowded else (5 + roundi(2.0 * d))
 	var max_cust := roundi(float(base_max) * (0.85 + 0.15 * rate))
 	if _cust_cd > 0.0 or customers.get_child_count() >= max_cust:
 		return
-	_cust_cd = (randf_range(1.8, 3.0) if crowded else randf_range(4.0, 6.8)) * lerpf(1.0, 0.8, d) / maxf(rate, 0.3)
-	var batch := randi_range(2, 3) if crowded else 1
+	_cust_cd = (randf_range(3.0, 4.6) if crowded else randf_range(6.5, 9.5)) * lerpf(1.0, 0.8, d) / maxf(rate, 0.3)
+	var batch := randi_range(1, 2) if crowded else 1
 	for _b in batch:
 		if customers.get_child_count() >= max_cust:
 			break
@@ -2348,12 +2349,11 @@ func _back_to_menu() -> void:
 # =====================================================================
 
 const TUT_STEPS := [
-	["crate", "📦 Tezgahının ARKASINDAKİ kasalardan birine bak ve [E] ile bir kasa al."],
+	["crate", "🚚 Ford Transit Toptancıya git, arkasındaki kasalardan birine bak ve [E] ile bir kasa al."],
 	["place", "🍅 Kasayı tezgaha diz: bir rafa bak ve [Sol Tık] basılı tut."],
 	["price", "🏷️ Fiyatı ayarla: rafa bakıp [Tekerlek] çevir ya da [Z] / [X] bas. Adil fiyat = mutlu teyze!"],
 	["shout", "📣 Müşteri çek: [B] tuşunu basılı tut ya da mikrofona bağır — \"Taze domateees!\""],
 	["sell", "🤝 Tezgahına gelen müşteriye bak ve [E] ile sat. Ucuz teklife [R] ile \"olmaz\" diyebilirsin."],
-	["truck", "🚚 Ford Transit Toptancı korna çalıp gelince arkasındaki kasalardan [E] ile UCUZ kasa al."],
 	["spray", "💦 [P] Dükkandan Su Fısfısı al, tezgahına bakıp [Sol Tık] ile ürünlerini tazele."],
 ]
 

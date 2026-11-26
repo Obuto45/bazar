@@ -18,8 +18,9 @@ const PARK_Z := -0.6
 const ENTER_Z := -28.0
 const EXIT_Z := 29.0
 const DRIVE_SPEED := 5.6
-const PARK_DURATION := 56.0
-const AWAY_DURATION := 28.0
+# Tek kasa kaynağı toptancı: daha uzun durur, daha çabuk döner
+const PARK_DURATION := 80.0
+const AWAY_DURATION := 16.0
 const CRATE_COLORS := [
 	Color(0.88, 0.18, 0.16), Color(0.16, 0.62, 0.26), Color(0.94, 0.72, 0.12),
 	Color(0.96, 0.48, 0.08), Color(0.10, 0.46, 0.88), Color(0.18, 0.56, 0.30),

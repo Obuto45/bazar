@@ -45,6 +45,13 @@ const CAT_COLS := [
 
 enum PState { GROUND, FLY_UP, PERCHED, RETURN }
 
+const VENDOR_OFFERS := {
+	"cay": {"price": 5, "hint": "[E] 🍵 Çay al — 5 TL  (40 sn bağırma +%25)",
+		"ask": "Abi çay ister misin?\nTavşan kanı, 5 lira!", "thanks": "Afiyet olsun abi!", "bye": "Sonra uğrarım abi!"},
+	"simit": {"price": 10, "hint": "[E] 🥯 Simit al — 10 TL  (40 sn %15 hızlı yürü)",
+		"ask": "Sıcak simit abi?\nÇıtır çıtır, 10 lira!", "thanks": "Bereket versin abi!", "bye": "Kolay gelsin abi!"},
+}
+
 var bazaar: Node3D
 var cat_spots: Array = []
 
@@ -465,9 +472,114 @@ func _make_person(kind: String) -> Dictionary:
 	lbl.position = Vector3(0, 2.25 if kind == "simit" else 2.05, 0)
 	lbl.visible = false
 	root.add_child(lbl)
+	# Oyuncunun [E] ile satın alabildiği teklif alanı (player.gd "vendor")
+	var offer: Dictionary = VENDOR_OFFERS[kind]
+	var area := Area3D.new()
+	area.collision_layer = 4
+	area.collision_mask = 0
+	area.set_meta("kind", "vendor")
+	area.set_meta("vendor", kind)
+	area.set_meta("price", int(offer["price"]))
+	area.set_meta("offer", str(offer["hint"]))
+	area.set_meta("hl_size", Vector3(0.6, 1.9, 0.5))
+	area.position = Vector3(0, 0.95, 0)
+	var cs := CollisionShape3D.new()
+	var sh := BoxShape3D.new()
+	sh.size = Vector3(0.8, 1.9, 0.8)
+	cs.shape = sh
+	area.add_child(cs)
+	root.add_child(area)
 	return {"root": root, "body": body, "legs": legs, "arms": arms, "label": lbl, "kind": kind,
 		"i": 1, "dir": 1, "wait": 0.0, "speed": 1.05, "shout": _rng.randf_range(3.0, 8.0), "lbl_t": 0.0,
-		"pts": [], "loop": false, "stops": []}
+		"pts": [], "loop": false, "stops": [], "area": area,
+		"visit_cd": _rng.randf_range(20.0, 35.0) if kind == "cay" else _rng.randf_range(35.0, 55.0),
+		"visiting": false, "offer_t": 0.0}
+
+
+## Yerel oyuncu (bu bilgisayardaki); menüde ya da oyun dışında null.
+func _local_player() -> Node3D:
+	if _players == null or not is_instance_valid(_players):
+		return null
+	for pl in _players.get_children():
+		if pl is Node3D and pl.is_multiplayer_authority():
+			return pl
+	return null
+
+
+## player.gd satın alınca çağırır: teşekkür eder ve rotasına döner.
+func vendor_purchase(area: Area3D) -> void:
+	for p in _people:
+		if p["area"] == area:
+			var lbl: Label3D = p["label"]
+			lbl.text = str(VENDOR_OFFERS[p["kind"]]["thanks"])
+			lbl.visible = true
+			p["lbl_t"] = 2.4
+			_end_visit(p, 2.0)
+			return
+
+
+func _end_visit(p: Dictionary, linger: float) -> void:
+	p["visiting"] = false
+	p["offer_t"] = 0.0
+	p["wait"] = linger
+	p["visit_cd"] = _rng.randf_range(45.0, 75.0)
+
+
+## Arada bir yerel oyuncuya yürüyüp çay/simit teklif eder. true = bu kare ziyaret mantığı çalıştı.
+func _tick_visit(p: Dictionary, dt: float) -> bool:
+	var root: Node3D = p["root"]
+	var lbl: Label3D = p["label"]
+	if not bool(p["visiting"]):
+		p["visit_cd"] = float(p["visit_cd"]) - dt
+		if float(p["visit_cd"]) > 0.0 or float(p["wait"]) > 0.0:
+			return false
+		var pl0 := _local_player()
+		if pl0 == null or root.global_position.distance_to(pl0.global_position) > 16.0:
+			p["visit_cd"] = 8.0
+			return false
+		p["visiting"] = true
+		p["offer_t"] = 0.0
+	var pl := _local_player()
+	if pl == null:
+		_end_visit(p, 0.0)
+		return false
+	var me := root.global_position
+	var to := pl.global_position - me
+	to.y = 0.0
+	var d := to.length()
+	var offer: Dictionary = VENDOR_OFFERS[p["kind"]]
+	if float(p["offer_t"]) > 0.0:
+		# Teklif ediyor: oyuncuya dön, bekle; oyuncu uzaklaşırsa ya da süre biterse vazgeç
+		p["offer_t"] = float(p["offer_t"]) - dt
+		root.rotation.y = lerp_angle(root.rotation.y, atan2(-to.x, -to.z), dt * 6.0)
+		lbl.text = str(offer["ask"])
+		lbl.visible = true
+		p["lbl_t"] = 0.5
+		if float(p["offer_t"]) <= 0.0 or d > 4.0:
+			lbl.text = str(offer["bye"])
+			p["lbl_t"] = 2.0
+			_end_visit(p, 1.0)
+		var legs: Array[Node3D] = p["legs"]
+		for l in legs:
+			l.rotation.x = lerpf(l.rotation.x, 0.0, dt * 6.0)
+		return true
+	if d <= 1.5:
+		p["offer_t"] = 10.0
+		var sfx := get_node_or_null("/root/Sfx")
+		if sfx and sfx.has_method("play_3d"):
+			sfx.play_3d("tea" if p["kind"] == "cay" else "happy", me, null, -6.0)
+		return true
+	if d > 22.0:
+		_end_visit(p, 0.0)
+		return false
+	var step := minf(d - 1.4, 1.7 * dt)
+	root.global_position += to / d * maxf(step, 0.0)
+	root.rotation.y = lerp_angle(root.rotation.y, atan2(-to.x, -to.z), dt * 5.0)
+	var ph := _t * 7.0
+	var legs2: Array[Node3D] = p["legs"]
+	legs2[0].rotation.x = sin(ph) * 0.45
+	legs2[1].rotation.x = -sin(ph) * 0.45
+	return true
 
 
 func _build_people() -> void:
@@ -494,6 +606,8 @@ func _tick_person(p: Dictionary, dt: float) -> void:
 	var legs: Array[Node3D] = p["legs"]
 	var arms: Array[Node3D] = p["arms"]
 	var lbl: Label3D = p["label"]
+	if _tick_visit(p, dt):
+		return
 	# Bağırma balonu
 	p["shout"] = float(p["shout"]) - dt
 	if float(p["shout"]) <= 0.0:

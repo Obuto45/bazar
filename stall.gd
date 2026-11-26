@@ -388,6 +388,21 @@ func set_radio_synced(placed: bool, playing: bool) -> void:
 		rpc_set_stall_radio(placed, playing)
 
 
+## Tezgah radyosunda şarkı değiştir (herkes aynı şarkıyı duyar). Yeni şarkının adını döndürür.
+func step_radio_synced(dir: int) -> String:
+	var idx := Sfx.radio_step_idx(_radio_audio, dir)
+	if Net.online():
+		rpc_set_radio_track.rpc(idx)
+	else:
+		rpc_set_radio_track(idx)
+	return Sfx.radio_title(idx)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func rpc_set_radio_track(idx: int) -> void:
+	Sfx.radio_set(_radio_audio, idx)
+
+
 @rpc("any_peer", "call_local", "reliable")
 func rpc_set_stall_radio(placed: bool, playing: bool) -> void:
 	has_radio = placed

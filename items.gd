@@ -87,7 +87,7 @@ const CATALOG := {
 		"puffs_per_use": 1,
 		"consumable": false,
 		"left_hint": "Aç / Kapat",
-		"right_hint": "Frekans Değiştir",
+		"right_hint": "Sonraki Şarkı  •  [Tekerlek] Şarkı Seç",
 		"desc": "Sol tıkla Hicaz Arabesk aç/kapat, sağ tıkla frekans/ton değiştir; tezgahına koyup tüm sokağı inlet!",
 	},
 	"spray": {

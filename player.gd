@@ -626,9 +626,51 @@ func _unhandled_input(e: InputEvent) -> void:
 		elif e.button_index == MOUSE_BUTTON_RIGHT and e.pressed and not held_crate:
 			_use_secondary_item()
 		elif e.pressed and e.button_index == MOUSE_BUTTON_WHEEL_UP:
-			_do_adjust_price(1)
+			_do_wheel(1)
 		elif e.pressed and e.button_index == MOUSE_BUTTON_WHEEL_DOWN:
-			_do_adjust_price(-1)
+			_do_wheel(-1)
+
+
+## Tekerlek: tezgah radyosuna bakıyorsan şarkı, rafa bakıyorsan fiyat, elde radyo varsa şarkı değiştirir.
+func _do_wheel(dir: int) -> void:
+	var area := _ray_target()
+	var kind := str(area.get_meta("kind", "")) if area else ""
+	if kind == "stall_radio":
+		var owner_id: int = int(area.get_meta("stall_owner", -1))
+		var st := _find_stall(owner_id)
+		if st and owner_id == _my_peer_id() and st.has_radio:
+			_radio_toast(st.step_radio_synced(dir))
+			return
+	if kind == "slot":
+		_do_adjust_price(dir)
+		return
+	if equipped_item_id() == "radyo" and _sec_cd <= 0.0:
+		_sec_cd = 0.18
+		_step_hand_radio(dir)
+
+
+func _step_hand_radio(dir: int) -> void:
+	if _hand_radio_audio == null:
+		return
+	var idx := Sfx.radio_step_idx(_hand_radio_audio, dir)
+	if Net.online():
+		rpc_hand_radio_track.rpc(idx)
+	else:
+		rpc_hand_radio_track(idx)
+	_radio_toast(Sfx.radio_title(idx))
+	_start_action("radio_tune", "radyo", 0.40)
+
+
+@rpc("authority", "call_local", "reliable")
+func rpc_hand_radio_track(idx: int) -> void:
+	Sfx.radio_set(_hand_radio_audio, idx)
+
+
+func _radio_toast(title: String) -> void:
+	Sfx.play("ui_click", -10.0, 1.1)
+	var main := _find_main()
+	if main and main.has_method("show_toast"):
+		main.show_toast("📻 " + title, Color(1.0, 0.82, 0.5))
 
 
 ## Kişisel envanter eşyasını kullan (Sol Tık: çek/üfle, çay yudumla, simit ısır, megafon, bıçak, radyo, fısfıs).
@@ -743,7 +785,12 @@ func _use_secondary_item() -> void:
 			_sec_cd = 0.48
 			_radio_freq_idx = (_radio_freq_idx + 1) % 4
 			if _hand_radio_audio:
-				Sfx.radio_next(_hand_radio_audio) # frekans değişince başka şarkı
+				var idx := Sfx.radio_step_idx(_hand_radio_audio, 1) # frekans değişince sıradaki şarkı
+				if Net.online():
+					rpc_hand_radio_track.rpc(idx)
+				else:
+					rpc_hand_radio_track(idx)
+				_radio_toast(Sfx.radio_title(idx))
 			if _fp_item_visual:
 				var dial := _fp_item_visual.find_child("Dial", true, false) as MeshInstance3D
 				if dial and dial.material_override is StandardMaterial3D:
@@ -1994,7 +2041,7 @@ func _process_interaction(dt: float) -> void:
 			var owner_id: int = int(area.get_meta("stall_owner", -1))
 			if owner_id == my_id and my_st and my_st.has_radio:
 				show_hl = true
-				interact_hint = "📻 Tezgah Radyosu (%s)  •  [E] Aç/Kapat  •  [R] Eline Al" % ("ÇALIYOR" if my_st.radio_playing else "KAPALI")
+				interact_hint = "📻 Tezgah Radyosu (%s)  •  [E] Aç/Kapat  •  [Tekerlek] Şarkı  •  [R] Eline Al" % ("ÇALIYOR" if my_st.radio_playing else "KAPALI")
 		"bell":
 			var owner_id: int = int(area.get_meta("stall_owner", -1))
 			if owner_id == my_id and my_st and my_st.has_upgrade("bell"):

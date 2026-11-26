@@ -55,6 +55,10 @@ const RADIO_TRACKS: Array[String] = [
 	"res://audio/radio/gulusum_var.ogg", "res://audio/radio/harap_oldum.ogg", "res://audio/radio/kirik_saatler.ogg",
 	"res://audio/radio/yanimda_kal.ogg",
 ]
+const RADIO_TITLES: Array[String] = [
+	"Aşkın Kaderi", "Ayrılamam", "Bilemezsin", "Bu Sevda Değil", "Düş Bahçesi", "Görüyorum Acı Çektiğini",
+	"Gülüşüm Var", "Harap Oldum", "Kırık Saatler", "Yanımda Kal",
+]
 var _radio_streams := {} # yol -> AudioStream (ilk kullanımda yüklenir)
 var _gen_task := -1
 var _gen_abort := false
@@ -427,6 +431,27 @@ func radio_next(p: AudioStreamPlayer3D, force_play := false) -> void:
 	p.stream = _radio_stream(idx)
 	if (was or force_play) and DisplayServer.get_name() != "headless":
 		p.play()
+
+
+## Radyoyu listede dir kadar ileri/geri al; yeni sıra numarasını döndürür (tekerlek / sağ tık).
+func radio_step_idx(p: AudioStreamPlayer3D, dir: int) -> int:
+	return posmod(int(p.get_meta("radio_idx", 0)) + dir, RADIO_TRACKS.size()) if p else 0
+
+
+## Radyoda belirli parçaya geç; radyo çalıyorsa yeni parça baştan çalar.
+func radio_set(p: AudioStreamPlayer3D, idx: int) -> void:
+	if p == null or not is_instance_valid(p):
+		return
+	idx = posmod(idx, RADIO_TRACKS.size())
+	p.set_meta("radio_idx", idx)
+	var was := p.playing
+	p.stream = _radio_stream(idx)
+	if was and DisplayServer.get_name() != "headless":
+		p.play()
+
+
+func radio_title(idx: int) -> String:
+	return RADIO_TITLES[posmod(idx, RADIO_TITLES.size())]
 
 
 ## Ford Transit dizel motor rölanti / sürüş sesi.

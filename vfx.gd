@@ -195,3 +195,375 @@ static func spawn_floating_text(parent: Node, world_pos: Vector3, text: String,
 	tw.tween_property(lbl, "global_position:y", world_pos.y + 0.95, 1.15).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	tw.tween_property(lbl, "modulate:a", 0.0, 1.15).set_delay(0.32)
 	tw.chain().tween_callback(lbl.queue_free)
+
+
+# ---------------------------------------------------------------------------
+# v0.6 yardımcıları (diğer sistemler çağırabilir; hepsi parent null/ağaç dışıysa sessizce çıkar)
+# ---------------------------------------------------------------------------
+
+static func _ok(parent: Node) -> bool:
+	return parent != null and is_instance_valid(parent) and parent.is_inside_tree()
+
+
+static func _scale_curve(a: float, peak: float, b: float, peak_at := 0.3) -> Curve:
+	var sc := Curve.new()
+	sc.max_value = maxf(maxf(a, peak), b) + 0.01
+	sc.add_point(Vector2(0.0, a))
+	sc.add_point(Vector2(peak_at, peak))
+	sc.add_point(Vector2(1.0, b))
+	return sc
+
+
+## 💦 Su fısfısı: ince damlacık konisi + yumuşak sis bulutu. dir = püskürtme yönü (dünya).
+static func spawn_water_mist(parent: Node, world_pos: Vector3, dir := Vector3.FORWARD) -> void:
+	if not _ok(parent):
+		return
+	var d := dir.normalized() if dir.length() > 0.01 else Vector3.FORWARD
+	var drop := LP.sphere(0.018, 4, 2)
+	var dm := _vcol_mat(0.08, 0.0, false, true)
+	dm.emission_enabled = true
+	dm.emission = Color(0.55, 0.8, 1.0)
+	dm.emission_energy_multiplier = 0.35
+	_spawn_oneshot(parent, world_pos, 28, 0.55, drop, dm,
+		Color(0.78, 0.92, 1.0, 0.85), 3.2, 5.6, 11.0, Vector3(0, -7.5, 0), d, 0.6, 1.2)
+	var p := CPUParticles3D.new()
+	p.one_shot = true
+	p.explosiveness = 0.7
+	p.amount = 10
+	p.lifetime = 1.0
+	p.mesh = LP.sphere(0.07, 6, 3)
+	p.material_override = _vcol_mat(0.9, 0.0, true, true)
+	p.direction = d
+	p.spread = 18.0
+	p.initial_velocity_min = 1.2
+	p.initial_velocity_max = 2.4
+	p.damping_min = 2.0
+	p.damping_max = 3.2
+	p.gravity = Vector3(0, -0.4, 0)
+	p.scale_amount_curve = _scale_curve(0.4, 1.4, 2.4)
+	var g := Gradient.new()
+	g.set_color(0, Color(0.85, 0.94, 1.0, 0.42))
+	g.set_color(1, Color(0.85, 0.94, 1.0, 0.0))
+	p.color_ramp = g
+	parent.add_child(p)
+	p.global_position = world_pos + d * 0.35
+	p.emitting = true
+	var tw := p.create_tween()
+	tw.tween_interval(p.lifetime + 0.3)
+	tw.tween_callback(p.queue_free)
+
+
+## ✨ Parıltı: tazelenen ürünün üstünde yükselen minik yıldızlar.
+static func spawn_sparkle(parent: Node, world_pos: Vector3, color := Color(1.0, 0.97, 0.7)) -> void:
+	if not _ok(parent):
+		return
+	var p := CPUParticles3D.new()
+	p.one_shot = true
+	p.explosiveness = 0.55
+	p.amount = 12
+	p.lifetime = 0.95
+	p.mesh = LP.prism(Vector3(0.05, 0.07, 0.012))
+	var m := _vcol_mat(0.2, 0.0, true, true)
+	m.emission_enabled = true
+	m.emission = color
+	m.emission_energy_multiplier = 2.6
+	m.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
+	p.material_override = m
+	p.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
+	p.emission_sphere_radius = 0.28
+	p.direction = Vector3.UP
+	p.spread = 35.0
+	p.initial_velocity_min = 0.25
+	p.initial_velocity_max = 0.8
+	p.gravity = Vector3(0, 0.25, 0)
+	p.angular_velocity_min = -220.0
+	p.angular_velocity_max = 220.0
+	p.scale_amount_curve = _scale_curve(0.0, 1.6, 0.0, 0.25)
+	var g := Gradient.new()
+	g.set_color(0, Color(color.r, color.g, color.b, 1.0))
+	g.set_color(1, Color(1, 1, 1, 0.0))
+	p.color_ramp = g
+	parent.add_child(p)
+	p.global_position = world_pos
+	p.emitting = true
+	var tw := p.create_tween()
+	tw.tween_interval(p.lifetime + 0.3)
+	tw.tween_callback(p.queue_free)
+
+
+## 🪰 Bayat ürün sinekleri: döngüsel uçuşan sinekler. Node3D döner; çağıran queue_free() etmeli.
+static func spawn_flies(parent: Node, world_pos: Vector3, count := 5) -> Node3D:
+	var root := Node3D.new()
+	root.name = "Flies"
+	if not _ok(parent):
+		return root
+	parent.add_child(root)
+	root.global_position = world_pos
+	var fly_mesh := LP.sphere(0.014, 4, 2)
+	var fm := StandardMaterial3D.new()
+	fm.albedo_color = Color(0.05, 0.05, 0.06)
+	fm.roughness = 0.4
+	for i in count:
+		var f := MeshInstance3D.new()
+		f.mesh = fly_mesh
+		f.material_override = fm
+		f.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		root.add_child(f)
+		var pts: Array[Vector3] = []
+		for k in 5:
+			pts.append(Vector3(randf_range(-0.26, 0.26), randf_range(0.06, 0.36), randf_range(-0.26, 0.26)))
+		f.position = pts[0]
+		var tw := f.create_tween().set_loops()
+		for k in pts.size():
+			tw.tween_property(f, "position", pts[(k + 1) % pts.size()], randf_range(0.18, 0.42)).set_trans(Tween.TRANS_SINE)
+	return root
+
+
+## 🤢 Koku dalgası: yeşilimsi kıvrılan buhar (döngüsel). Node3D döner; çağıran queue_free() etmeli.
+static func spawn_stink(parent: Node, world_pos: Vector3) -> Node3D:
+	var p := CPUParticles3D.new()
+	p.name = "Stink"
+	p.amount = 7
+	p.lifetime = 1.8
+	p.mesh = LP.sphere(0.045, 5, 3)
+	p.material_override = _vcol_mat(0.9, 0.0, true, true)
+	p.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
+	p.emission_sphere_radius = 0.2
+	p.direction = Vector3.UP
+	p.spread = 15.0
+	p.initial_velocity_min = 0.18
+	p.initial_velocity_max = 0.35
+	p.gravity = Vector3(0, 0.08, 0)
+	p.tangential_accel_min = -0.6
+	p.tangential_accel_max = 0.6
+	p.scale_amount_curve = _scale_curve(0.3, 1.0, 1.9, 0.4)
+	var g := Gradient.new()
+	g.set_color(0, Color(0.55, 0.72, 0.25, 0.0))
+	g.add_point(0.25, Color(0.55, 0.72, 0.25, 0.34))
+	g.set_color(g.get_point_count() - 1, Color(0.45, 0.55, 0.22, 0.0))
+	p.color_ramp = g
+	if _ok(parent):
+		parent.add_child(p)
+		p.global_position = world_pos
+		p.emitting = true
+	return p
+
+
+## ♨️ Döngüsel buhar (semaver, simit tepsisi, sıcak çay). Node3D döner.
+static func spawn_steam(parent: Node, world_pos: Vector3, strength := 1.0) -> Node3D:
+	var p := CPUParticles3D.new()
+	p.name = "Steam"
+	p.amount = int(8 * strength) + 2
+	p.lifetime = 2.2
+	p.mesh = LP.sphere(0.05, 5, 3)
+	p.material_override = _vcol_mat(0.9, 0.0, false, true)
+	p.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
+	p.emission_sphere_radius = 0.04
+	p.direction = Vector3.UP
+	p.spread = 12.0
+	p.initial_velocity_min = 0.25
+	p.initial_velocity_max = 0.5
+	p.gravity = Vector3(0.05, 0.12, 0.02)
+	p.damping_min = 0.1
+	p.damping_max = 0.3
+	p.scale_amount_curve = _scale_curve(0.35, 1.2, 2.6, 0.35)
+	var g := Gradient.new()
+	g.set_color(0, Color(0.95, 0.95, 0.97, 0.0))
+	g.add_point(0.15, Color(0.95, 0.95, 0.97, 0.32))
+	g.set_color(g.get_point_count() - 1, Color(0.95, 0.95, 0.97, 0.0))
+	p.color_ramp = g
+	if _ok(parent):
+		parent.add_child(p)
+		p.global_position = world_pos
+		p.emitting = true
+	return p
+
+
+## 🎉 Kombo patlaması: n büyüdükçe daha çok renkli konfeti + altın halka (+ n>=5 ise para yağmuru).
+static func spawn_combo_burst(parent: Node, world_pos: Vector3, n := 3) -> void:
+	if not _ok(parent):
+		return
+	var k := clampi(n, 1, 12)
+	var p := CPUParticles3D.new()
+	p.one_shot = true
+	p.explosiveness = 0.92
+	p.amount = 14 + k * 5
+	p.lifetime = 1.25
+	p.mesh = LP.box(Vector3(0.05, 0.004, 0.032))
+	p.material_override = _vcol_mat(0.5, 0.0, false, false)
+	(p.material_override as StandardMaterial3D).cull_mode = BaseMaterial3D.CULL_DISABLED
+	p.direction = Vector3.UP
+	p.spread = 48.0
+	p.initial_velocity_min = 2.6 + float(k) * 0.12
+	p.initial_velocity_max = 4.6 + float(k) * 0.2
+	p.gravity = Vector3(0, -5.0, 0)
+	p.damping_min = 1.2
+	p.damping_max = 2.4
+	p.angular_velocity_min = -540.0
+	p.angular_velocity_max = 540.0
+	p.particle_flag_rotate_y = true
+	var ig := Gradient.new()
+	ig.interpolation_mode = Gradient.GRADIENT_INTERPOLATE_CONSTANT
+	var confetti_cols := [Color(0.95, 0.2, 0.2), Color(1.0, 0.82, 0.15), Color(0.2, 0.75, 0.35),
+		Color(0.2, 0.55, 1.0), Color(0.9, 0.35, 0.85), Color(1.0, 1.0, 1.0)]
+	ig.set_color(0, confetti_cols[0])
+	ig.set_offset(1, 1.0)
+	ig.set_color(1, confetti_cols[confetti_cols.size() - 1])
+	for i in range(1, confetti_cols.size() - 1):
+		ig.add_point(float(i) / float(confetti_cols.size()), confetti_cols[i])
+	p.color_initial_ramp = ig
+	var fade := Gradient.new()
+	fade.set_color(0, Color(1, 1, 1, 1))
+	fade.add_point(0.75, Color(1, 1, 1, 1))
+	fade.set_color(fade.get_point_count() - 1, Color(1, 1, 1, 0))
+	p.color_ramp = fade
+	parent.add_child(p)
+	p.global_position = world_pos
+	p.emitting = true
+	var tw := p.create_tween()
+	tw.tween_interval(p.lifetime + 0.3)
+	tw.tween_callback(p.queue_free)
+	spawn_sound_ring(parent, world_pos, 2.4 + float(k) * 0.25, Color(1.0, 0.8, 0.25))
+	if k >= 5:
+		burst_coins(parent, world_pos + Vector3(0, 0.2, 0), 6 + k)
+
+
+## 💧 Su sıçraması (su birikintisine basınca).
+static func spawn_splash(parent: Node, world_pos: Vector3) -> void:
+	if not _ok(parent):
+		return
+	var drop := LP.sphere(0.02, 4, 2)
+	var m := _vcol_mat(0.1, 0.0, false, true)
+	_spawn_oneshot(parent, world_pos, 12, 0.45, drop, m, Color(0.75, 0.85, 0.95, 0.8),
+		1.2, 2.4, 38.0, Vector3(0, -9.0, 0), Vector3.UP, 0.6, 1.1)
+	spawn_sound_ring(parent, world_pos + Vector3(0, 0.02, 0), 1.3, Color(0.75, 0.88, 1.0))
+
+
+## 🪶 Süzülerek düşen birkaç güvercin tüyü.
+static func spawn_feathers(parent: Node, world_pos: Vector3, count := 5) -> void:
+	if not _ok(parent):
+		return
+	var p := CPUParticles3D.new()
+	p.one_shot = true
+	p.explosiveness = 0.8
+	p.amount = count
+	p.lifetime = 2.4
+	p.mesh = LP.box(Vector3(0.05, 0.003, 0.022))
+	var m := _vcol_mat(0.9, 0.0, false, true)
+	m.cull_mode = BaseMaterial3D.CULL_DISABLED
+	p.material_override = m
+	p.direction = Vector3.UP
+	p.spread = 80.0
+	p.initial_velocity_min = 0.6
+	p.initial_velocity_max = 1.4
+	p.gravity = Vector3(0, -0.55, 0)
+	p.damping_min = 1.0
+	p.damping_max = 1.6
+	p.angular_velocity_min = -200.0
+	p.angular_velocity_max = 200.0
+	p.particle_flag_rotate_y = true
+	var g := Gradient.new()
+	g.set_color(0, Color(0.78, 0.8, 0.84, 1.0))
+	g.add_point(0.8, Color(0.78, 0.8, 0.84, 1.0))
+	g.set_color(g.get_point_count() - 1, Color(0.78, 0.8, 0.84, 0.0))
+	p.color_ramp = g
+	parent.add_child(p)
+	p.global_position = world_pos
+	p.emitting = true
+	var tw := p.create_tween()
+	tw.tween_interval(p.lifetime + 0.3)
+	tw.tween_callback(p.queue_free)
+
+
+## 🌧️ Yağmur: kameranın etrafında düşen GPU damlaları + yerde sıçrama halkaları.
+## Dönen Node3D'yi her kare kameranın x/z konumuna taşıyın (y=0). Damlalar dünya uzayındadır.
+## set_rain_amount(node, 0..1) ile yoğunluk ayarlanır.
+static func spawn_rain(parent: Node, amount := 2400) -> Node3D:
+	var root := Node3D.new()
+	root.name = "Rain"
+	# --- Damlalar
+	var drops := GPUParticles3D.new()
+	drops.name = "Drops"
+	drops.amount = amount
+	drops.lifetime = 1.05
+	drops.preprocess = 1.0
+	drops.local_coords = false
+	drops.position = Vector3(0, 15.0, 0)
+	drops.visibility_aabb = AABB(Vector3(-20, -20, -20), Vector3(40, 26, 40))
+	drops.collision_base_size = 0.02
+	var pm := ParticleProcessMaterial.new()
+	pm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	pm.emission_box_extents = Vector3(17.0, 1.0, 17.0)
+	pm.direction = Vector3(0.06, -1.0, 0.03)
+	pm.spread = 2.0
+	pm.initial_velocity_min = 17.0
+	pm.initial_velocity_max = 21.0
+	pm.gravity = Vector3(0, -6.0, 0)
+	pm.collision_mode = ParticleProcessMaterial.COLLISION_HIDE_ON_CONTACT
+	pm.particle_flag_align_y = true
+	pm.scale_min = 0.75
+	pm.scale_max = 1.25
+	drops.process_material = pm
+	var q := QuadMesh.new()
+	q.size = Vector2(0.014, 0.62)
+	var dm := StandardMaterial3D.new()
+	dm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	dm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	dm.albedo_color = Color(0.78, 0.84, 0.92, 0.32)
+	dm.billboard_mode = BaseMaterial3D.BILLBOARD_FIXED_Y
+	dm.billboard_keep_scale = true
+	dm.cull_mode = BaseMaterial3D.CULL_DISABLED
+	q.material = dm
+	drops.draw_pass_1 = q
+	drops.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(drops)
+	# --- Yer sıçramaları
+	var spl := GPUParticles3D.new()
+	spl.name = "Splashes"
+	spl.amount = int(amount / 12)
+	spl.lifetime = 0.32
+	spl.local_coords = false
+	spl.position = Vector3(0, 0.03, 0)
+	spl.visibility_aabb = AABB(Vector3(-16, -1, -16), Vector3(32, 3, 32))
+	var sm := ParticleProcessMaterial.new()
+	sm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	sm.emission_box_extents = Vector3(13.0, 0.0, 13.0)
+	sm.gravity = Vector3.ZERO
+	sm.initial_velocity_min = 0.0
+	sm.initial_velocity_max = 0.0
+	var sc := CurveTexture.new()
+	sc.curve = _scale_curve(0.25, 1.0, 1.35, 0.5)
+	sm.scale_curve = sc
+	var ramp := Gradient.new()
+	ramp.set_color(0, Color(1, 1, 1, 0.55))
+	ramp.set_color(1, Color(1, 1, 1, 0.0))
+	var rt := GradientTexture1D.new()
+	rt.gradient = ramp
+	sm.color_ramp = rt
+	spl.process_material = sm
+	var ring := LP.torus(0.035, 0.06, 10, 3)
+	var rm := StandardMaterial3D.new()
+	rm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	rm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	rm.vertex_color_use_as_albedo = true
+	rm.albedo_color = Color(0.85, 0.9, 1.0, 0.7)
+	ring.surface_set_material(0, rm)
+	spl.draw_pass_1 = ring
+	spl.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(spl)
+	if _ok(parent):
+		parent.add_child(root)
+	return root
+
+
+static func set_rain_amount(rain: Node, k: float) -> void:
+	if rain == null or not is_instance_valid(rain):
+		return
+	var on := k > 0.01
+	for n in ["Drops", "Splashes"]:
+		var p := rain.get_node_or_null(n) as GPUParticles3D
+		if p:
+			p.amount_ratio = clampf(k, 0.0, 1.0)
+			p.emitting = on
+	if rain is Node3D:
+		(rain as Node3D).visible = on

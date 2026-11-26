@@ -111,7 +111,7 @@ func _build_truck() -> void:
 
 	_sign_lbl = Label3D.new()
 	_sign_lbl.text = "🚚 GARDAŞLAR TOPTANCI GELİYOR!"
-	_sign_lbl.position = Vector3(0, 3.72, -0.4)
+	_sign_lbl.position = Vector3(0, 2.95, 0.25)
 	_sign_lbl.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	_sign_lbl.font_size = 42
 	_sign_lbl.outline_size = 11
@@ -124,9 +124,9 @@ func _build_truck() -> void:
 	_solid_body = StaticBody3D.new()
 	var cs := CollisionShape3D.new()
 	var sh := BoxShape3D.new()
-	sh.size = Vector3(2.25, 2.55, 5.9)
+	sh.size = Vector3(2.20, 2.18, 5.96)
 	cs.shape = sh
-	cs.position = Vector3(0, 1.35, 0.05)
+	cs.position = Vector3(0, 1.15, 0.05)
 	_solid_body.add_child(cs)
 	add_child(_solid_body)
 

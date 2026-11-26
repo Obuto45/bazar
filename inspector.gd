@@ -5,6 +5,7 @@ extends Node3D
 const MODEL := preload("res://models/char_zabita.glb")
 const LP := preload("res://lowpoly.gd")
 const VFX := preload("res://vfx.gd")
+const StallScript := preload("res://stall.gd")
 
 enum Mode { PATROL, CHASE, CHASE_THIEF }
 
@@ -266,7 +267,7 @@ func _tick_chase_thief(dt: float) -> void:
 		_announce("👮 KAPKAÇÇI YAKALANDI! %s" % ("Mal sahibine döndü!" if had else ""), th.global_position - Vector3(0, 0.6, 0), true)
 		return
 	var dir := diff / maxf(dist, 0.001)
-	position += dir * minf(CHASE_SPEED * dt, dist)
+	position = StallScript.keepout_all(self, position + dir * minf(CHASE_SPEED * dt, dist))
 	_body_yaw = lerp_angle(_body_yaw, atan2(dir.x, dir.z), minf(dt * 10.0, 1.0))
 	_spd = CHASE_SPEED
 
@@ -294,7 +295,7 @@ func _tick_chase(dt: float) -> void:
 		_pause_t = 2.2
 		return
 	var dir := diff / dist
-	position += dir * minf(CHASE_SPEED * dt, dist)
+	position = StallScript.keepout_all(self, position + dir * minf(CHASE_SPEED * dt, dist))
 	_body_yaw = lerp_angle(_body_yaw, atan2(dir.x, dir.z), minf(dt * 10.0, 1.0))
 	_spd = CHASE_SPEED
 
@@ -317,7 +318,8 @@ func _tick_patrol(dt: float) -> void:
 		var rz := position.z - truck.position.z
 		if absf(rx) < 2.3 and absf(rz) < 4.5:
 			dir = (dir + Vector3(1.2 if rx >= 0.0 else -1.2, 0, 0)).normalized()
-	position += dir * minf(WALK_SPEED * dt, dist)
+	dir = StallScript.steer_all(self, position, dir, dist - 0.2)
+	position = StallScript.keepout_all(self, position + dir * minf(WALK_SPEED * dt, dist))
 	_body_yaw = lerp_angle(_body_yaw, atan2(dir.x, dir.z), minf(dt * 8.0, 1.0))
 	_spd = WALK_SPEED
 	_inspect_nearby_stalls()

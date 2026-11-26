@@ -10,6 +10,7 @@ const MODEL_BALD := preload("res://models/char_hirsiz.glb") # tas kafa, siyah ş
 const LP := preload("res://lowpoly.gd")
 const Produce := preload("res://produce.gd")
 const VFX := preload("res://vfx.gd")
+const StallScript := preload("res://stall.gd")
 
 enum TState { SNEAK, LURK, FLEE, CAUGHT }
 
@@ -309,7 +310,8 @@ func _move_to(p: Vector3, speed: float, dt: float) -> float:
 		# zikzaklı kaçış
 		var perp := Vector3(dir.z, 0, -dir.x)
 		dir = (dir + perp * sin(_life * 3.1) * 0.28).normalized()
-	position += dir * minf(speed * dt, dist)
+	dir = StallScript.steer_all(self, position, dir, dist - 0.2)
+	position = StallScript.keepout_all(self, position + dir * minf(speed * dt, dist))
 	_body_yaw = lerp_angle(_body_yaw, atan2(dir.x, dir.z), minf(dt * 10.0, 1.0))
 	_spd = speed
 	return dist

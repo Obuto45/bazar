@@ -8,6 +8,7 @@ const LP := preload("res://lowpoly.gd")
 const VFX := preload("res://vfx.gd")
 const CHAR_SIMITCI := preload("res://models/char_simitci.glb")
 const CHAR_CAYCI := preload("res://models/char_cayci.glb")
+const StallScript := preload("res://stall.gd")
 
 const PIGEON_SHADER := """
 shader_type spatial;
@@ -45,7 +46,7 @@ const CAT_COLS := [
 	[Color(0.96, 0.95, 0.92), Color(0.85, 0.5, 0.2)], # beyaz-sarı
 ]
 
-enum PState { GROUND, FLY_UP, PERCHED, RETURN }
+enum PState { GROUND, FLY_UP, PERCHED, RETURN, FEED }
 
 const VENDOR_OFFERS := {
 	"cay": {"price": 5, "hint": "[E] 🍵 İnce belli çay al — 5 TL  (eline al & yudumla!)",
@@ -75,6 +76,7 @@ func _ready() -> void:
 	_cat_mat = LP.batch_material(0.9, 0.0, 0.0)
 	_build_cats()
 	_build_pigeons()
+	add_to_group("ambient")
 	_build_people()
 
 
@@ -320,7 +322,7 @@ func _burst(fi: int, from: Vector3) -> void:
 	var any := false
 	var px: Array = f["perch_x"]
 	for pg in _pigeons:
-		if int(pg["flock"]) != fi or int(pg["state"]) != PState.GROUND:
+		if int(pg["flock"]) != fi or not (int(pg["state"]) in [PState.GROUND, PState.FEED]):
 			continue
 		any = true
 		var a: Vector3 = pg["pos"]
@@ -335,6 +337,7 @@ func _burst(fi: int, from: Vector3) -> void:
 		pg["t"] = 0.0
 		pg["dur"] = _rng.randf_range(1.3, 2.1)
 		pg["peck"] = 0.0
+		pg["feed_t"] = 0.0
 	if any:
 		var home: Vector3 = f["home"]
 		VFX.spawn_feathers(self, home + Vector3(0, 0.4, 0), 6)
@@ -384,11 +387,43 @@ func _tick_pigeons(dt: float) -> void:
 						pg["state"] = PState.PERCHED
 						pg["wait"] = _rng.randf_range(7.0, 15.0)
 						pg["yaw"] = float(pg["yaw"]) + _rng.randf_range(-0.5, 0.5)
+					elif float(pg.get("feed_t", 0.0)) > 0.0:
+						# Yem noktasına indi: gagalamaya başlar
+						pg["state"] = PState.FEED
+						pg["walk"] = pos
+						pg["wait"] = 0.0
+						pos.y = 0.0
 					else:
 						pg["state"] = PState.GROUND
 						pg["walk"] = pos
 						pg["wait"] = _rng.randf_range(0.5, 2.0)
 						pos.y = 0.0
+			PState.FEED:
+				# Yemi gagalar, ufak ufak yer değiştirir; süre bitince sürüsüne geri uçar
+				pg["feed_t"] = float(pg["feed_t"]) - dt
+				var fp: Vector3 = pg["feed_pt"]
+				var fw: Vector3 = pg["walk"]
+				var fto := fw - pos
+				if fto.length() < 0.03:
+					pg["wait"] = float(pg["wait"]) - dt
+					if float(pg["wait"]) <= 0.0:
+						pg["walk"] = fp + Vector3(_rng.randf_range(-0.5, 0.5), 0.0, _rng.randf_range(-0.5, 0.5))
+						pg["wait"] = _rng.randf_range(0.5, 1.4)
+					pg["peck"] = minf(1.0, float(pg["peck"]) + dt * 2.0)
+				else:
+					pos += fto.normalized() * minf(fto.length(), 0.5 * dt)
+					pos.y = absf(sin(_t * 14.0 + float(pg["ph"]))) * 0.012
+					pg["yaw"] = lerp_angle(float(pg["yaw"]), atan2(-fto.x, -fto.z), dt * 8.0)
+					pg["peck"] = 0.0
+				if float(pg["feed_t"]) <= 0.0:
+					var home3: Vector3 = _flocks[int(pg["flock"])]["home"]
+					var e3 := home3 + Vector3(_rng.randf_range(-0.9, 0.9), 0.0, _rng.randf_range(-0.9, 0.9))
+					pg["state"] = PState.RETURN
+					pg["a"] = pos
+					pg["c"] = pos.lerp(e3, 0.5) + Vector3(0, 1.4, 0)
+					pg["e"] = e3
+					pg["t"] = 0.0
+					pg["dur"] = clampf(pos.distance_to(e3) * 0.18, 1.0, 3.5)
 			PState.PERCHED:
 				pg["wait"] = float(pg["wait"]) - dt
 				if float(pg["wait"]) <= 0.0:
@@ -402,7 +437,7 @@ func _tick_pigeons(dt: float) -> void:
 					pg["dur"] = _rng.randf_range(2.0, 3.2)
 		pg["pos"] = pos
 		pg["flap"] = lerpf(float(pg["flap"]), flap, minf(1.0, dt * 10.0))
-		var peck := float(pg["peck"]) if st == PState.GROUND else 0.0
+		var peck := float(pg["peck"]) if st == PState.GROUND or st == PState.FEED else 0.0
 		_mm.set_instance_transform(i, Transform3D(Basis(Vector3.UP, float(pg["yaw"])), pos))
 		_mm.set_instance_custom_data(i, Color(float(pg["flap"]), float(pg["ph"]), peck, 0.0))
 
@@ -502,8 +537,7 @@ func _make_person(kind: String) -> Dictionary:
 	return {"root": root, "body": body, "legs": legs, "arms": arms, "label": lbl, "kind": kind,
 		"i": 1, "dir": 1, "wait": 0.0, "speed": 1.05, "shout": _rng.randf_range(3.0, 8.0), "lbl_t": 0.0,
 		"pts": [], "loop": false, "stops": [], "area": area,
-		"visit_cd": _rng.randf_range(20.0, 35.0) if kind == "cay" else _rng.randf_range(35.0, 55.0),
-		"visiting": false, "offer_t": 0.0}
+		"near_t": 0.0, "prev": -1}
 
 
 ## Yerel oyuncu (bu bilgisayardaki); menüde ya da oyun dışında null.
@@ -524,89 +558,74 @@ func vendor_purchase(area: Area3D) -> void:
 			lbl.text = str(VENDOR_OFFERS[p["kind"]]["thanks"])
 			lbl.visible = true
 			p["lbl_t"] = 2.4
-			_end_visit(p, 2.0)
+			p["wait"] = 2.0 # teşekkür edip bir an bekler, sonra dolaşmaya devam
 			return
 
 
-func _end_visit(p: Dictionary, linger: float) -> void:
-	p["visiting"] = false
-	p["offer_t"] = 0.0
-	p["wait"] = linger
-	p["visit_cd"] = _rng.randf_range(45.0, 75.0)
-
-
-## Arada bir yerel oyuncuya yürüyüp çay/simit teklif eder. true = bu kare ziyaret mantığı çalıştı.
-func _tick_visit(p: Dictionary, dt: float) -> bool:
-	var root: Node3D = p["root"]
-	var lbl: Label3D = p["label"]
-	if not bool(p["visiting"]):
-		p["visit_cd"] = float(p["visit_cd"]) - dt
-		if float(p["visit_cd"]) > 0.0 or float(p["wait"]) > 0.0:
-			return false
-		var pl0 := _local_player()
-		if pl0 == null or root.global_position.distance_to(pl0.global_position) > 16.0:
-			p["visit_cd"] = 8.0
-			return false
-		p["visiting"] = true
-		p["offer_t"] = 0.0
+## Yakında (<=2.4 m) yerel oyuncu varsa satıcı durup ona döner; böylece [E] ile alışveriş kolay olur.
+## Asla oyuncuyu kovalamaz. Oyuncu çok uzun oyalanırsa (6 sn) satıcı yoluna devam eder.
+func _tick_near_player(p: Dictionary, dt: float) -> bool:
 	var pl := _local_player()
+	var root: Node3D = p["root"]
 	if pl == null:
-		_end_visit(p, 0.0)
+		p["near_t"] = 0.0
 		return false
-	var me := root.global_position
-	var to := pl.global_position - me
+	var to := pl.global_position - root.global_position
 	to.y = 0.0
 	var d := to.length()
-	var offer: Dictionary = VENDOR_OFFERS[p["kind"]]
-	if float(p["offer_t"]) > 0.0:
-		# Teklif ediyor: oyuncuya dön, bekle; oyuncu uzaklaşırsa ya da süre biterse vazgeç
-		p["offer_t"] = float(p["offer_t"]) - dt
-		root.rotation.y = lerp_angle(root.rotation.y, atan2(-to.x, -to.z), dt * 6.0)
-		lbl.text = str(offer["ask"])
-		lbl.visible = true
-		p["lbl_t"] = 0.5
-		if float(p["offer_t"]) <= 0.0 or d > 4.0:
-			lbl.text = str(offer["bye"])
-			p["lbl_t"] = 2.0
-			_end_visit(p, 1.0)
-		var legs: Array[Node3D] = p["legs"]
-		for l in legs:
-			l.rotation.x = lerpf(l.rotation.x, 0.0, dt * 6.0)
-		return true
-	if d <= 1.5:
-		p["offer_t"] = 10.0
-		var sfx := get_node_or_null("/root/Sfx")
-		if sfx and sfx.has_method("play_3d"):
-			sfx.play_3d("tea" if p["kind"] == "cay" else "happy", me, null, -6.0)
-		return true
-	if d > 22.0:
-		_end_visit(p, 0.0)
+	if d > 3.4:
+		p["near_t"] = 0.0
 		return false
-	var step := minf(d - 1.4, 1.7 * dt)
-	root.global_position += to / d * maxf(step, 0.0)
+	if d > 2.4 or float(p["near_t"]) > 6.0:
+		return false
+	p["near_t"] = float(p["near_t"]) + dt
 	root.rotation.y = lerp_angle(root.rotation.y, atan2(-to.x, -to.z), dt * 5.0)
-	var ph := _t * 7.0
-	var legs2: Array[Node3D] = p["legs"]
-	legs2[0].rotation.x = sin(ph) * 0.45
-	legs2[1].rotation.x = -sin(ph) * 0.45
+	var legs: Array[Node3D] = p["legs"]
+	for l in legs:
+		l.rotation.x = lerpf(l.rotation.x, 0.0, dt * 6.0)
 	return true
+
+
+## Rastgele bir sonraki dolaşma noktası: yakın (<=10.6 m), mevcut/önceki nokta hariç.
+func _next_wander(pts: Array, cur: int, prev: int) -> int:
+	var cands: Array = []
+	var cp: Vector3 = pts[cur]
+	for j in pts.size():
+		if j == cur or j == prev:
+			continue
+		var q: Vector3 = pts[j]
+		if Vector2(q.x - cp.x, q.z - cp.z).length() <= 10.6:
+			cands.append(j)
+	if cands.is_empty():
+		return (cur + 1) % pts.size()
+	return int(cands[_rng.randi() % cands.size()])
 
 
 func _build_people() -> void:
 	var sim := _make_person("simit")
-	sim["pts"] = [Vector3(-3.35, 0, -19.0), Vector3(-3.35, 0, 19.0), Vector3(3.35, 0, 19.0), Vector3(3.35, 0, -19.0)]
-	sim["loop"] = true
+	# Yürünebilir yol noktaları (iki yan şerit + orta enine yol); satıcılar rastgele yakın noktaya gider.
+	var lane: Array = []
+	for sx in [-3.35, 3.35]:
+		for z in [-19.0, -12.5, -6.0, 0.0, 6.0, 12.5, 19.0]:
+			lane.append(Vector3(sx, 0.0, z))
+	lane.append_array([Vector3(-4.8, 0.0, 3.4), Vector3(4.8, 0.0, 3.4)])
+	sim["pts"] = lane.duplicate()
 	sim["lines"] = ["Simiiit! Taze simit!", "Sıcak simit, gevrek simit!", "Simitçi geldiii!", "Çıtır çıtır simit!"]
-	(sim["root"] as Node3D).position = sim["pts"][0]
+	sim["i"] = _rng.randi() % lane.size()
+	(sim["root"] as Node3D).position = sim["pts"][sim["i"]]
+	sim["i"] = _next_wander(sim["pts"], sim["i"], -1)
+	sim["wait"] = _rng.randf_range(1.0, 5.0)
 	_people.append(sim)
 	var cay := _make_person("cay")
 	var cp := Vector3(11.4, 0.04, 11.2)
 	if bazaar and bazaar.has_meta("cay_pos"):
 		cp = bazaar.get_meta("cay_pos")
-	cay["pts"] = [cp, Vector3(10.9, 0.04, 3.4), Vector3(4.8, 0.0, 3.4), Vector3(-4.8, 0.0, 3.4), Vector3(-10.9, 0.04, 3.4), Vector3(-10.9, 0.04, -2.9)]
-	cay["stops"] = [0, 3, 5]
-	cay["speed"] = 1.2
+	var cpts: Array = [cp, Vector3(10.9, 0.04, 3.4), Vector3(-10.9, 0.04, 3.4), Vector3(-10.9, 0.04, -2.9)]
+	cpts.append_array(lane)
+	cay["pts"] = cpts
+	cay["speed"] = 1.1
 	cay["lines"] = ["Çaaay! Taze demlendi!", "Çay isteyen var mı?", "Tavşan kanı çay!", "Ocak sıcak, çay hazır!"]
+	cay["i"] = _next_wander(cpts, 0, -1)
 	(cay["root"] as Node3D).position = cp
 	_people.append(cay)
 
@@ -616,7 +635,7 @@ func _tick_person(p: Dictionary, dt: float) -> void:
 	var legs: Array[Node3D] = p["legs"]
 	var arms: Array[Node3D] = p["arms"]
 	var lbl: Label3D = p["label"]
-	if _tick_visit(p, dt):
+	if _tick_near_player(p, dt):
 		return
 	# Bağırma balonu
 	p["shout"] = float(p["shout"]) - dt
@@ -644,30 +663,26 @@ func _tick_person(p: Dictionary, dt: float) -> void:
 	var to := target - root.position
 	to.y = 0.0
 	var d := to.length()
-	if d < 0.06:
+	p["leg_t"] = float(p.get("leg_t", 0.0)) + dt
+	if d < 0.12 or float(p["leg_t"]) > 30.0:
+		# Vardı (ya da takıldı): rastgele yakın bir sonraki noktaya, çoğu zaman durup bekleyerek
 		var cur := int(p["i"])
-		if bool(p["loop"]):
-			p["i"] = (cur + 1) % pts.size()
-		else:
-			var ni := cur + int(p["dir"])
-			if ni < 0 or ni >= pts.size():
-				p["dir"] = -int(p["dir"])
-				ni = cur + int(p["dir"])
-			p["i"] = ni
-		var stops: Array = p["stops"]
-		if cur in stops:
-			p["wait"] = _rng.randf_range(2.5, 5.0)
+		p["i"] = _next_wander(pts, cur, int(p["prev"]))
+		p["prev"] = cur
+		p["leg_t"] = 0.0
+		if _rng.randf() < 0.7:
+			p["wait"] = _rng.randf_range(3.0, 8.0)
 			if p["kind"] == "cay":
 				var sfx := get_node_or_null("/root/Sfx")
 				if sfx and sfx.has_method("play_3d"):
 					sfx.play_3d("tea", root.global_position, null, -6.0)
-		elif bool(p["loop"]) and _rng.randf() < 0.5:
-			p["wait"] = _rng.randf_range(1.0, 3.0)
 		return
+	var dir := to / d
+	dir = StallScript.steer_all(self, root.position, dir, d - 0.2) # tezgah içine girme
 	var step := minf(d, float(p["speed"]) * dt)
-	root.position += to / d * step
+	root.position = StallScript.keepout_all(self, root.position + dir * step)
 	root.position.y = target.y
-	root.rotation.y = lerp_angle(root.rotation.y, atan2(-to.x, -to.z), dt * 5.0)
+	root.rotation.y = lerp_angle(root.rotation.y, atan2(-dir.x, -dir.z), dt * 5.0)
 	var ph := _t * 6.2
 	legs[0].rotation.x = sin(ph) * 0.45
 	legs[1].rotation.x = -sin(ph) * 0.45
@@ -677,3 +692,34 @@ func _tick_person(p: Dictionary, dt: float) -> void:
 	else:
 		arms[1].rotation.x = sin(ph) * 0.35
 	(p["body"] as Node3D).position.y = absf(sin(ph)) * 0.03
+
+
+# ---------------------------------------------------------------------------
+# Kuş besleme (her eşte yerel çalışır; çağıran RPC ile senkronlar)
+# ---------------------------------------------------------------------------
+
+## ~12 m içindeki güvercinler noktaya uçar/yürür, birkaç sn gagalar, sonra sürüsüne döner.
+func feed_birds_at(world_pos: Vector3) -> void:
+	if _mm == null:
+		return
+	var lp := to_local(world_pos)
+	lp.y = 0.0
+	for pg in _pigeons:
+		var st := int(pg["state"])
+		if st != PState.GROUND and st != PState.PERCHED and st != PState.FEED:
+			continue
+		var pos: Vector3 = pg["pos"]
+		if Vector2(pos.x - lp.x, pos.z - lp.z).length() > 12.0:
+			continue
+		var e := lp + Vector3(_rng.randf_range(-0.6, 0.6), 0.0, _rng.randf_range(-0.6, 0.6))
+		pg["feed_pt"] = lp
+		pg["feed_t"] = _rng.randf_range(4.0, 7.0)
+		if st == PState.FEED:
+			continue
+		pg["state"] = PState.RETURN # uçuş yayı; inince feed_t>0 olduğu için FEED'e geçer
+		pg["a"] = pos
+		pg["c"] = pos.lerp(e, 0.5) + Vector3(0, 1.2 if st == PState.GROUND else 0.6, 0)
+		pg["e"] = e
+		pg["t"] = 0.0
+		pg["dur"] = clampf(pos.distance_to(e) * 0.16 + _rng.randf_range(0.2, 0.9), 0.9, 3.2)
+		pg["peck"] = 0.0

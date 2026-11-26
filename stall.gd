@@ -40,7 +40,9 @@ const UPGRADES := {
 	},
 }
 const UPGRADE_ORDER := ["megaphone", "lights", "big_crate", "bell"]
-const SLOT_XS := [-1.2, -0.4, 0.4, 1.2]
+const SLOT_SPACING := 0.8
+const KEEPOUT_BACK := -1.3 # NPC yasak bölgesi: tezgah + arka alan (yerel z)
+const KEEPOUT_FRONT := 1.2
 const MAX_SLOT_COUNT := 10
 const CRATE_CAPACITY := 10
 const GOUGE_RATIO := 1.75
@@ -58,6 +60,8 @@ var owner_name := ""
 var spot_idx := 0
 var awning_color := Color(0.14, 0.44, 0.80)
 var slots: Array[Dictionary] = []
+var expansion_level := 0 # 0: 4 yuva, 1: 6 yuva, 2: 8 yuva (tezgah fiziksel olarak genişler)
+var _built: Array = [] # _build_all'ın eklediği çocuklar (genişlemede yeniden kurulur)
 var crate_available: Dictionary = {}
 var upgrades: Dictionary = {"megaphone": false, "lights": false, "big_crate": false, "bell": false}
 var bell_boost := 0.0
@@ -113,17 +117,110 @@ func setup(p_owner_id: int, p_owner_name: String, color_idx: int, p_spot_idx := 
 
 func _ready() -> void:
 	slots.clear()
-	for i in 4:
+	for i in 4 + 2 * expansion_level:
 		slots.append({"item": "", "count": 0, "price": 10, "fresh": 1.0})
+	add_to_group("stall_keepout")
+	_build_all()
+	for k in upgrades:
+		if bool(upgrades[k]):
+			_show_upgrade_visual(k)
+
+
+func _build_all() -> void:
+	var n0 := get_child_count()
 	_build_geometry()
 	_build_slots()
 	_build_scale()
 	_build_upgrade_board()
 	_build_upgrade_attachments()
 	_build_radio_slot()
+	_built = get_children().slice(n0)
+
+
+## Tezgah tablası yarı genişliği: 1.77 / 2.57 / 3.37
+func half_width() -> float:
+	return 1.77 + 0.8 * float(expansion_level)
+
+
+func _slot_x(i: int) -> float:
+	return (float(i) - float(slots.size() - 1) * 0.5) * SLOT_SPACING
+
+
+## Tezgahı 6 (seviye 1) / 8 (seviye 2) yuvaya genişletir; mevcut yuva içerikleri korunur.
+@rpc("any_peer", "call_local", "reliable")
+func rpc_set_expansion(level: int) -> void:
+	level = clampi(level, 0, 2)
+	if level <= expansion_level:
+		return
+	expansion_level = level
+	if not is_node_ready():
+		return # _ready doğru boyutta kurar
+	while slots.size() < 4 + 2 * level:
+		slots.append({"item": "", "count": 0, "price": 10, "fresh": 1.0})
+	for n in _built:
+		if is_instance_valid(n):
+			remove_child(n)
+			n.queue_free()
+	_build_all()
 	for k in upgrades:
 		if bool(upgrades[k]):
 			_show_upgrade_visual(k)
+	for i in slots.size():
+		_apply_fresh_visual(i)
+	rpc_set_stall_radio(has_radio, radio_playing)
+	VFX.burst_dust(self, to_global(Vector3(0, 0.6, 0.3)), Color(0.8, 0.7, 0.5), 10)
+
+
+## NPC'leri tezgah + arka alan dışında tutar: dünya konumunu footprint dışına iter (y korunur).
+func keepout_push(p: Vector3) -> Vector3:
+	var l := to_local(p)
+	var hx := half_width() + 0.25
+	if absf(l.x) >= hx or l.z <= KEEPOUT_BACK or l.z >= KEEPOUT_FRONT:
+		return p
+	var dl := l.x + hx
+	var dr := hx - l.x
+	var db := l.z - KEEPOUT_BACK
+	var df := KEEPOUT_FRONT - l.z
+	var m := minf(minf(dl, dr), minf(db, df))
+	if m == df:
+		l.z = KEEPOUT_FRONT
+	elif m == dl:
+		l.x = -hx
+	elif m == dr:
+		l.x = hx
+	else:
+		l.z = KEEPOUT_BACK
+	var out := to_global(l)
+	out.y = p.y
+	return out
+
+
+## NPC yönlendirme: `dir` (yatay, normalize) yönünde ~1 m ileride yasak bölge varsa tezgahın kenarı boyunca dolan.
+static func steer_all(from: Node, pos: Vector3, dir: Vector3, look := 1.0) -> Vector3:
+	if from == null or not from.is_inside_tree():
+		return dir
+	var ahead := pos + dir * minf(look, 1.0)
+	for st in from.get_tree().get_nodes_in_group("stall_keepout"):
+		var l: Vector3 = st.to_local(ahead)
+		var hx: float = st.half_width() + 0.45
+		if absf(l.x) < hx and l.z > KEEPOUT_BACK - 0.3 and l.z < KEEPOUT_FRONT + 0.3:
+			var ax: Vector3 = st.global_transform.basis.x
+			ax.y = 0.0
+			ax = ax.normalized()
+			var side := signf(dir.dot(ax))
+			if absf(dir.dot(ax)) < 0.25:
+				side = 1.0 if st.to_local(pos).x >= 0.0 else -1.0
+			return (ax * side + dir * 0.15).normalized()
+	return dir
+
+
+## Tüm tezgahların yasak bölgesinden dışarı iter. `from`: ağaçtaki herhangi bir düğüm.
+static func keepout_all(from: Node, p: Vector3) -> Vector3:
+	if from == null or not from.is_inside_tree():
+		return p
+	for st in from.get_tree().get_nodes_in_group("stall_keepout"):
+		p = st.keepout_push(p)
+	return p
 
 
 func _process(dt: float) -> void:
@@ -257,28 +354,33 @@ func _build_geometry() -> void:
 	var tarp_a := LP.mat_tex(awning_color, LP.tex_tarp(), 0.72, Vector3(2.0, 2.0, 1.0))
 	var tarp_w := LP.mat_tex(Color(0.96, 0.94, 0.88), LP.tex_tarp(), 0.74, Vector3(2.0, 2.0, 1.0))
 
-	LP.add_mat(self, LP.box(Vector3(3.4, 0.52, 0.92)), Vector3(0, 0.26, 0.25), wood_m)
-	LP.add(self, LP.box(Vector3(3.46, 0.08, 0.96)), Vector3(0, 0.06, 0.25), WOOD.darkened(0.24))
-	LP.add_mat(self, LP.box(Vector3(3.54, 0.06, 1.04)), Vector3(0, 0.545, 0.25), top_m)
-	for sx in [-1.25, -0.42, 0.42, 1.25]:
-		LP.add(self, LP.box(Vector3(0.06, 0.48, 0.03)), Vector3(sx, 0.27, 0.72), WOOD.darkened(0.18))
-	LP.solid(self, Vector3(0, 0.285, 0.25), Vector3(3.54, 0.57, 1.04))
+	var hw := half_width()
+	var tw := hw * 2.0
+	LP.add_mat(self, LP.box(Vector3(tw - 0.14, 0.52, 0.92)), Vector3(0, 0.26, 0.25), wood_m)
+	LP.add(self, LP.box(Vector3(tw - 0.08, 0.08, 0.96)), Vector3(0, 0.06, 0.25), WOOD.darkened(0.24))
+	LP.add_mat(self, LP.box(Vector3(tw, 0.06, 1.04)), Vector3(0, 0.545, 0.25), top_m)
+	for i in slots.size():
+		LP.add(self, LP.box(Vector3(0.06, 0.48, 0.03)), Vector3(_slot_x(i) * 1.03, 0.27, 0.72), WOOD.darkened(0.18))
+	LP.solid(self, Vector3(0, 0.285, 0.25), Vector3(tw, 0.57, 1.04))
 
 	# Galvaniz çelik pazarcı direkleri
-	for x in [-1.62, 1.62]:
+	for x in [-(hw - 0.15), hw - 0.15]:
 		for z in [-0.75, 0.85]:
 			LP.add(self, LP.cyl(0.042, 0.048, 2.88, 6), Vector3(x, 1.44, z), STEEL, Vector3.ZERO, 0.42, 0.7)
 		LP.add(self, LP.box(Vector3(0.05, 0.05, 1.62)), Vector3(x, 2.74, 0.05), STEEL, Vector3.ZERO, 0.42, 0.7)
-	LP.add(self, LP.box(Vector3(3.36, 0.06, 0.06)), Vector3(0, 2.78, 0.85), STEEL, Vector3.ZERO, 0.42, 0.7)
+	LP.add(self, LP.box(Vector3(tw - 0.18, 0.06, 0.06)), Vector3(0, 2.78, 0.85), STEEL, Vector3.ZERO, 0.42, 0.7)
 
-	# Çizgili dokulu branda tente
-	for i in 5:
+	# Çizgili dokulu branda tente (genişlemede şerit sayısı artar)
+	var ns := 5 + 2 * expansion_level
+	var sw := (tw + 0.11) / float(ns)
+	for i in ns:
 		var m := tarp_a if i % 2 == 0 else tarp_w
-		LP.add_mat(self, LP.box(Vector3(0.73, 0.05, 2.18)), Vector3(-1.46 + float(i) * 0.73, 2.93, 0.12), m, Vector3(0.18, 0, 0))
-	LP.add_mat(self, LP.box(Vector3(3.68, 0.22, 0.04)), Vector3(0, 2.71, 1.17), tarp_a)
-	for i in 9:
+		LP.add_mat(self, LP.box(Vector3(sw, 0.05, 2.18)), Vector3(-(tw + 0.11) * 0.5 + sw * (float(i) + 0.5), 2.93, 0.12), m, Vector3(0.18, 0, 0))
+	LP.add_mat(self, LP.box(Vector3(tw + 0.14, 0.22, 0.04)), Vector3(0, 2.71, 1.17), tarp_a)
+	var nf := 9 + 4 * expansion_level
+	for i in nf:
 		var fc := awning_color.darkened(0.12) if i % 2 == 0 else Color(0.96, 0.94, 0.88)
-		LP.add(self, LP.prism(Vector3(0.38, 0.13, 0.04)), Vector3(-1.52 + float(i) * 0.38, 2.55, 1.17), fc, Vector3(0, 0, PI))
+		LP.add(self, LP.prism(Vector3((tw - 0.12) / float(nf), 0.13, 0.04)), Vector3(-(tw - 0.12) * 0.5 + (tw - 0.12) / float(nf) * (float(i) + 0.5), 2.55, 1.17), fc, Vector3(0, 0, PI))
 
 	_sign_label = Label3D.new()
 	_sign_label.text = (owner_name + " Tezgahı") if owner_name != "" else "Tezgah"
@@ -301,7 +403,7 @@ func _build_geometry() -> void:
 
 func _build_scale() -> void:
 	var sc := Node3D.new()
-	sc.position = Vector3(1.44, 0.58, 0.56)
+	sc.position = Vector3(half_width() - 0.33, 0.58, 0.56)
 	add_child(sc)
 	LP.add(sc, LP.cyl(0.08, 0.10, 0.04, 8), Vector3(0, 0.02, 0), BRASS.darkened(0.18), Vector3.ZERO, 0.3, 0.8)
 	LP.add(sc, LP.cyl(0.015, 0.02, 0.28, 6), Vector3(0, 0.16, 0), BRASS, Vector3.ZERO, 0.28, 0.82)
@@ -326,7 +428,7 @@ func tip_scale() -> void:
 
 func _build_upgrade_board() -> void:
 	var b := Node3D.new()
-	b.position = Vector3(-1.68, 1.24, 0.05)
+	b.position = Vector3(-(half_width() - 0.09), 1.24, 0.05)
 	b.rotation.y = PI / 2
 	add_child(b)
 	LP.add(b, LP.box(Vector3(0.76, 0.48, 0.05)), Vector3.ZERO, Color(0.14, 0.2, 0.14))
@@ -357,7 +459,7 @@ func _build_upgrade_board() -> void:
 ## Tezgaha bırakılan Arabesk Radyo yuvası (sağ arka masa köşesi).
 func _build_radio_slot() -> void:
 	_radio_node = Items.build_item_model("radyo")
-	_radio_node.position = Vector3(1.52, 0.58, -0.05)
+	_radio_node.position = Vector3(half_width() - 0.25, 0.58, -0.05)
 	_radio_node.rotation.y = -0.35
 	_radio_node.hide()
 	add_child(_radio_node)
@@ -424,7 +526,7 @@ func _build_upgrade_attachments() -> void:
 	_light_bulbs.clear()
 
 	var mega := Node3D.new()
-	mega.position = Vector3(-1.62, 2.52, 0.92)
+	mega.position = Vector3(-(half_width() - 0.15), 2.52, 0.92)
 	mega.rotation = Vector3(-0.1, 0.25, 0.0)
 	LP.add(mega, LP.cyl(0.05, 0.16, 0.32, 8), Vector3(0, 0, 0.14), Color(0.92, 0.24, 0.18), Vector3(PI / 2, 0, 0), 0.35, 0.2)
 	LP.add(mega, LP.torus(0.14, 0.17, 10, 5), Vector3(0, 0, 0.30), BRASS, Vector3(PI / 2, 0, 0), 0.25, 0.8)
@@ -434,8 +536,9 @@ func _build_upgrade_attachments() -> void:
 	_upgrade_visuals["megaphone"] = mega
 
 	var lights := Node3D.new()
-	for i in 7:
-		var lx := -1.5 + float(i) * 0.5
+	var nb := 7 + 3 * expansion_level
+	for i in nb:
+		var lx := -(half_width() - 0.27) + float(i) * (half_width() * 2.0 - 0.54) / float(nb - 1)
 		var col := Color(1.0, 0.84, 0.36) if i % 2 == 0 else Color(1.0, 0.6, 0.28)
 		var bulb := LP.add(lights, LP.sphere(0.062, 6, 4), Vector3(lx, 2.48, 1.18), col, Vector3.ZERO, 0.15)
 		var bm := bulb.material_override as StandardMaterial3D
@@ -443,7 +546,7 @@ func _build_upgrade_attachments() -> void:
 		bm.emission = col
 		bm.emission_energy_multiplier = 2.2
 		_light_bulbs.append(bm)
-	LP.add(lights, LP.box(Vector3(3.68, 0.05, 0.06)), Vector3(0, 2.84, 1.19), BRASS, Vector3.ZERO, 0.25, 0.8)
+	LP.add(lights, LP.box(Vector3(half_width() * 2.0 + 0.14, 0.05, 0.06)), Vector3(0, 2.84, 1.19), BRASS, Vector3.ZERO, 0.25, 0.8)
 	var glow := OmniLight3D.new()
 	glow.position = Vector3(0, 2.44, 0.72)
 	glow.light_color = Color(1.0, 0.82, 0.45)
@@ -455,14 +558,14 @@ func _build_upgrade_attachments() -> void:
 	_upgrade_visuals["lights"] = lights
 
 	var big := Node3D.new()
-	LP.add(big, LP.box(Vector3(3.56, 0.05, 0.16)), Vector3(0, 0.58, 0.78), BRASS.darkened(0.15), Vector3.ZERO, 0.35, 0.6)
-	LP.add(big, LP.box(Vector3(0.45, 0.26, 0.36)), Vector3(1.62, 0.14, -0.35), WOOD.lightened(0.1))
+	LP.add(big, LP.box(Vector3(half_width() * 2.0 + 0.02, 0.05, 0.16)), Vector3(0, 0.58, 0.78), BRASS.darkened(0.15), Vector3.ZERO, 0.35, 0.6)
+	LP.add(big, LP.box(Vector3(0.45, 0.26, 0.36)), Vector3(half_width() - 0.15, 0.14, -0.35), WOOD.lightened(0.1))
 	big.hide()
 	add_child(big)
 	_upgrade_visuals["big_crate"] = big
 
 	var bell := Node3D.new()
-	bell.position = Vector3(-1.44, 0.58, 0.56)
+	bell.position = Vector3(-(half_width() - 0.33), 0.58, 0.56)
 	_bell_mesh = Node3D.new()
 	bell.add_child(_bell_mesh)
 	LP.add(_bell_mesh, LP.cyl(0.08, 0.11, 0.03, 8), Vector3(0, 0.015, 0), Color(0.18, 0.14, 0.12))
@@ -515,8 +618,8 @@ func _build_slots() -> void:
 	var fly_mesh := LP.sphere(0.012, 4, 3)
 	var fly_mat := LP.mat(Color(0.05, 0.05, 0.06), 0.4)
 	var bar_mesh := LP.box(Vector3(0.27, 0.018, 0.016))
-	for i in 4:
-		var sx: float = SLOT_XS[i]
+	for i in slots.size():
+		var sx: float = _slot_x(i)
 		var cc: Color = crate_cols[i % crate_cols.size()]
 		# Plastik pazar kasası tepsisi (alçak kenarlı: yığın taşar gibi görünsün)
 		LP.add(self, LP.box(Vector3(0.72, 0.04, 0.66)), Vector3(sx, 0.59, 0.24), cc.darkened(0.22), Vector3.ZERO, 0.55)
@@ -676,7 +779,14 @@ func set_owner_display_name(n: String) -> void:
 
 
 func customer_spot(slot_offset := 0.0) -> Vector3:
-	return to_global(Vector3(slot_offset, 0.0, 1.55))
+	var lim := half_width() - 0.35
+	return to_global(Vector3(clampf(slot_offset, -lim, lim), 0.0, 1.55))
+
+
+## n. müşteri için ön sıradaki ofset (geniş tezgahta daha çok yer: 3 / 5 / 7 nokta).
+func spot_offset(n: int) -> float:
+	var cnt := 3 + 2 * expansion_level
+	return (float(n % cnt) - float(cnt - 1) * 0.5) * 0.68
 
 
 func owner_spawn_pos() -> Vector3:
@@ -1247,7 +1357,7 @@ func rpc_ring_bell() -> void:
 		return
 	bell_boost = 10.0
 	bell_cd = 15.0
-	var bell_pos := to_global(Vector3(-1.44, 0.78, 0.56))
+	var bell_pos := to_global(Vector3(-(half_width() - 0.33), 0.78, 0.56))
 	Sfx.play_3d("bell", bell_pos, self, 0.0, 1.0, 32.0)
 	VFX.spawn_sound_ring(self, bell_pos, 5.5, Color(1.0, 0.85, 0.28))
 	VFX.spawn_floating_text(self, bell_pos + Vector3(0, 0.55, 0), "🔔 GEL VATANDAŞ GEL!", Color(1.0, 0.88, 0.3), 38)
@@ -1288,6 +1398,7 @@ func export_snapshot() -> Dictionary:
 		"owner_name": owner_name,
 		"spot_idx": spot_idx,
 		"slots": slots.duplicate(true),
+		"expansion_level": expansion_level,
 		"upgrades": upgrades.duplicate(true),
 		"bell_boost": bell_boost,
 		"bell_cd": bell_cd,
@@ -1298,6 +1409,8 @@ func export_snapshot() -> Dictionary:
 
 
 func apply_snapshot(d: Dictionary) -> void:
+	if d.has("expansion_level"):
+		rpc_set_expansion(int(d["expansion_level"]))
 	if d.has("upgrades"):
 		for k in d["upgrades"]:
 			if bool(d["upgrades"][k]) and not has_upgrade(k):

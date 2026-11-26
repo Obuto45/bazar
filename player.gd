@@ -45,7 +45,7 @@ const VOICE_PREBUF := 1440
 const VOICE_MAX_BUF := 4800
 const VOICE_DB_MIN := -46.0
 const VOICE_DB_MAX := -12.0
-const VOICE_UNIT_SIZE := 3.5
+const VOICE_UNIT_SIZE := 6.0
 const VOICE_MAX_DIST := 22.0
 # Bağırma eşikleri (Megafon eldeyken +12 dB / 1.85x!)
 const SHOUT_DB_MIN := -36.0
@@ -57,6 +57,19 @@ const HAIRS := [Color(0.2, 0.12, 0.07), Color(0.08, 0.06, 0.05), Color(0.75, 0.5
 	Color(0.4, 0.28, 0.18), Color(0.85, 0.8, 0.7)]
 const SHIRTS := [Color(0.85, 0.2, 0.18), Color(0.2, 0.5, 0.9), Color(0.98, 0.75, 0.15), Color(0.3, 0.75, 0.35),
 	Color(0.65, 0.35, 0.85), Color(1.0, 0.5, 0.7), Color(0.15, 0.75, 0.75), Color(1.0, 0.55, 0.15)]
+
+# 1. şahıs el tutuşu (eşya yerel uzayı): [konum, euler derece, ölçek]. Sağ el eşyayı tutar.
+const FP_GRIP := {
+	"cay": [Vector3(0.04, -0.01, 0.05), Vector3(-25, 0, 10), 0.8],
+	"simit": [Vector3(0.02, -0.115, 0.02), Vector3(-20, 0, 0), 0.8],
+	"radyo": [Vector3(0.0, 0.215, 0.0), Vector3(0, 0, 90), 0.8],
+	"megafon": [Vector3(0.0, -0.04, 0.03), Vector3.ZERO, 0.8],
+	"bicak": [Vector3(0.0, -0.01, 0.05), Vector3(80, 0, 0), 0.6],
+	"spray": [Vector3(0.0, -0.03, 0.04), Vector3.ZERO, 0.7],
+	"sigara": [Vector3(0.03, -0.07, 0.05), Vector3(-30, 0, 0), 0.6],
+	"puro": [Vector3(0.03, -0.07, 0.05), Vector3(-30, 0, 0), 0.6],
+}
+const CRUMB_SPEED := 7.5
 
 var spawn_pos := Vector3.ZERO
 var npc := false
@@ -385,6 +398,22 @@ func _current_burn_ratio() -> float:
 	return 0.0
 
 
+## 1. şahıs el modeli: karakter modelindeki el mesh'inin kopyası (kameraya bağlı eşyalara/kasaya takılır).
+func _make_fp_hand(side_name: String, scl: float) -> Node3D:
+	var pivot := Node3D.new()
+	pivot.rotation_degrees.y = 180.0 # rig +Z ileri, kamera -Z ileri
+	pivot.scale = Vector3.ONE * scl
+	var src: Node = (parts[side_name] as Node3D).get_child(0)
+	var h := src.duplicate() as Node3D
+	var meshes: Array = h.find_children("*", "MeshInstance3D", true, false)
+	if h is MeshInstance3D:
+		meshes.append(h)
+	for mi: MeshInstance3D in meshes:
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	pivot.add_child(h)
+	return pivot
+
+
 func _refresh_equipped_visual() -> void:
 	if _fp_item_visual:
 		_fp_item_visual.queue_free()
@@ -399,6 +428,12 @@ func _refresh_equipped_visual() -> void:
 	if is_multiplayer_authority() and _fp_item_anchor:
 		_fp_item_visual = Items.build_item_model(iid, br)
 		_fp_item_anchor.add_child(_fp_item_visual)
+		# Eşya her zaman elde: sağ el eşyaya takılır, tüm kullanım animasyonlarında birlikte hareket eder
+		var grip: Array = FP_GRIP.get(iid, [Vector3(0.0, -0.05, 0.04), Vector3.ZERO, 0.7])
+		var fh := _make_fp_hand("HandR", float(grip[2]))
+		fh.position = grip[0]
+		fh.rotation_degrees += grip[1]
+		_fp_item_visual.add_child(fh)
 		# Eşyaya özel doğal 1. şahıs tutuş açısı
 		match iid:
 			"sigara", "puro":
@@ -603,6 +638,8 @@ func _unhandled_input(e: InputEvent) -> void:
 		_sway_off.y = clampf(_sway_off.y + e.relative.y * 0.00045, -0.035, 0.035)
 	elif e.is_action_pressed("interact"):
 		_do_interact()
+	elif e.is_action_pressed("radio_next"):
+		_radio_next()
 	elif e.is_action_pressed("ring_bell"):
 		_do_ring_bell()
 	elif e.is_action_pressed("refuse_offer"):
@@ -647,6 +684,16 @@ func _do_wheel(dir: int) -> void:
 	if equipped_item_id() == "radyo" and _sec_cd <= 0.0:
 		_sec_cd = 0.18
 		_step_hand_radio(dir)
+
+
+## [N]: elde radyo varsa onun, yoksa kendi tezgah radyosunun şarkısını değiştirir.
+func _radio_next() -> void:
+	if equipped_item_id() == "radyo":
+		_step_hand_radio(1)
+		return
+	var st := _find_stall(_my_peer_id())
+	if st and st.has_radio:
+		_radio_toast(st.step_radio_synced(1))
 
 
 func _step_hand_radio(dir: int) -> void:
@@ -765,9 +812,9 @@ func _use_secondary_item() -> void:
 			_start_action("tea_stir", iid, 0.92)
 			_trigger_item_fx_synced("tea_stir", iid, tip_pos, Vector3.UP)
 		"simit":
-			_sec_cd = 0.85
-			_start_action("simit_sniff", iid, 0.78)
-			_trigger_item_fx_synced("simit_sniff", iid, tip_pos, fwd)
+			# Sağ tık: kuşlara simit parçası fırlat (parça ısırık yerine geçer)
+			_sec_cd = 0.9
+			_start_action("simit_throw", iid, 0.62)
 		"bicak":
 			_sec_cd = 0.65
 			_start_action("knife_spin", iid, 0.56)
@@ -882,6 +929,15 @@ func _tick_item_action(dt: float) -> void:
 							var target_fill := 0.04 if cur_p >= max_p else clampf(1.0 - (float(cur_p) / float(max_p)) * 0.88, 0.16, 1.0)
 							liq.create_tween().tween_property(liq, "scale:y", target_fill, 0.34).set_trans(Tween.TRANS_SINE)
 
+		"simit_throw":
+			if _action_stage == 0 and u >= 0.35:
+				_action_stage = 1
+				var from_p := (cam.global_position + fwd * 0.45 + Vector3(0, -0.12, 0)) if cam else (global_position + Vector3(0, 1.2, 0))
+				_trigger_item_fx_synced("simit_throw", _action_item, from_p, fwd * CRUMB_SPEED + Vector3(0, 2.6, 0))
+				if active_slot >= 0 and active_slot < inventory.size() and str(inventory[active_slot].get("id", "")) == "simit":
+					inventory[active_slot]["puffs"] = int(inventory[active_slot].get("puffs", 0)) + 1
+					inventory_changed.emit()
+
 		"simit_bite":
 			if _action_stage == 0 and u >= 0.30:
 				_action_stage = 1
@@ -910,7 +966,7 @@ func _tick_item_action(dt: float) -> void:
 				_finish_consumable_step(done_item, msg)
 			"tea_sip":
 				_finish_consumable_step("cay", "🍵 Ohh mis gibi tavşan kanı çay bitti!")
-			"simit_bite":
+			"simit_bite", "simit_throw":
 				_finish_consumable_step("simit", "🥯 Çıtır simit bitti, enerji doldu!")
 
 
@@ -1007,6 +1063,10 @@ func rpc_item_fx(action: String, iid: String, pos: Vector3, dir: Vector3) -> voi
 			Sfx.play_3d("bite_crunch", pos, w, -3.0, 1.0, 12.0)
 			VFX.spawn_crumbs(w, pos)
 			_tp_action = "simit_bite"; _tp_t = 0.0; _tp_dur = 0.85
+		"simit_throw":
+			Sfx.play_3d("crate_throw", pos, w, -12.0, 1.9, 10.0)
+			_fly_crumb(w, pos, dir)
+			_tp_action = "simit_throw"; _tp_t = 0.0; _tp_dur = 0.5
 		"simit_sniff":
 			Sfx.play_3d("smoke_inhale", pos, w, -9.0, 1.38, 10.0)
 			_tp_action = "simit_sniff"; _tp_t = 0.0; _tp_dur = 0.75
@@ -1037,6 +1097,33 @@ func rpc_item_fx(action: String, iid: String, pos: Vector3, dir: Vector3) -> voi
 			_tp_action = "radio_tune"; _tp_t = 0.0; _tp_dur = 0.40
 		"catch":
 			Sfx.play_3d("crate_throw", pos, w, -6.0, 1.3, 12.0)
+
+
+## Fırlatılan simit parçası: balistik yay çizer, düştüğü yerde kuşları çağırır (ambient.feed_birds_at).
+func _fly_crumb(w: Node, from: Vector3, vel: Vector3) -> void:
+	if w == null or not w.is_inside_tree():
+		return
+	var gy := global_position.y # shortcut: düz zemin varsayımı, engebeli zeminde yem birkaç cm kayar
+	var air_t := clampf((vel.y + sqrt(vel.y * vel.y + 19.6 * maxf(from.y - gy, 0.0))) / 9.8, 0.25, 2.0)
+	var land := Vector3(from.x + vel.x * air_t, gy, from.z + vel.z * air_t)
+	var mi := LP.add(w, LP.ellipsoid(0.03, 0.022, 0.026, 6, 4), from, Color(0.82, 0.5, 0.18), Vector3.ZERO, 0.78)
+	mi.global_position = from
+	var tw := mi.create_tween()
+	tw.tween_method(_crumb_step.bind(mi, from, vel), 0.0, air_t, air_t)
+	tw.tween_callback(_crumb_land.bind(w, land))
+	tw.tween_interval(0.5)
+	tw.tween_callback(mi.queue_free)
+
+
+func _crumb_step(t: float, mi: Node3D, from: Vector3, vel: Vector3) -> void:
+	if is_instance_valid(mi):
+		mi.global_position = from + vel * t + Vector3(0, -4.9 * t * t, 0)
+		mi.rotation += Vector3(0.31, 0.2, 0.12)
+
+
+func _crumb_land(w: Node, land: Vector3) -> void:
+	VFX.burst_dust(w, land, Color(0.84, 0.62, 0.34), 3)
+	get_tree().call_group("ambient", "feed_birds_at", land)
 
 
 ## Su fısfısı buğusu: yarı saydam mavi damlacık konisi, yavaşlayarak genişler ve söner.
@@ -1160,7 +1247,7 @@ func _tick_shout_rings(dt: float) -> void:
 	if is_sh and _shout_ring_cd <= 0.0:
 		_shout_ring_cd = 0.50 if is_holding_item("megafon") else 0.60
 		var has_mega := is_holding_item("megafon")
-		var rad := clampf(2.8 + eff * 1.9, 3.0, 6.8)
+		var rad := clampf((2.8 + eff * 1.9) * 1.6, 4.8, 10.9) # bağırma yarıçapı ~1.6x
 		var col := Color(1.0, 0.65, 0.14) if has_mega else Color(1.0, 0.90, 0.45)
 		VFX.spawn_sound_ring(_find_world(), global_position + Vector3(0, 1.25, 0), rad, col)
 
@@ -1353,9 +1440,9 @@ func _camera(dt: float) -> void:
 					var dn := smoothstep(0.68, 1.0, u)
 					lift = 1.0 - dn
 					tilt = 0.45 * lift
-				# Bardak ağız hizasında, ekranın alt-ortasında kalır; yudumda baş hafif geriye yatar
-				a_pos = Vector3(-0.15, 0.045, 0.085) * lift
-				a_rot = Vector3(-48.0 * tilt, -12.0 * lift, 8.0 * lift)
+				# El bardağı ağız hizasına (alt-orta) getirir; ağız kenarı OYUNCUYA (kameraya, +Z) doğru yatar
+				a_pos = Vector3(-0.21, 0.03, 0.06) * lift
+				a_rot = Vector3(72.0 * tilt, 0.0, 0.0)
 
 			"tea_stir":
 				# Bardağı hafif ortaya yaklaştır ve içindeki kaşığı dairesel şıngırdat!
@@ -1383,6 +1470,15 @@ func _camera(dt: float) -> void:
 					lift = lerpf(0.35, 0.0, smoothstep(0.78, 1.0, u))
 				a_pos = Vector3(-0.17 * lift, 0.125 * lift + chew, 0.155 * lift)
 				a_rot = Vector3(-24.0 * lift, 22.0 * lift, -18.0 * lift)
+
+			"simit_throw":
+				# Geri çek -> ileri fırlat -> toparla
+				var wind := Vector3(0.04, 0.03, 0.10)
+				var k_back := smoothstep(0.0, 0.35, u)
+				var k_fwd := smoothstep(0.35, 0.58, u)
+				var k_rec := smoothstep(0.62, 1.0, u)
+				a_pos = wind.lerp(Vector3(-0.04, 0.02, -0.16), k_fwd) * k_back * (1.0 - k_rec)
+				a_rot = Vector3(22.0, 0.0, -10.0).lerp(Vector3(-30.0, 0.0, 6.0), k_fwd) * k_back * (1.0 - k_rec)
 
 			"simit_sniff":
 				var env := sin(u * PI)
@@ -1517,7 +1613,12 @@ func _animate(dt: float) -> void:
 	land_t = maxf(land_t - dt, 0.0)
 	var land := land_t / 0.14
 	var breathe := sin(t * 2.2)
-	var f := minf(dt * 18.0, 1.0)
+	var f := minf(dt * (18.0 + 30.0 * kw), 1.0) # yürürken/koşarken gecikmesiz: el-ayak yürüyüş fazıyla senkron kalır
+	# Ağız (rig uzayı): içme/ısırma sırasında elin hedefi; taşıma sırasında gövde sekmesiyle aynı zıplama
+	var mouth_l: Vector3 = rest["Head"] + (mouth_rest if mouth_node else Vector3(0, -0.12, 0.32))
+	var hold_bob := absf(sin(phase)) * lerpf(0.04, 0.075, kr) * kw
+	if _held_anchor:
+		_held_anchor.position.y = 0.54 + hold_bob
 
 	for side: float in [-1.0, 1.0]:
 		var n := "FootR" if side < 0 else "FootL"
@@ -1556,7 +1657,11 @@ func _animate(dt: float) -> void:
 			p.x += side * (0.02 * sin(t * 1.3 + side) * idle + 0.015 * kw)
 			r.x = -cos(c) * lerpf(0.55, 1.0, kr) * kw
 		# 3. şahıs elde eşya tutuş & senkronize kullanım animasyonları!
-		if side < 0 and eq_tp != "":
+		if held_crate:
+			# Kasa: iki el kasanın iki yanında (kasa 0.42 geniş, çapa x=0 / y=0.54 / z=0.38)
+			p = Vector3(side * 0.25, 0.54 + hold_bob, 0.38)
+			r = Vector3(-0.1, 0.0, 0.0)
+		elif side < 0 and eq_tp != "":
 			match eq_tp:
 				"cay":
 					p = rest[n] + Vector3(0.04, 0.12 + breathe * 0.01, 0.18)
@@ -1571,6 +1676,7 @@ func _animate(dt: float) -> void:
 					var sh_k := 1.0 if (shout_power >= SHOUT_ON or _mega_burst > 0.0) else 0.25
 					p = rest[n] + Vector3(0.14 * sh_k, 0.26 * sh_k + 0.08, 0.24 * sh_k + 0.08)
 					r = Vector3(-0.5 * sh_k, 0.2 * sh_k, 0.0)
+			p.y += hold_bob
 			match _tp_action:
 				"smoke_inhale":
 					p = rest[n] + Vector3(0.18 * tp_env, 0.34 * tp_env + 0.10, 0.26 * tp_env + 0.08)
@@ -1580,14 +1686,19 @@ func _animate(dt: float) -> void:
 					p = rest[n] + Vector3(0.04, 0.14, 0.14)
 					head_tilt_tp = 0.14 * tp_env
 				"tea_sip":
-					p = rest[n] + Vector3(0.18 * tp_env, 0.36 * tp_env + 0.10, 0.25 * tp_env + 0.10)
-					r = Vector3(-0.65 * tp_env, 0.0, 0.0)
+					# Bardak ağza kalkar; ağız kenarı oyuncuya (-Z) doğru yatar, sonra iner (bardak kökü = el + (0,.04,.14), ağız +.125)
+					p = (rest[n] + Vector3(0.04, 0.12, 0.18)).lerp(Vector3(-0.05, mouth_l.y - 0.21, mouth_l.z + 0.06), tp_env)
+					r = Vector3(-1.0 * tp_env, 0.0, 0.0)
 					head_tilt_tp = -0.22 * tp_env
 				"tea_stir":
 					p = rest[n] + Vector3(0.10 * tp_env, 0.16, 0.22)
 				"simit_bite":
-					p = rest[n] + Vector3(0.18 * tp_env, 0.34 * tp_env + 0.10, 0.25 * tp_env + 0.10)
+					p = (rest[n] + Vector3(0.04, 0.13, 0.17)).lerp(Vector3(-0.05, mouth_l.y - 0.04, mouth_l.z - 0.10), tp_env)
+					r = Vector3(-0.2, 0.0, 0.0)
 					head_tilt_tp = 0.12 * sin(tp_u * TAU * 2.0) * tp_env
+				"simit_throw":
+					p = rest[n] + Vector3(0.04, 0.13 + 0.20 * tp_env, 0.17 + 0.25 * tp_env)
+					r = Vector3(-0.2 - 1.0 * tp_env, 0.0, 0.0)
 				"knife_slash":
 					p += Vector3(-0.25 * tp_env, 0.16 * tp_env, 0.32 * tp_env)
 					r += Vector3(-1.35 * tp_env, 0.65 * tp_env, 0.0)
@@ -1668,8 +1779,8 @@ func _setup_voice_playback() -> void:
 	_voice_player.unit_size = VOICE_UNIT_SIZE
 	_voice_player.max_distance = VOICE_MAX_DIST
 	_voice_player.panning_strength = 1.15
-	_voice_player.volume_db = 0.0
-	_voice_player.max_db = 2.0
+	_voice_player.volume_db = 7.0 # arkadaş sesi kısıktı: +7 dB, alıcıda tanh ile kırpılma önlenir
+	_voice_player.max_db = 7.0
 	head.add_child(_voice_player)
 	_voice_player.play()
 	_voice_pb = _voice_player.get_stream_playback() as AudioStreamGeneratorPlayback
@@ -1787,7 +1898,7 @@ func _pump_voice_playback() -> void:
 		var fade_step := 1.0 / 120.0
 		for i in take:
 			_rx_fade = minf(_rx_fade + fade_step, 1.0)
-			var s := _rx_buf[i] * _rx_fade
+			var s := tanh(_rx_buf[i] * 1.5) * _rx_fade
 			_rx_last_s = s
 			out[i] = Vector2(s, s)
 		_voice_pb.push_buffer(out)
@@ -2376,6 +2487,11 @@ func _apply_held_crate(has_crate: bool, item_id: String, count: int) -> void:
 		if is_multiplayer_authority() and _fp_crate_anchor:
 			_fp_crate_visual = StallScript.build_held_crate(held_item, held_count, _my_crate_capacity())
 			_fp_crate_anchor.add_child(_fp_crate_visual)
+			# İki el kasanın yanlarında
+			for hn: String in ["HandR", "HandL"]:
+				var ch := _make_fp_hand(hn, 0.9)
+				ch.position = Vector3(-0.25 if hn == "HandR" else 0.25, 0.0, 0.02)
+				_fp_crate_visual.add_child(ch)
 		elif _held_anchor:
 			_held_visual = StallScript.build_held_crate(held_item, held_count, _my_crate_capacity())
 			_held_anchor.add_child(_held_visual)

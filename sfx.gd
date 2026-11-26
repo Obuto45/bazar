@@ -194,9 +194,30 @@ func get_truck_horn_stream(idx: int) -> AudioStream:
 	return TRUCK_HORN_STREAMS[posmod(idx, TRUCK_HORN_STREAMS.size())]
 
 
+## Genel efekt kısma (~-6 dB) + klip başına ek kısma ve en kısa tekrar aralığı (sn).
+const SFX_TRIM_DB := -6.0
+const CLIP_TRIM_DB := {"pigeon_flap": -8.0, "tea_sip": -3.0, "tea_stir": -5.0, "bite_crunch": -3.0, "tea": -3.0, "amb_bird1": -6.0, "amb_bird2": -6.0, "amb_bird3": -6.0}
+const CLIP_MIN_GAP := {"pigeon_flap": 1.2, "tea_sip": 0.5, "tea_stir": 0.6, "bite_crunch": 0.25, "tea": 0.6, "coin": 0.06, "step": 0.1, "ui_click": 0.04, "price_up": 0.04, "price_down": 0.04}
+const DEFAULT_MIN_GAP := 0.05
+var _last_play: Dictionary = {}
+
+
+## true: bu klip çok yakın zamanda çalındı, atla.
+func _throttled(clip_name: String) -> bool:
+	var now := Time.get_ticks_msec() * 0.001
+	var gap: float = CLIP_MIN_GAP.get(clip_name, DEFAULT_MIN_GAP)
+	if now - float(_last_play.get(clip_name, -10.0)) < gap:
+		return true
+	_last_play[clip_name] = now
+	return false
+
+
 func play(clip_name: String, vol_db := -4.0, pitch := 1.0, pitch_jitter := 0.06) -> void:
 	if DisplayServer.get_name() == "headless" or not _clips.has(clip_name) or _pool.is_empty():
 		return
+	if _throttled(clip_name):
+		return
+	vol_db += SFX_TRIM_DB + float(CLIP_TRIM_DB.get(clip_name, 0.0))
 	var p := _pool[_pool_idx]
 	_pool_idx = (_pool_idx + 1) % _pool.size()
 	p.stream = _clips[clip_name]
@@ -212,11 +233,13 @@ func play_3d(clip_name: String, world_pos: Vector3, parent: Node = null, vol_db 
 	if host == null or not host.is_inside_tree():
 		play(clip_name, vol_db, pitch)
 		return
+	if _throttled(clip_name):
+		return
 	var p := AudioStreamPlayer3D.new()
 	p.bus = BUS_SFX
 	p.stream = _clips[clip_name]
-	p.volume_db = vol_db
-	p.pitch_scale = maxf(0.25, pitch + randf_range(-0.04, 0.04))
+	p.volume_db = vol_db + SFX_TRIM_DB + float(CLIP_TRIM_DB.get(clip_name, 0.0))
+	p.pitch_scale = maxf(0.25, pitch + randf_range(-0.06, 0.06))
 	p.unit_size = 5.5
 	p.max_distance = max_dist
 	p.attenuation_model = AudioStreamPlayer3D.ATTENUATION_INVERSE_DISTANCE
@@ -351,14 +374,14 @@ func _process(delta: float) -> void:
 func _play_amb_event() -> void:
 	var rain := _weather == "rain"
 	var w_vendor := 3.0
-	var w_bird := 0.6 if rain else 3.0
+	var w_bird := 0.15 if rain else 0.8
 	var w_traffic := 1.4
 	var w_tea := 0.8
 	var r := randf() * (w_vendor + w_bird + w_traffic + w_tea)
 	if r < w_vendor:
 		_play_amb_3d("amb_vendor%d" % randi_range(1, 3), randf_range(-24.0, -17.0), randf_range(0.9, 1.12), 0.0, false)
 	elif r < w_vendor + w_bird:
-		_play_amb_3d("amb_bird%d" % randi_range(1, 3), randf_range(-27.0, -20.0), randf_range(0.88, 1.18), randf_range(4.0, 9.0), false)
+		_play_amb_3d("amb_bird%d" % randi_range(1, 3), randf_range(-36.0, -30.0), randf_range(0.88, 1.18), randf_range(4.0, 9.0), false)
 	elif r < w_vendor + w_bird + w_traffic:
 		if randf() < 0.5:
 			_play_amb_3d("amb_horn", randf_range(-28.0, -22.0), randf_range(0.85, 1.15), 0.0, false)
@@ -473,8 +496,16 @@ func _make_wav(samples: PackedFloat32Array, loop := false, rate := RATE, gain :=
 	var data := PackedByteArray()
 	data.resize(n * 2)
 	var k := 32767.0 * gain
+	var fi := mini(n / 2, 44) # ~2 ms giriş / ~8 ms çıkış: tık sesini önler (döngülerde yok)
+	var fo := mini(n / 2, 176)
 	for i in n:
-		data.encode_s16(i * 2, int(clampf(samples[i] * k, -32767.0, 32767.0)))
+		var e := 1.0
+		if not loop:
+			if i < fi:
+				e = float(i) / float(fi)
+			elif i >= n - fo:
+				e = float(n - 1 - i) / float(fo)
+		data.encode_s16(i * 2, int(clampf(samples[i] * k * e, -32767.0, 32767.0)))
 	var w := AudioStreamWAV.new()
 	w.format = AudioStreamWAV.FORMAT_16_BITS
 	w.mix_rate = rate
@@ -715,89 +746,70 @@ func _synth_ash_flick() -> AudioStreamWAV:
 
 ## Sıcak Türk çayı yudumlama: hafif hüpürdetme + sıcak yutkunma.
 func _synth_tea_sip() -> AudioStreamWAV:
-	var dur := 0.66
+	var dur := 0.4
 	var n := int(RATE * dur)
 	var buf := PackedFloat32Array()
 	buf.resize(n)
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 1938
-	var bp1 := 0.0
-	var bp2 := 0.0
+	var lp := 0.0
 	for i in n:
 		var t := float(i) / float(RATE)
 		var v := 0.0
-		if t < 0.36:
-			# İnce sıcak yudum + hafif fokurtulu hava çekişi
-			var u := t / 0.36
-			var env := sin(u * PI)
-			var w := rng.randf_range(-1.0, 1.0)
-			bp1 += 0.22 * (w - bp1)
-			bp2 += 0.07 * (bp1 - bp2)
-			var mod := 0.65 + 0.35 * sin(TAU * lerpf(24.0, 38.0, u) * t)
-			var tone := sin(TAU * lerpf(580.0, 1120.0, u) * t) * 0.22
-			v += ((bp1 - bp2) * 0.85 * mod + tone) * env * 0.75
-		elif t >= 0.40:
-			# Yumuşak yutkunma + rahat nefes
-			var dt := t - 0.40
-			var gulp := sin(TAU * lerpf(220.0, 130.0, minf(dt / 0.14, 1.0)) * dt) * exp(-dt * 18.0) * 0.42
-			var sigh := rng.randf_range(-1.0, 1.0) * 0.12 * exp(-dt * 10.0)
-			v += gulp + sigh
-		buf[i] = clampf(v, -0.92, 0.92)
+		if t < 0.2:
+			# Yumuşak, alçak geçirilmiş hüpürtü
+			var u := t / 0.2
+			lp += 0.08 * (rng.randf_range(-1.0, 1.0) - lp)
+			v += lp * sin(u * PI) * 1.6
+		elif t >= 0.22:
+			# Küçük yutkunma
+			var dt := t - 0.22
+			v += sin(TAU * lerpf(200.0, 130.0, minf(dt / 0.1, 1.0)) * dt) * exp(-dt * 20.0) * 0.3
+		buf[i] = clampf(v * 0.6, -0.8, 0.8)
 	return _make_wav(buf)
 
 
 ## İnce belli bardakta çay kaşığı şıngırdatarak karıştırma (6 hızlı cam-metal tınısı).
 func _synth_tea_stir() -> AudioStreamWAV:
-	var dur := 0.82
+	var dur := 0.4
 	var n := int(RATE * dur)
 	var buf := PackedFloat32Array()
 	buf.resize(n)
-	var rng := RandomNumberGenerator.new()
-	rng.seed = 1945
-	var hits := [[0.03, 0.85], [0.15, 0.72], [0.27, 0.95], [0.39, 0.78], [0.51, 0.90], [0.63, 0.62]]
+	var hits := [[0.02, 0.8], [0.14, 0.6], [0.26, 0.7]]
 	for h in hits:
 		var s0 := int(float(h[0]) * RATE)
 		var g: float = float(h[1])
-		var dv := 1.0 + rng.randf_range(-0.035, 0.035)
-		for k in int(0.18 * RATE):
+		for k in int(0.12 * RATE):
 			var j := s0 + k
 			if j >= n:
 				break
 			var t := float(k) / float(RATE)
-			var clink := sin(TAU * 2520.0 * dv * t) * exp(-t * 26.0) \
-				+ sin(TAU * 5620.0 * dv * t) * exp(-t * 38.0) * 0.55 \
-				+ sin(TAU * 8400.0 * dv * t) * exp(-t * 55.0) * 0.25
-			buf[j] += clink * g * 0.42
-	for i in n:
-		buf[i] = clampf(buf[i], -0.92, 0.92)
+			# Tek yumuşak cam tınısı, sert üst harmonik yok
+			buf[j] += sin(TAU * 1900.0 * t) * minf(t / 0.002, 1.0) * exp(-t * 40.0) * g * 0.3
 	return _make_wav(buf)
 
 
 ## Çıtır susamlı simit ısırma: katmanlı kuru kabuk çıtırtısı!
 func _synth_bite_crunch() -> AudioStreamWAV:
-	var dur := 0.36
+	var dur := 0.2
 	var n := int(RATE * dur)
 	var buf := PackedFloat32Array()
 	buf.resize(n)
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 808
-	var bursts := [[0.01, 0.10, 1.0], [0.09, 0.09, 0.85], [0.18, 0.11, 0.72]]
+	var bursts := [[0.01, 0.07, 1.0], [0.09, 0.07, 0.7]]
 	var lp := 0.0
 	for i in n:
 		var t := float(i) / float(RATE)
-		var w := rng.randf_range(-1.0, 1.0)
-		lp += 0.32 * (w - lp)
+		lp += 0.18 * (rng.randf_range(-1.0, 1.0) - lp) # alçak geçiren: tiz cızırtı yok
 		var v := 0.0
 		for b in bursts:
 			var t0: float = float(b[0])
 			var len_b: float = float(b[1])
-			var g: float = float(b[2])
 			if t >= t0 and t < t0 + len_b:
 				var dt := t - t0
-				var env := sin((dt / len_b) * PI)
-				var pop := (rng.randf_range(-1.0, 1.0) * 1.4) if rng.randf() < 0.14 else 0.0
-				v += (lp * 0.55 + (w - lp) * 0.65 + pop * 0.5) * env * g
-		buf[i] = clampf(v * 0.75, -0.94, 0.94)
+				v += lp * sin((dt / len_b) * PI) * float(b[2])
+		buf[i] = clampf(v * 1.1, -0.8, 0.8)
 	return _make_wav(buf)
 
 
@@ -1703,55 +1715,39 @@ func _synth_cat() -> AudioStreamWAV:
 
 ## Güvercin kanat çırpışı: hızlanıp seyrelen kanat vuruşları.
 func _synth_pigeon_flap() -> AudioStreamWAV:
-	var buf := _zbuf(0.85)
+	# Yumuşak, alçak "gu-gurr" + hafif kanat hışırtısı (gürültü yok, kısa).
+	var buf := _zbuf(0.5)
+	for c in [[0.02, 0.13, 330.0, 280.0, 1.0], [0.2, 0.18, 300.0, 240.0, 0.8]]:
+		var s0 := int(float(c[0]) * RATE)
+		var cnt := int(float(c[1]) * RATE)
+		var ph := 0.0
+		for k in cnt:
+			var x := float(k) / float(cnt)
+			ph += lerpf(float(c[2]), float(c[3]), x) / float(RATE)
+			buf[s0 + k] += (sin(TAU * ph) + 0.3 * sin(TAU * ph * 2.0)) * sin(PI * x) * float(c[4])
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 2468
-	var flaps: Array = []
-	for v in 3:
-		var fl := _zbuf(0.07)
-		var lp := 0.0
-		var lp2 := 0.0
-		for i in fl.size():
-			var t := float(i) / float(RATE)
-			var w := rng.randf_range(-1.0, 1.0)
-			lp += 0.35 * (w - lp)
-			lp2 += 0.06 * (lp - lp2)
-			fl[i] = (lp - lp2 * 0.6) * sin(minf(t / 0.07, 1.0) * PI) * exp(-t * 18.0) + sin(TAU * 140.0 * t) * exp(-t * 70.0) * 0.3
-		flaps.append(fl)
-	var t0 := 0.0
-	var gap := 0.052
-	var g := 1.0
-	for k in 12:
-		_mix(buf, flaps[k % 3], int(t0 * RATE), g * rng.randf_range(0.8, 1.1))
-		t0 += gap
-		gap *= 1.06
-		g *= 0.88
-	return _finish(buf, 0.8)
+	var lp := 0.0
+	for i in int(0.3 * RATE):
+		lp += 0.05 * (rng.randf_range(-1.0, 1.0) - lp)
+		buf[int(0.05 * RATE) + i] += lp * sin(float(i) / (0.3 * RATE) * PI) * 0.25
+	_lowpass(buf, 0.25)
+	return _finish(buf, 0.35)
 
 
 ## Çay: ince belli bardağın tabağa konması + kaşık şıngırtısı.
 func _synth_tea() -> AudioStreamWAV:
-	var buf := _zbuf(1.05)
-	var n := buf.size()
-	var rng := RandomNumberGenerator.new()
-	rng.seed = 1923
-	for i in int(0.25 * RATE):
+	# Bardağın tabağa konması + iki hafif kaşık tınısı (kısa, yumuşak).
+	var buf := _zbuf(0.5)
+	for i in int(0.15 * RATE):
 		var t := float(i) / float(RATE)
-		buf[i] += (sin(TAU * 1180.0 * t) * exp(-t * 38.0) + sin(TAU * 2710.0 * t) * exp(-t * 55.0) * 0.6 + sin(TAU * 4130.0 * t) * exp(-t * 70.0) * 0.35) * 0.55 \
-			+ sin(TAU * 190.0 * t) * exp(-t * 50.0) * 0.4 + rng.randf_range(-1.0, 1.0) * exp(-t * 300.0) * 0.4
-	var hits := [[0.24, 1.0], [0.37, 0.75], [0.47, 0.9], [0.6, 0.6], [0.69, 0.45]]
-	for h in hits:
+		buf[i] += (sin(TAU * 1180.0 * t) * exp(-t * 45.0) * 0.4 + sin(TAU * 190.0 * t) * exp(-t * 50.0) * 0.4) * minf(t / 0.002, 1.0)
+	for h in [[0.15, 0.6], [0.27, 0.4]]:
 		var s0 := int(float(h[0]) * RATE)
-		var g: float = h[1]
-		var dv := 1.0 + rng.randf_range(-0.02, 0.02)
-		for k in int(0.35 * RATE):
-			var j := s0 + k
-			if j >= n:
-				break
+		for k in int(0.12 * RATE):
 			var t := float(k) / float(RATE)
-			buf[j] += (sin(TAU * 2480.0 * dv * t) * exp(-t * 20.0) + sin(TAU * 5530.0 * dv * t) * exp(-t * 30.0) * 0.55 \
-				+ sin(TAU * 8650.0 * t) * exp(-t * 45.0) * 0.25 + rng.randf_range(-1.0, 1.0) * exp(-t * 400.0) * 0.3) * g * 0.5
-	return _finish(buf, 0.72)
+			buf[s0 + k] += sin(TAU * 1900.0 * t) * minf(t / 0.002, 1.0) * exp(-t * 40.0) * float(h[1]) * 0.3
+	return _finish(buf, 0.5)
 
 
 ## Gök gürültüsü: keskin çatırtı + uzun, dalgalı uğultu.
@@ -2085,26 +2081,23 @@ func _synth_bird(kind: int) -> AudioStreamWAV:
 	var chirps: Array = [] # [t0, süre, f_baş, f_son, kazanç]
 	match kind:
 		0:
-			chirps = [[0.02, 0.055, 5200.0, 3500.0, 1.0], [0.13, 0.05, 5000.0, 3400.0, 0.85], [0.33, 0.06, 5400.0, 3600.0, 0.9]]
+			chirps = [[0.02, 0.07, 2900.0, 2300.0, 1.0], [0.2, 0.07, 2800.0, 2200.0, 0.8]]
 		1:
-			for k in 9:
-				chirps.append([0.02 + float(k) * 0.055, 0.035, 3100.0, 4600.0, 0.6 + 0.4 * sin(float(k) / 8.0 * PI)])
+			for k in 4:
+				chirps.append([0.02 + float(k) * 0.09, 0.05, 2200.0, 2900.0, 0.6 + 0.4 * sin(float(k) / 3.0 * PI)])
 		_:
-			chirps = [[0.02, 0.22, 2900.0, 3900.0, 0.8], [0.26, 0.16, 4100.0, 3000.0, 0.7], [0.5, 0.05, 5200.0, 3800.0, 0.8], [0.6, 0.05, 5200.0, 3800.0, 0.7]]
+			chirps = [[0.02, 0.2, 2200.0, 2800.0, 0.8], [0.3, 0.14, 2800.0, 2300.0, 0.6]]
 	for c in chirps:
 		var s0 := int(float(c[0]) * RATE)
 		var d: float = c[1]
-		var fa: float = c[2]
-		var fb: float = c[3]
-		var g: float = c[4]
 		var cnt := int(d * RATE)
 		var ph := 0.0
 		for k in cnt:
 			var x := float(k) / float(cnt)
-			ph += lerpf(fa, fb, x) * (1.0 + 0.04 * sin(TAU * 55.0 * x * d)) / float(RATE)
-			buf[s0 + k] += sin(TAU * ph) * sin(PI * x) * g
-	_echo(buf, 0.09, 0.2, 0.25, 0.5)
-	return _finish(buf, 0.65)
+			ph += lerpf(float(c[2]), float(c[3]), x) / float(RATE)
+			buf[s0 + k] += sin(TAU * ph) * sin(PI * x) * float(c[4])
+	_echo(buf, 0.09, 0.15, 0.15, 0.6)
+	return _finish(buf, 0.5)
 
 
 ## Uzak araba kornası (iki tonlu "düt-düüt"), süzülmüş ve yankılı.

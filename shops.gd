@@ -5,9 +5,9 @@ extends RefCounted
 
 const SHOPS := {
 	"tekel": {"sign": "TEKEL BAYİ", "name": "Tekel Bayi", "icon": "🍺", "open": [0.30, 1.01],
-		"items": ["sigara", "puro"], "upgrades": []},
+		"items": ["bira", "sigara", "puro"], "upgrades": []},
 	"firin": {"sign": "FIRIN", "name": "Fırın", "icon": "🥯", "open": [0.0, 0.72],
-		"items": ["simit"], "upgrades": []},
+		"items": ["simit", "acma"], "upgrades": []},
 	"kiraathane": {"sign": "KIRAATHANE", "name": "Kıraathane", "icon": "🍵", "open": [0.0, 1.01],
 		"items": ["cay"], "upgrades": []},
 	"market": {"sign": "MARKET", "name": "Market", "icon": "🛒", "open": [0.0, 1.01],
@@ -16,18 +16,11 @@ const SHOPS := {
 		"items": [], "upgrades": ["megaphone", "lights", "big_crate", "bell"], "expand": true},
 	"telefoncu": {"sign": "TELEFONCU", "name": "Telefoncu", "icon": "📱", "open": [0.30, 0.85],
 		"items": ["megafon", "radyo"], "upgrades": []},
-	"eczane": {"sign": "ECZANE", "name": "Eczane", "icon": "💊", "open": [0.0, 1.01],
-		"items": [], "upgrades": []},
 	"berber": {"sign": "BERBER", "name": "Berber", "icon": "💈", "open": [0.0, 0.80],
 		"items": [], "upgrades": []},
 	"terzi": {"sign": "TERZİ", "name": "Terzi", "icon": "🧵", "open": [0.0, 0.80],
 		"items": [], "upgrades": []},
 }
-
-## Akşam pazarında (>= 0.80) eczane "nöbetçi" olur, fiyatlar bu kadar artar.
-const NIGHT_PHARMACY_AT := 0.80
-const NIGHT_PHARMACY_MULT := 1.5
-
 
 static func id_for_sign(sign: String) -> String:
 	for k in SHOPS:
@@ -57,20 +50,15 @@ static func closed_text(shop_id: String, prog: float) -> String:
 	return "Bugünlük kapandı"
 
 
-static func price_mult(shop_id: String, prog: float) -> float:
-	if shop_id == "eczane" and prog >= NIGHT_PHARMACY_AT:
-		return NIGHT_PHARMACY_MULT
+## Saate göre fiyat çarpanı (şimdilik hepsi 1; ileride akşam zammı vb. için).
+static func price_mult(_shop_id: String, _prog: float) -> float:
 	return 1.0
 
 
-static func display_name(shop_id: String, prog: float) -> String:
-	if shop_id == "eczane" and prog >= NIGHT_PHARMACY_AT:
-		return "Nöbetçi Eczane"
+static func display_name(shop_id: String, _prog: float) -> String:
 	return str(SHOPS[shop_id]["name"])
 
 
 ## Büyük harfli tabela adı (Türkçe İ'yi korumak için to_upper yerine bunu kullan).
-static func display_sign(shop_id: String, prog: float) -> String:
-	if shop_id == "eczane" and prog >= NIGHT_PHARMACY_AT:
-		return "NÖBETÇİ ECZANE"
+static func display_sign(shop_id: String, _prog: float) -> String:
 	return str(SHOPS[shop_id]["sign"])

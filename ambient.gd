@@ -204,6 +204,77 @@ func _build_cats() -> void:
 		"i": 1, "dir": 1, "wait": 1.0, "speed": 0.75}
 
 
+## Kedi besleme: ~9 m içindeki gezgin tekir yeme koşar, yer, sonra besleyenin tezgahına gidip miyavlar.
+func feed_cat_at(food_pos: Vector3, stall_pos: Vector3) -> void:
+	if _walker.is_empty():
+		return
+	var root: Node3D = _walker["root"]
+	var fl := to_local(food_pos)
+	if Vector2(root.position.x - fl.x, root.position.z - fl.z).length() > 9.0 or str(_walker.get("visit", "")) != "":
+		return
+	fl.y = 0.04
+	var sl := to_local(stall_pos)
+	sl.y = 0.04
+	_walker["visit"] = "eat"
+	_walker["food"] = fl
+	_walker["stall"] = sl
+	_walker["visit_t"] = 0.0
+	_walker["wait"] = 0.0
+	_walker["speed_v"] = 1.6
+
+
+## Ziyaret modunda: hedefe yürü (döndürür true = vardı).
+func _walker_go(root: Node3D, legs: Array[Node3D], target: Vector3, spd: float, dt: float) -> bool:
+	var to := target - root.position
+	to.y = 0.0
+	var d := to.length()
+	if d < 0.08:
+		for l in legs:
+			l.rotation.x = lerpf(l.rotation.x, 0.0, dt * 6.0)
+		return true
+	root.position += to / d * minf(d, spd * dt)
+	root.rotation.y = lerp_angle(root.rotation.y, atan2(-to.x, -to.z), dt * 6.0)
+	var ph := _t * 12.0
+	legs[0].rotation.x = sin(ph) * 0.6
+	legs[3].rotation.x = sin(ph) * 0.6
+	legs[1].rotation.x = -sin(ph) * 0.6
+	legs[2].rotation.x = -sin(ph) * 0.6
+	return false
+
+
+func _tick_cat_visit(dt: float, root: Node3D, legs: Array[Node3D]) -> void:
+	var mode := str(_walker["visit"])
+	_walker["visit_t"] = float(_walker["visit_t"]) + dt
+	if mode == "eat":
+		if _walker_go(root, legs, _walker["food"], 1.6, dt):
+			_walker["visit"] = "eating"
+			_walker["visit_t"] = 0.0
+	elif mode == "eating":
+		root.rotation.x = lerpf(root.rotation.x, 0.12 * (0.5 + 0.5 * sin(_t * 9.0)), dt * 8.0)
+		if float(_walker["visit_t"]) > 2.5:
+			root.rotation.x = 0.0
+			_walker["visit"] = "go_stall"
+			_cat_meow(root)
+	elif mode == "go_stall":
+		if _walker_go(root, legs, _walker["stall"], 1.2, dt):
+			_walker["visit"] = "sit"
+			_walker["visit_t"] = 0.0
+			_walker["meow_t"] = 1.0
+	elif mode == "sit":
+		_walker["meow_t"] = float(_walker["meow_t"]) - dt
+		if float(_walker["meow_t"]) <= 0.0:
+			_walker["meow_t"] = _rng.randf_range(4.0, 8.0)
+			_cat_meow(root)
+		if float(_walker["visit_t"]) > 45.0:
+			_walker["visit"] = ""
+
+
+func _cat_meow(root: Node3D) -> void:
+	var p := root.global_position + Vector3(0, 0.45, 0)
+	Sfx.play_3d("cat", p, self, -4.0, _rng.randf_range(0.95, 1.15), 16.0)
+	VFX.spawn_floating_text(self, p + Vector3(0, 0.2, 0), "🐱 Miyav!", Color(1.0, 0.9, 0.6), 30)
+
+
 func _tick_walker(dt: float) -> void:
 	if _walker.is_empty():
 		return
@@ -211,6 +282,9 @@ func _tick_walker(dt: float) -> void:
 	var legs: Array[Node3D] = _walker["legs"]
 	var tail: Node3D = _walker["tail"]
 	tail.rotation.y = sin(_t * 2.2) * 0.35
+	if str(_walker.get("visit", "")) != "":
+		_tick_cat_visit(dt, root, legs)
+		return
 	if float(_walker["wait"]) > 0.0:
 		_walker["wait"] = float(_walker["wait"]) - dt
 		for l in legs:

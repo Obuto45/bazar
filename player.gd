@@ -61,6 +61,8 @@ const SHIRTS := [Color(0.85, 0.2, 0.18), Color(0.2, 0.5, 0.9), Color(0.98, 0.75,
 const FP_GRIP := {
 	"cay": [Vector3(0.04, -0.01, 0.05), Vector3(-25, 0, 10), 0.8],
 	"simit": [Vector3(0.02, -0.115, 0.02), Vector3(-20, 0, 0), 0.8],
+	"acma": [Vector3(0.02, -0.105, 0.02), Vector3(-20, 0, 0), 0.8],
+	"bira": [Vector3(0.0, -0.06, 0.03), Vector3(-10, 0, 0), 0.8],
 	"radyo": [Vector3(0.0, 0.215, 0.0), Vector3(0, 0, 90), 0.8],
 	"megafon": [Vector3(0.0, -0.04, 0.03), Vector3.ZERO, 0.8],
 	"bicak": [Vector3(0.0, -0.01, 0.05), Vector3(80, 0, 0), 0.6],
@@ -102,6 +104,17 @@ var daily_tips := 0
 var daily_sold := 0
 var daily_haggles := 0
 var _ko_phase := 0 # 0 yok, 1 ragdoll, 2 toparlanma
+## Bira: her şişe sarhoşluğu 1 artırır (60 sn'de bir kademe iner, çay da indirir). 3. şişede gözler kapanır ve bayılır.
+const DRUNK_SHOUT := [1.0, 1.3, 1.5]
+const DRUNK_SWAY := [0.0, 0.018, 0.04]
+const DRUNK_DECAY := 60.0
+const FAINT_CLOSE := 1.6
+const FAINT_SLEEP := 8.0
+var drunk_level := 0
+var beer_fainted := false
+var eyelid := 0.0 # 0 açık, 1 kapalı (HUD göz kapağı)
+var _drunk_t := 0.0
+var _faint_t := 0.0
 var _ko_t := 0.0
 var _ko_rbs := {}
 var _ko_home := {}
@@ -460,7 +473,10 @@ func _refresh_equipped_visual() -> void:
 			"cay":
 				_fp_base_pos = Vector3(0.24, -0.165, -0.37)
 				_fp_base_rot = Vector3(4, -10, 0)
-			"simit":
+			"bira":
+				_fp_base_pos = Vector3(0.24, -0.2, -0.37)
+				_fp_base_rot = Vector3(4, -10, 0)
+			"simit", "acma":
 				_fp_base_pos = Vector3(0.23, -0.20, -0.37)
 				_fp_base_rot = Vector3(10, -24, 12)
 			"megafon":
@@ -511,7 +527,7 @@ func rpc_add_inventory_item(item_id: String) -> void:
 			if bool(info["consumable"]):
 				inventory[i]["uses"] = int(inventory[i]["uses"]) + add_uses
 			if is_multiplayer_authority():
-				if item_id in ["cay", "simit"] and not held_crate:
+				if item_id in ["cay", "simit", "acma", "bira"] and not held_crate:
 					active_slot = i
 					_equip_t = 1.0
 					_sync_equipped_to_peers()
@@ -760,11 +776,17 @@ func _use_active_item() -> void:
 			_puff_cd = 1.50
 			_start_action("tea_sip", iid, 1.45)
 
-		"simit":
+		"simit", "acma":
 			if _puff_cd > 0.0 or _action_kind != "":
 				return
 			_puff_cd = 1.20
 			_start_action("simit_bite", iid, 1.15)
+
+		"bira":
+			if _puff_cd > 0.0 or _action_kind != "" or _faint_t > 0.0:
+				return
+			_puff_cd = 1.5
+			_start_action("beer_sip", iid, 1.4)
 
 		"megafon":
 			if _action_kind == "mega_blast":
@@ -841,8 +863,8 @@ func _use_secondary_item() -> void:
 			_sec_cd = 0.98
 			_start_action("tea_stir", iid, 0.92)
 			_trigger_item_fx_synced("tea_stir", iid, tip_pos, Vector3.UP)
-		"simit":
-			# Sağ tık: kuşlara simit parçası fırlat (parça ısırık yerine geçer)
+		"simit", "acma":
+			# Sağ tık: kuşlara / kediye simit-açma parçası fırlat (parça ısırık yerine geçer)
 			_sec_cd = 0.9
 			_start_action("simit_throw", iid, 0.62)
 		"bicak":
@@ -947,6 +969,9 @@ func _tick_item_action(dt: float) -> void:
 				var tip_p := _get_smoke_tip_world()
 				_trigger_item_fx_synced("tea_sip", _action_item, tip_p, Vector3.UP)
 				tea_buff = minf(tea_buff + 15.0, MAX_BUFF)
+				if drunk_level > 0 and _faint_t <= 0.0 and not beer_fainted:
+					_set_drunk(drunk_level - 1)
+					_toast("🍵 Çay iyi geldi, biraz ayıldın", Color(0.7, 1.0, 0.75))
 				if active_slot >= 0 and active_slot < inventory.size() and str(inventory[active_slot].get("id", "")) == "cay":
 					inventory[active_slot]["puffs"] = int(inventory[active_slot].get("puffs", 0)) + 1
 					inventory_changed.emit()
@@ -969,7 +994,15 @@ func _tick_item_action(dt: float) -> void:
 				_action_stage = 1
 				var from_p := (cam.global_position + fwd * 0.45 + Vector3(0, -0.12, 0)) if cam else (global_position + Vector3(0, 1.2, 0))
 				_trigger_item_fx_synced("simit_throw", _action_item, from_p, fwd * CRUMB_SPEED + Vector3(0, 2.6, 0))
-				if active_slot >= 0 and active_slot < inventory.size() and str(inventory[active_slot].get("id", "")) == "simit":
+				if active_slot >= 0 and active_slot < inventory.size() and str(inventory[active_slot].get("id", "")) == _action_item:
+					inventory[active_slot]["puffs"] = int(inventory[active_slot].get("puffs", 0)) + 1
+					inventory_changed.emit()
+
+		"beer_sip":
+			if _action_stage == 0 and u >= 0.34:
+				_action_stage = 1
+				_trigger_item_fx_synced("beer_sip", _action_item, _get_mouth_world(), Vector3.UP)
+				if active_slot >= 0 and active_slot < inventory.size() and str(inventory[active_slot].get("id", "")) == "bira":
 					inventory[active_slot]["puffs"] = int(inventory[active_slot].get("puffs", 0)) + 1
 					inventory_changed.emit()
 
@@ -980,10 +1013,10 @@ func _tick_item_action(dt: float) -> void:
 				_trigger_item_fx_synced("simit_bite", _action_item, mouth_p, fwd)
 				simit_buff = minf(simit_buff + 18.0, MAX_BUFF)
 				add_trauma(0.06)
-				if active_slot >= 0 and active_slot < inventory.size() and str(inventory[active_slot].get("id", "")) == "simit":
+				if active_slot >= 0 and active_slot < inventory.size() and str(inventory[active_slot].get("id", "")) == _action_item:
 					inventory[active_slot]["puffs"] = int(inventory[active_slot].get("puffs", 0)) + 1
 					inventory_changed.emit()
-					var max_p: int = int(Items.CATALOG["simit"]["puffs_per_use"])
+					var max_p: int = int(Items.CATALOG[_action_item]["puffs_per_use"])
 					if int(inventory[active_slot].get("puffs", 0)) < max_p:
 						_sync_equipped_to_peers()
 						_refresh_equipped_visual()
@@ -1002,7 +1035,14 @@ func _tick_item_action(dt: float) -> void:
 			"tea_sip":
 				_finish_consumable_step("cay", "🍵 Ohh mis gibi tavşan kanı çay bitti!")
 			"simit_bite", "simit_throw":
-				_finish_consumable_step("simit", "🥯 Çıtır simit bitti, enerji doldu!")
+				_finish_consumable_step(done_item, "🥯 Açma bitti, mis gibiydi!" if done_item == "acma" else "🥯 Çıtır simit bitti, enerji doldu!")
+			"beer_sip":
+				var bottle_done := false
+				if active_slot >= 0 and active_slot < inventory.size() and str(inventory[active_slot].get("id", "")) == "bira":
+					bottle_done = int(inventory[active_slot].get("puffs", 0)) >= int(Items.CATALOG["bira"]["puffs_per_use"])
+				_finish_consumable_step("bira", "")
+				if bottle_done:
+					_on_beer_finished()
 
 
 static func _flat_dist(a: Vector3, b: Vector3) -> float:
@@ -1171,6 +1211,9 @@ func rpc_item_fx(action: String, iid: String, pos: Vector3, dir: Vector3) -> voi
 			Sfx.play_3d("ash_flick", pos, w, -5.5, 1.0, 10.0)
 			VFX.spawn_ash_drop(w, pos)
 			_tp_action = "ash_flick"; _tp_t = 0.0; _tp_dur = 0.42
+		"beer_sip":
+			Sfx.play_3d("tea_sip", pos, w, -2.5, 0.72, 12.0)
+			_tp_action = "tea_sip"; _tp_t = 0.0; _tp_dur = 1.05
 		"tea_sip":
 			Sfx.play_3d("tea_sip", pos, w, -3.5, 1.0, 12.0)
 			VFX.spawn_tea_steam(w, pos, true)
@@ -1247,6 +1290,10 @@ func _crumb_step(t: float, mi: Node3D, from: Vector3, vel: Vector3) -> void:
 func _crumb_land(w: Node, land: Vector3) -> void:
 	VFX.burst_dust(w, land, Color(0.84, 0.62, 0.34), 3)
 	get_tree().call_group("ambient", "feed_birds_at", land)
+	var st := _find_stall(name.to_int())
+	if st:
+		var side := (st as Node3D).global_transform.basis.x
+		get_tree().call_group("ambient", "feed_cat_at", land, (st as Node3D).global_position + side * 1.95)
 
 
 ## Su fısfısı buğusu: yarı saydam mavi damlacık konisi, yavaşlayarak genişler ve söner.
@@ -1393,6 +1440,7 @@ func _physics_process(dt: float) -> void:
 
 
 func _local(dt: float) -> void:
+	_tick_drunk(dt)
 	tea_buff = maxf(tea_buff - dt, 0.0)
 	simit_buff = maxf(simit_buff - dt, 0.0)
 	smoke_buff = maxf(smoke_buff - dt, 0.0)
@@ -1454,7 +1502,7 @@ func _local(dt: float) -> void:
 		clampf(((talk_db + db_boost) - SHOUT_DB_MIN) / (SHOUT_DB_MAX - SHOUT_DB_MIN), 0.0, 1.0) * 1.45
 	var burst := 1.05 if _mega_burst > 0.0 else 0.0
 	# Çay: senkronlanan shout_power'a uygulanır ki host da görsün
-	var tea_k := 1.25 if tea_buff > 0.0 else 1.0
+	var tea_k: float = (1.25 if tea_buff > 0.0 else 1.0) * float(DRUNK_SHOUT[mini(drunk_level, 2)])
 	shout_power = lerpf(shout_power, maxf(maxf(manual_shout, mic_shout), burst) * tea_k, minf(dt * 14.0, 1.0))
 	if Net.online():
 		sync_state.rpc(global_position, body_yaw, look_yaw, look_pitch, spd, air, shout_power)
@@ -1479,7 +1527,10 @@ func _camera(dt: float) -> void:
 
 	var yb := Basis(Vector3.UP, look_yaw)
 	cam_root.position = Vector3(0, EYE_Y, 0) + yb * (Vector3(0, 0, -EYE_FWD) + bob + shake_off)
-	cam_root.rotation = Vector3(clampf(look_pitch + _cam_pitch_mod, -1.45, 1.35), look_yaw, -cos(phase) * 0.004 * bob_k * (1.0 + kr) + shake_roll + _strafe_roll)
+	var dk: float = DRUNK_SWAY[mini(drunk_level, 2)]
+	var dt_s := Time.get_ticks_msec() * 0.001
+	var dsway := Vector3(sin(dt_s * 0.9) * 0.4, sin(dt_s * 0.63 + 1.0), sin(dt_s * 1.1)) * dk
+	cam_root.rotation = Vector3(clampf(look_pitch + _cam_pitch_mod + dsway.x * 0.5, -1.45, 1.35), look_yaw + dsway.y * 0.6, -cos(phase) * 0.004 * bob_k * (1.0 + kr) + shake_roll + _strafe_roll + dsway.z)
 	# Belirgin koşma FOV açılması (78° -> 89°!) + nefes çekme/üfleme mikro odaklanması
 	var smoke_fov := 3.5 if smoke_buff > 0.0 else 0.0 # sigara hızı: hafif FOV açılması
 	cam.fov = lerpf(cam.fov, 78.0 + sprint_k * 11.5 + smoke_fov + _cam_fov_mod, minf(dt * 7.5, 1.0))
@@ -1548,6 +1599,14 @@ func _camera(dt: float) -> void:
 				var snap := sin(clampf((u - 0.28) / 0.36, 0.0, 1.0) * PI)
 				a_pos = Vector3(-0.04 * f1, -0.03 * f1 - 0.045 * snap, -0.02 * f1)
 				a_rot = Vector3(-28.0 * snap - 8.0 * f1, -12.0 * f1, -14.0 * snap)
+
+			"beer_sip":
+				# Şişeyi ağza kaldır, dibini kaldırıp kafaya dik, yavaşça indir
+				var lift_b := smoothstep(0.0, 0.28, u) * (1.0 - smoothstep(0.72, 1.0, u))
+				var sip_b := sin(clampf((u - 0.28) / 0.44, 0.0, 1.0) * PI)
+				a_pos = Vector3(-0.15, 0.06, 0.09) * lift_b
+				a_rot = Vector3(-40.0 * lift_b - 45.0 * sip_b, -10.0 * lift_b, 8.0 * lift_b)
+				target_pitch_mod = 0.16 * sip_b
 
 			"tea_sip":
 				# İnce belli çayı ağza kaldır -> eğip sıcak yudumla -> yavaşça geri indir!
@@ -1811,7 +1870,7 @@ func _animate(dt: float) -> void:
 				"sigara", "puro":
 					p = rest[n] + Vector3(0.02, 0.14 + breathe * 0.01, 0.14)
 					r = Vector3(-0.25, 0.25, 0.0)
-				"simit":
+				"simit", "acma", "bira":
 					p = rest[n] + Vector3(0.04, 0.13 + breathe * 0.01, 0.17)
 					r = Vector3(-0.2, 0.0, 0.0)
 				"sopa":
@@ -1885,27 +1944,78 @@ func _animate(dt: float) -> void:
 	head.rotation.z = lerpf(head.rotation.z, -sin(phase) * 0.045 * kw, f)
 
 
+# ---------- Bira ve sarhoşluk ----------
+
+func _on_beer_finished() -> void:
+	_set_drunk(drunk_level + 1)
+	match drunk_level:
+		1:
+			_toast("🍺 Çakırkeyif! Bağırman güçlendi", Color(0.6, 0.8, 1.0))
+		2:
+			_toast("🍺🍺 Kafalar güzel... fiyat ayarına dikkat!", Color(0.6, 0.8, 1.0))
+		_:
+			_toast("🍺🍺🍺 Gözlerin kapanıyor...", Color(1.0, 0.6, 0.6))
+			_faint_t = FAINT_CLOSE
+
+
+func _set_drunk(lv: int) -> void:
+	drunk_level = clampi(lv, 0, 3)
+	_drunk_t = DRUNK_DECAY
+	if Net.online():
+		rpc_set_drunk.rpc(drunk_level, beer_fainted)
+
+
+@rpc("authority", "call_remote", "reliable")
+func rpc_set_drunk(lv: int, fainted: bool) -> void:
+	drunk_level = lv
+	beer_fainted = fainted
+
+
+func _tick_drunk(dt: float) -> void:
+	if _faint_t > 0.0:
+		_faint_t -= dt
+		eyelid = clampf(1.0 - _faint_t / FAINT_CLOSE, 0.0, 1.0)
+		if _faint_t <= 0.0:
+			beer_fainted = true
+			_set_drunk(3)
+			var fwd := -cam.global_transform.basis.z if cam else Vector3(0, 0, -1)
+			knockout_synced(fwd, FAINT_SLEEP)
+		return
+	if beer_fainted:
+		eyelid = 1.0 if _ko_t > 1.0 else clampf(_ko_t, 0.0, 1.0)
+		if _ko_phase == 0:
+			beer_fainted = false
+			_set_drunk(1)
+			_toast("🥴 Ayıldın... biraz", Color(0.8, 0.8, 1.0))
+		return
+	eyelid = maxf(eyelid - dt * 2.0, 0.0)
+	if drunk_level > 0:
+		_drunk_t -= dt
+		if _drunk_t <= 0.0:
+			_set_drunk(drunk_level - 1)
+
+
 # ---------- Ragdoll bayılma ----------
 
-func knockout_synced(dir: Vector3) -> void:
+func knockout_synced(dir: Vector3, dur := KO_TIME) -> void:
 	if _ko_phase != 0 or npc:
 		return
 	if Net.online():
-		rpc_knockout.rpc(dir)
+		rpc_knockout.rpc(dir, dur)
 	else:
-		rpc_knockout(dir)
+		rpc_knockout(dir, dur)
 
 
 ## Parçaları (gövde, kafa, eller, ayaklar) RigidBody3D yapıp PinJoint'lerle gevşekçe bağlar; her peer yerelde simüle eder.
 @rpc("any_peer", "call_local", "reliable")
-func rpc_knockout(dir: Vector3) -> void:
+func rpc_knockout(dir: Vector3, dur := KO_TIME) -> void:
 	var w := _find_world()
 	if _ko_phase != 0 or w == null or npc or parts.is_empty():
 		return
 	dir.y = 0.0
 	dir = dir.normalized() if dir.length_squared() > 0.001 else Vector3(0, 0, 1)
 	_ko_phase = 1
-	_ko_t = KO_TIME
+	_ko_t = dur
 	var mat := PhysicsMaterial.new()
 	mat.friction = 1.0
 	mat.bounce = 0.0
@@ -1942,7 +2052,7 @@ func rpc_knockout(dir: Vector3) -> void:
 		j.global_position = body.global_position.lerp(rb.global_position, 0.5)
 		j.node_a = body.get_path()
 		j.node_b = rb.get_path()
-		j.set_param(PinJoint3D.PARAM_BIAS, 0.6)
+		# PARAM_BIAS Jolt Physics ile desteklenmiyor (uyarı basıyordu); varsayılan yeterli
 		_ko_joints.append(j)
 		rb.apply_central_impulse(dir * 3.0 * rb.mass + Vector3(randf_range(-0.5, 0.5), 0.5, randf_range(-0.5, 0.5)) * rb.mass)
 	body.apply_central_impulse(dir * 55.0 + Vector3.UP * 30.0)
@@ -2344,6 +2454,12 @@ func _day_progress() -> float:
 	if main and main.has_method("_day_prog"):
 		return float(main.call("_day_prog"))
 	return 0.4
+
+
+func _toast(msg: String, col := Color(1.0, 0.94, 0.78)) -> void:
+	var main := _find_main()
+	if main and main.has_method("show_toast"):
+		main.show_toast(msg, col)
 
 
 func _find_main() -> Node:
@@ -2800,6 +2916,8 @@ func rpc_throw_crate(item_id: String, count: int, start_p: Vector3, vel: Vector3
 
 
 func _do_adjust_price(delta: int) -> void:
+	if drunk_level >= 2 and randf() < 0.3:
+		delta = -delta # çakırkeyif: el kayar
 	var area := _ray_target()
 	if area == null or str(area.get_meta("kind", "")) != "slot":
 		return

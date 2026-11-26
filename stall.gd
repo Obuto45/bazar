@@ -434,7 +434,7 @@ func _build_upgrade_board() -> void:
 	LP.add(b, LP.box(Vector3(0.76, 0.48, 0.05)), Vector3.ZERO, Color(0.14, 0.2, 0.14))
 	LP.add(b, LP.box(Vector3(0.82, 0.54, 0.03)), Vector3(0, 0, -0.015), WOOD.darkened(0.15))
 	var lbl := Label3D.new()
-	lbl.text = "⭐ DÜKKAN\n[P / E]"
+	lbl.text = "🏪 DÜKKANLAR\nARKA SOKAKTA"
 	lbl.position = Vector3(0, 0, 0.035)
 	lbl.font_size = 24
 	lbl.outline_size = 6

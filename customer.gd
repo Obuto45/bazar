@@ -216,6 +216,14 @@ const LINES := {
 		["🔥 %s lazım, çabuk!"], ["🔥 Bugünün yıldızı %s!"], ["👧 Anne, %s! %s!"],
 		["🔥 Radyoda söylediler, %s bereketliymiş."],
 	],
+	"drunk": [
+		["Abi sen iyi misin?"],
+		["😤 Utanmaz, sabah sabah!", "😤 Evladım bu ne hal!", "😤 Tövbe tövbe, içkili esnaftan alınmaz!",
+			"😤 Annen görse ne der!"],
+		[], [], [],
+		["😤 Evlat, ayıp ayıp! Pazarda içilir mi?", "😤 Bizim zamanımızda esnaf ayık olurdu!",
+			"😤 Kırk yıl memurluk yaptım, böyle esnaf görmedim!"],
+	],
 	"tip": [
 		["😊 Al, bahşiş! +%d TL"], [], ["⚡ Süper hız! +%d TL Bahşiş!"], ["⭐ Harika servis! +%d TL Bahşiş!"],
 		["😊 Çocuğu sevindirdin! +%d TL"], ["😊 Al evlat, çay paran! +%d TL"],
@@ -1215,6 +1223,9 @@ func _speed_mult() -> float:
 	return (1.15 if _raining else 1.0) * 0.92 # sakin tempo
 
 
+var _drunk_scold_cd := 0.0
+
+
 func _say(txt: String, dur := 3.2) -> void:
 	if txt == "":
 		return
@@ -1460,6 +1471,13 @@ func _evaluate_stalls(only_louder_override: bool) -> void:
 
 	for st in stalls:
 		var owner := _find_player(st.owner_id)
+		# Teyze ve emekli amca sarhoş pazarcıdan almaz, laf sokar
+		if owner and int(owner.get("drunk_level") if owner.get("drunk_level") != null else 0) >= 1 \
+				and archetype in [Archetype.BARGAINER, Archetype.EMEKLI]:
+			if _drunk_scold_cd <= 0.0 and global_position.distance_to(owner.global_position) < 9.0:
+				_drunk_scold_cd = 14.0
+				_say(_rand_line("drunk"), 3.2)
+			continue
 		var eff_shout := 0.0
 		var hearing_range := 35.0 # 22 x 1.6
 		if owner and owner.global_position.distance_to(st.global_position) < 9.6:

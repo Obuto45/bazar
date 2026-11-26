@@ -45,7 +45,8 @@ const WALL_COLS := [
 	Color(0.96, 0.82, 0.58), Color(0.86, 0.80, 0.86),
 ]
 ## Sokak cepheleri sırası: önce batı (x=-16) kuzeyden güneye, sonra doğu (x=+16) kuzeyden güneye, sonra kapı arkaları.
-## Sık uğranan dükkanlar (Tekel, Fırın, Kıraathane, Market, Nalbur) pazarın ortasına yakın. Gerçek dükkanlar: shops.gd.
+## Sık uğranan dükkanlar (Tekel, Fırın, Kıraathane, Market, Nalbur) pazarın ortasına yakın. Gerçek dükkanlar: shops.gd
+## (Kasap, Eczane, Çiçekçi, Börekçi... sadece vitrin).
 const SHOP_NAMES := ["BERBER", "FIRIN", "TEKEL BAYİ", "KIRAATHANE", "KASAP", "ECZANE",
 	"TERZİ", "MARKET", "NALBUR", "TELEFONCU", "ÇİÇEKÇİ", "BÖREKÇİ",
 	"KIRTASİYE", "BÜFE", "BAKKAL", "KUAFÖR"]

@@ -54,6 +54,30 @@ const CATALOG := {
 		"right_hint": "Kokla & Çevir",
 		"desc": "Fırından taze çıtır simit (3 ısırık). Sol tıkla ısır (+18sn +%15 hız), sağ tıkla sıcak kokusunu çek!",
 	},
+	"acma": {
+		"name": "Açma",
+		"short": "Açma",
+		"icon": "🥯",
+		"cost": 12,
+		"uses": 1, # 1 açma (3 ısırık)
+		"puffs_per_use": 3,
+		"consumable": true,
+		"left_hint": "Isır (+18sn Hız)",
+		"right_hint": "Kuşa / kediye at",
+		"desc": "Fırından yumuşacık, yağlı açma (3 ısırık). Sol tıkla ısır, sağ tıkla kuşlara ve kediye parça at!",
+	},
+	"bira": {
+		"name": "Pazar Pilsen",
+		"short": "Bira",
+		"icon": "🍺",
+		"cost": 20,
+		"uses": 1, # 1 şişe (2 yudum)
+		"puffs_per_use": 2,
+		"consumable": true,
+		"left_hint": "Yudumla (cesaret!)",
+		"right_hint": "",
+		"desc": "Tombul mavi şişe, 50 cl. Bağırman güçlenir ama kafan güzelleşir; 3. şişede bayılırsın! Çay ayıltır.",
+	},
 	"megafon": {
 		"name": "El Megafonu",
 		"short": "Megafon",
@@ -116,7 +140,7 @@ const CATALOG := {
 	},
 }
 
-const ORDER := ["sigara", "puro", "cay", "simit", "megafon", "bicak", "radyo", "spray", "sopa"]
+const ORDER := ["sigara", "puro", "bira", "cay", "simit", "acma", "megafon", "bicak", "radyo", "spray", "sopa"]
 
 
 ## Sürekli tüten duman (sigara/puro) veya sıcak buhar (çay) yayan lokal-olmayan partikül yayıcı.
@@ -286,6 +310,45 @@ static func build_item_model(item_id: String, burn_ratio := 0.0) -> Node3D:
 			tip.name = "SmokeTip"
 			tip.position = Vector3(0, 0.075, 0)
 			root.add_child(tip)
+
+		"acma":
+			# Yumuşak, parlak (yumurta sürülmüş) burgulu açma halkası: simitten kalın ve tombul, susamsız
+			var seg_n := 10
+			var keep_n := clampi(int(round((1.0 - burn_ratio * 0.72) * float(seg_n))), 4, seg_n)
+			var ar := 0.056
+			var bun := Color(0.85, 0.58, 0.27)
+			var bun_hi := Color(0.93, 0.70, 0.36)
+			for i in keep_n:
+				var ang := float(i) / float(seg_n) * TAU - PI * 0.35
+				var p := Vector3(cos(ang) * ar, sin(ang) * ar, 0.0)
+				var mi := LP.add(root, LP.ellipsoid(0.03, 0.033, 0.03, 8, 6), p, bun if i % 2 == 0 else bun_hi, Vector3(0.0, 0.0, ang), 0.32)
+				(mi.material_override as StandardMaterial3D).metallic_specular = 0.75
+				# Burgu sırtı (hafif çapraz kabartı)
+				var p2 := Vector3(cos(ang + 0.2) * (ar + 0.004), sin(ang + 0.2) * (ar + 0.004), 0.012)
+				LP.add(root, LP.ellipsoid(0.016, 0.026, 0.012, 6, 4), p2, bun_hi.lightened(0.08), Vector3(0.5, 0, ang + 0.6), 0.3)
+			var tip_a := Node3D.new()
+			tip_a.name = "SmokeTip"
+			tip_a.position = Vector3(0, 0.07, 0)
+			root.add_child(tip_a)
+
+		"bira":
+			# Tombul 50 cl mavi şişe: kalın gövde, yuvarlak omuz, kısa boyun, altın kapak, beyaz-kırmızı etiket
+			var glass := Color(0.12, 0.32, 0.78, 0.82)
+			var b1 := LP.add(root, LP.cyl(0.037, 0.037, 0.11, 12), Vector3(0, 0.055, 0), glass, Vector3.ZERO, 0.08)
+			var b2 := LP.add(root, LP.ellipsoid(0.037, 0.03, 0.037, 12, 6), Vector3(0, 0.11, 0), glass, Vector3.ZERO, 0.08)
+			var b3 := LP.add(root, LP.cyl(0.013, 0.017, 0.045, 10), Vector3(0, 0.152, 0), glass, Vector3.ZERO, 0.08)
+			for mi2 in [b1, b2, b3]:
+				var gm := (mi2 as MeshInstance3D).material_override as StandardMaterial3D
+				gm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+				gm.metallic_specular = 1.0
+			LP.add(root, LP.cyl(0.0335, 0.0335, 0.085, 12), Vector3(0, 0.05, 0), Color(0.86, 0.62, 0.16), Vector3.ZERO, 0.6) # bira
+			LP.add(root, LP.cyl(0.0375, 0.0375, 0.05, 12), Vector3(0, 0.055, 0), Color(0.97, 0.96, 0.92), Vector3.ZERO, 0.6) # etiket
+			LP.add(root, LP.cyl(0.0378, 0.0378, 0.012, 12), Vector3(0, 0.055, 0), Color(0.82, 0.12, 0.14), Vector3.ZERO, 0.6)
+			LP.add(root, LP.cyl(0.0145, 0.0145, 0.01, 10), Vector3(0, 0.178, 0), Color(0.86, 0.7, 0.24), Vector3.ZERO, 0.3, 0.8)
+			var tip_b := Node3D.new()
+			tip_b.name = "SmokeTip"
+			tip_b.position = Vector3(0, 0.18, 0)
+			root.add_child(tip_b)
 
 		"megafon":
 			# Beyaz-kırmızı klasik pazarcı el megafonu + kabza

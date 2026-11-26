@@ -11,6 +11,7 @@ enum Mode { PATROL, CHASE, CHASE_THIEF }
 
 const FINE_GOUGE := 25
 const FINE_LITTER := 15
+const FINE_DRUNK := 25
 const FINE_ASSAULT := 50
 const CLEAN_REWARD := 10
 const WALK_SPEED := 2.75
@@ -347,6 +348,10 @@ func _inspect_nearby_stalls() -> void:
 			var look: Vector3 = st.global_position - global_position
 			_body_yaw = atan2(look.x, look.z)
 			_pause_t = 2.0
+			if int(owner.get("drunk_level") if owner.get("drunk_level") != null else 0) >= 2 or bool(owner.get("beer_fainted")):
+				owner.apply_fine(FINE_DRUNK, "Kamu Düzenini Bozma Cezası")
+				_announce("🚨 SARHOŞ ESNAF! -%d TL" % FINE_DRUNK, st.global_position, false)
+				return
 			var gouge: Dictionary = st.find_price_gouging(all_stalls, ev)
 			if not gouge.is_empty():
 				owner.apply_fine(FINE_GOUGE, "Fahiş Fiyat Cezası (%d TL)" % int(gouge["price"]))

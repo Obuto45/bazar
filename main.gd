@@ -83,6 +83,8 @@ var voice_bar: ColorRect
 var voice_lbl: Label
 var money_hud: PanelContainer
 var money_lbl: Label
+var lid_top: ColorRect
+var lid_bot: ColorRect
 var money_pop: Label
 var crosshair: ColorRect
 var interact_lbl: Label
@@ -1331,6 +1333,29 @@ func _refresh_shop_panel() -> void:
 
 func _expansion_level(st: Node) -> int:
 	return int(st.get("expansion_level")) if st and "expansion_level" in st else 0
+
+
+## 3. biradan sonra gözler kapanır: üstten ve alttan inen siyah göz kapakları.
+func _update_eyelids(me: Node) -> void:
+	var k := float(me.get("eyelid")) if me.get("eyelid") != null else 0.0
+	if lid_top == null:
+		if k <= 0.001 or money_hud == null:
+			return
+		var layer := money_hud.get_parent()
+		lid_top = ColorRect.new()
+		lid_bot = ColorRect.new()
+		for r: ColorRect in [lid_top, lid_bot]:
+			r.color = Color(0.02, 0.01, 0.01)
+			r.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			layer.add_child(r)
+	var vs := get_viewport().get_visible_rect().size
+	var h := vs.y * 0.5 * clampf(k, 0.0, 1.0) * 1.02
+	lid_top.visible = k > 0.001
+	lid_bot.visible = k > 0.001
+	lid_top.position = Vector2.ZERO
+	lid_top.size = Vector2(vs.x, h)
+	lid_bot.position = Vector2(0.0, vs.y - h)
+	lid_bot.size = Vector2(vs.x, h)
 
 
 func _on_buy_expansion() -> void:
@@ -2805,6 +2830,7 @@ func _stars(r: float) -> String:
 func _update_meta_hud(dt: float, me: Node) -> void:
 	if me == null:
 		return
+	_update_eyelids(me)
 	var st := _my_stall()
 	# Kapkaççıya bakış (yakalama ödülü tanıma)
 	if me.has_method("_ray_target"):

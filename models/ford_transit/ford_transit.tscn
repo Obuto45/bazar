@@ -1,4 +1,4 @@
-﻿[gd_scene load_steps=7 format=3]
+[gd_scene load_steps=7 format=3]
 
 [ext_resource type="Script" path="res://models/ford_transit/ford_transit_controller.gd" id="1_ctrl"]
 [ext_resource type="PackedScene" path="res://models/ford_transit/ford_transit_chassis.glb" id="2_chassis"]

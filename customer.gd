@@ -1495,8 +1495,6 @@ func _evaluate_stalls(only_louder_override: bool) -> void:
 			charm += 0.18 if archetype != Archetype.EMEKLI else 0.3 # amca arabeske bayılır
 		if owner and owner.has_method("has_prestige_aura") and owner.has_prestige_aura():
 			charm += 0.18 if archetype == Archetype.VIP else 0.10
-		elif owner and owner.has_method("has_calm_aura") and owner.has_calm_aura():
-			charm += 0.07
 
 		var variety := clampf(float(matched) / float(maxi(wants.size(), 1)), 0.0, 1.0)
 		var proximity := clampf(1.0 - dist / hearing_range, 0.0, 1.0)

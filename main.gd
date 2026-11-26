@@ -3131,7 +3131,7 @@ func _update_meta_hud(dt: float, me: Node) -> void:
 		for entry: Array in [
 			["tea", tea_s, "🍵 Çay %dsn (+%%25)"],
 			["simit", sim_s, "🥯 Simit %dsn (+%%15)"],
-			["smoke", smk_s, "🚬 Keyif %dsn"],
+			["smoke", smk_s, "🚬 Sigara %dsn (+%%25 Hız)"],
 		]:
 			var row: Array = buff_pills[str(entry[0])]
 			var p: PanelContainer = row[0]

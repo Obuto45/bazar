@@ -3,6 +3,62 @@ extends RefCounted
 
 const LP := preload("res://lowpoly.gd")
 
+static var _soft_mat: StandardMaterial3D
+
+
+## Duman/buhar için yumuşak kenarlı kamera'ya dönük bulut: radyal geçişli doku + kameraya çok yaklaşınca saydamlaşır
+## (köşeli küre topları yerine). Partiküllerin rengini ve saydamlığını color_ramp belirler.
+static func soft_puff_mat() -> StandardMaterial3D:
+	if _soft_mat:
+		return _soft_mat
+	var g := ramp([0.0, 0.35, 0.7, 1.0], [Color(1, 1, 1, 1), Color(1, 1, 1, 0.55), Color(1, 1, 1, 0.12), Color(1, 1, 1, 0)])
+	var tex := GradientTexture2D.new()
+	tex.gradient = g
+	tex.width = 64
+	tex.height = 64
+	tex.fill = GradientTexture2D.FILL_RADIAL
+	tex.fill_from = Vector2(0.5, 0.5)
+	tex.fill_to = Vector2(1.0, 0.5)
+	var m := StandardMaterial3D.new()
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.vertex_color_use_as_albedo = true
+	m.albedo_texture = tex
+	m.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
+	m.billboard_keep_scale = true
+	m.cull_mode = BaseMaterial3D.CULL_DISABLED
+	m.proximity_fade_enabled = true
+	m.proximity_fade_distance = 0.25
+	m.distance_fade_mode = BaseMaterial3D.DISTANCE_FADE_PIXEL_ALPHA
+	m.distance_fade_min_distance = 0.12
+	m.distance_fade_max_distance = 0.6
+	_soft_mat = m
+	return m
+
+
+## Noktaları sırasıyla kurulmuş renk geçişi (add_point + set_color(1) karışıklığı olmadan).
+static func ramp(offsets: Array, colors: Array) -> Gradient:
+	var g := Gradient.new()
+	g.offsets = PackedFloat32Array(offsets)
+	g.colors = PackedColorArray(colors)
+	return g
+
+
+static func soft_puff_mesh(size: float) -> QuadMesh:
+	var q := QuadMesh.new()
+	q.size = Vector2(size, size)
+	return q
+
+
+static func _soften(p: CPUParticles3D, size: float) -> void:
+	p.mesh = soft_puff_mesh(size)
+	p.material_override = soft_puff_mat()
+	p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	p.angle_min = -180.0
+	p.angle_max = 180.0
+	p.angular_velocity_min = -25.0
+	p.angular_velocity_max = 25.0
+
 
 static func _vcol_mat(rough := 0.5, metallic := 0.0, unshaded := false, alpha := false) -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
@@ -84,9 +140,7 @@ static func spawn_smoke_puff(parent: Node, world_pos: Vector3, dir := Vector3.UP
 	p.explosiveness = 0.35
 	p.amount = 18 if thick else 10
 	p.lifetime = 2.1 if thick else 1.5
-	p.mesh = LP.sphere(0.075 if thick else 0.048, 6, 4)
-	var m := _vcol_mat(0.95, 0.0, false, true)
-	p.material_override = m
+	_soften(p, 0.24 if thick else 0.16)
 	p.direction = (dir * 0.55 + Vector3.UP * 0.75).normalized()
 	p.spread = 32.0 if thick else 24.0
 	p.initial_velocity_min = 0.45 if thick else 0.32
@@ -99,12 +153,8 @@ static func spawn_smoke_puff(parent: Node, world_pos: Vector3, dir := Vector3.UP
 	sc.add_point(Vector2(0.45, 1.35 if thick else 1.1))
 	sc.add_point(Vector2(1.0, 2.2 if thick else 1.7))
 	p.scale_amount_curve = sc
-	var grad := Gradient.new()
 	var base_c := Color(0.76, 0.80, 0.86, 0.62) if thick else Color(0.86, 0.88, 0.92, 0.52)
-	grad.set_color(0, base_c)
-	grad.add_point(0.55, Color(base_c.r, base_c.g, base_c.b, 0.30))
-	grad.set_color(1, Color(base_c.r, base_c.g, base_c.b, 0.0))
-	p.color_ramp = grad
+	p.color_ramp = ramp([0.0, 0.12, 0.55, 1.0], [Color(base_c, 0.0), base_c, Color(base_c, 0.30), Color(base_c, 0.0)])
 	parent.add_child(p)
 	p.global_position = world_pos
 	p.emitting = true
@@ -134,10 +184,7 @@ static func spawn_exhale_cloud(parent: Node, world_pos: Vector3, fwd_dir: Vector
 	p.explosiveness = 0.25
 	p.amount = 28 if thick else 18
 	p.lifetime = 2.6 if thick else 2.0
-	p.mesh = LP.sphere(0.068 if thick else 0.048, 6, 4)
-	var m := _vcol_mat(0.95, 0.0, true, true)
-	p.material_override = m
-	p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_soften(p, 0.22 if thick else 0.16)
 	p.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
 	p.emission_sphere_radius = 0.03
 	p.direction = (d + Vector3(0, 0.10, 0)).normalized()
@@ -148,13 +195,8 @@ static func spawn_exhale_cloud(parent: Node, world_pos: Vector3, fwd_dir: Vector
 	p.damping_max = 2.2
 	p.gravity = Vector3(0.08, 0.38, 0.06)
 	p.scale_amount_curve = _scale_curve(0.35, 1.55 if thick else 1.25, 2.85 if thick else 2.25, 0.42)
-	var grad := Gradient.new()
 	var base_c := Color(0.80, 0.84, 0.90, 0.62) if thick else Color(0.88, 0.90, 0.94, 0.50)
-	grad.set_color(0, Color(base_c.r, base_c.g, base_c.b, 0.0))
-	grad.add_point(0.10, base_c)
-	grad.add_point(0.55, Color(base_c.r, base_c.g, base_c.b, base_c.a * 0.48))
-	grad.set_color(1, Color(base_c.r, base_c.g, base_c.b, 0.0))
-	p.color_ramp = grad
+	p.color_ramp = ramp([0.0, 0.10, 0.55, 1.0], [Color(base_c, 0.0), base_c, Color(base_c, base_c.a * 0.48), Color(base_c, 0.0)])
 	parent.add_child(p)
 	p.global_position = world_pos
 	p.emitting = true
@@ -214,11 +256,9 @@ static func spawn_tea_steam(parent: Node, world_pos: Vector3, burst := false) ->
 	var p := CPUParticles3D.new()
 	p.one_shot = true
 	p.explosiveness = 0.45 if burst else 0.25
-	p.amount = 14 if burst else 8
+	p.amount = 9 if burst else 6
 	p.lifetime = 1.45 if burst else 1.15
-	p.mesh = LP.sphere(0.026 if burst else 0.020, 5, 3)
-	p.material_override = _vcol_mat(0.95, 0.0, true, true)
-	p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_soften(p, 0.10 if burst else 0.08)
 	p.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
 	p.emission_sphere_radius = 0.025
 	p.direction = Vector3.UP

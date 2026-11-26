@@ -3,6 +3,7 @@ extends RefCounted
 ## Sigara, Küba Purosu, İnce Belli Çay, Susamlı Simit, El Megafonu, Meyve Bıçağı, Arabesk Radyo ve Su Fısfısı.
 
 const LP := preload("res://lowpoly.gd")
+const VFX := preload("res://vfx.gd")
 
 const CATALOG := {
 	"sigara": {
@@ -13,7 +14,7 @@ const CATALOG := {
 		"uses": 5, # 5 dal
 		"puffs_per_use": 5,
 		"consumable": true,
-		"left_hint": "Nefes Çek & Üfle",
+		"left_hint": "Nefes Çek (+12sn %25 Hız)",
 		"right_hint": "Kül Silk",
 		"desc": "5 dal sigara. Elde sürekli tüter! Sol tıkla nefes çekip duman üfle (+12sn Keyif), sağ tıkla kül silk.",
 	},
@@ -25,7 +26,7 @@ const CATALOG := {
 		"uses": 3, # 3 puro
 		"puffs_per_use": 8,
 		"consumable": true,
-		"left_hint": "Derin Çek & Halka Üfle",
+		"left_hint": "Derin Çek & Halka Üfle (+16sn Hız)",
 		"right_hint": "Kül Silk",
 		"desc": "Altın bantlı 3 puro. Yoğun duman halkası üfler + Ağır Abi prestiji (+%18 müşteri ilgisi)!",
 	},
@@ -115,14 +116,7 @@ static func _make_continuous_wisp(thick: bool, is_steam := false) -> CPUParticle
 	p.amount = 12 if is_steam else (22 if thick else 16)
 	p.lifetime = 1.25 if is_steam else (1.95 if thick else 1.55)
 	p.preprocess = 0.25
-	p.mesh = LP.sphere(0.016 if is_steam else (0.022 if thick else 0.014), 5, 3)
-	var m := StandardMaterial3D.new()
-	m.vertex_color_use_as_albedo = true
-	m.roughness = 0.95
-	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	p.material_override = m
-	p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	VFX._soften(p, 0.06 if is_steam else (0.075 if thick else 0.05))
 	p.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
 	p.emission_sphere_radius = 0.018 if is_steam else (0.008 if thick else 0.005)
 	p.direction = Vector3(0.06, 1.0, 0.04).normalized()
@@ -138,13 +132,8 @@ static func _make_continuous_wisp(thick: bool, is_steam := false) -> CPUParticle
 	sc.add_point(Vector2(0.45, 1.45 if thick else 1.15))
 	sc.add_point(Vector2(1.0, 2.75 if thick else 2.1))
 	p.scale_amount_curve = sc
-	var grad := Gradient.new()
 	var c0 := Color(0.98, 0.97, 0.94, 0.26) if is_steam else (Color(0.76, 0.80, 0.86, 0.44) if thick else Color(0.86, 0.88, 0.92, 0.36))
-	grad.set_color(0, Color(c0.r, c0.g, c0.b, 0.0))
-	grad.add_point(0.14, c0)
-	grad.add_point(0.62, Color(c0.r, c0.g, c0.b, c0.a * 0.48))
-	grad.set_color(1, Color(c0.r, c0.g, c0.b, 0.0))
-	p.color_ramp = grad
+	p.color_ramp = VFX.ramp([0.0, 0.14, 0.62, 1.0], [Color(c0, 0.0), c0, Color(c0, c0.a * 0.48), Color(c0, 0.0)])
 	p.emitting = true
 	return p
 

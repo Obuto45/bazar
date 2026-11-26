@@ -193,7 +193,7 @@ var turning := false
 var spd := 0.0
 var tea_buff := 0.0 # çay: bağırma +%25 (yudum başı +15sn, en çok 60sn)
 var simit_buff := 0.0 # simit: %15 hızlı yürüyüş (ısırık başı +18sn, en çok 60sn)
-var smoke_buff := 0.0 # sigara/puro keyfi: sakin aura (+%7 müşteri ilgisi, 12-16sn)
+var smoke_buff := 0.0 # sigara/puro: %25 hızlı yürüyüş/koşu (nefes başı +12sn / puro +16sn, en çok 30sn)
 var air := false
 var phase := 0.0
 var land_t := 0.0
@@ -323,10 +323,6 @@ func has_inventory_item(item_id: String) -> bool:
 
 func has_prestige_aura() -> bool:
 	return is_holding_item("puro")
-
-
-func has_calm_aura() -> bool:
-	return smoke_buff > 0.0
 
 
 ## Efektif bağırma gücü: normal mikrofon/B + El Megafonu (1.85x) + Tezgah Hoparlörü (1.35x).
@@ -1148,7 +1144,9 @@ func _local(dt: float) -> void:
 		inp = Input.get_vector("left", "right", "fwd", "back")
 	var dir := (Basis(Vector3.UP, look_yaw) * Vector3(inp.x, 0, inp.y)).normalized()
 	var running := Input.is_action_pressed("run") and inp.y < 0.0 and _stun_t <= 0.0
-	var target := dir * (RUN if running else WALK) * (1.15 if simit_buff > 0.0 else 1.0)
+	# Hız bonusları birikmez, büyüğü geçer: sigara/puro %25, simit %15
+	var speed_k := 1.25 if smoke_buff > 0.0 else (1.15 if simit_buff > 0.0 else 1.0)
+	var target := dir * (RUN if running else WALK) * speed_k
 	var accel := (14.0 if target != Vector3.ZERO else 18.0) if is_on_floor() else 3.0
 	velocity.x = move_toward(velocity.x, target.x, accel * dt * WALK)
 	velocity.z = move_toward(velocity.z, target.z, accel * dt * WALK)
@@ -1225,7 +1223,8 @@ func _camera(dt: float) -> void:
 	cam_root.position = Vector3(0, EYE_Y, 0) + yb * (Vector3(0, 0, -EYE_FWD) + bob + shake_off)
 	cam_root.rotation = Vector3(clampf(look_pitch + _cam_pitch_mod, -1.45, 1.35), look_yaw, -cos(phase) * 0.004 * bob_k * (1.0 + kr) + shake_roll + _strafe_roll)
 	# Belirgin koşma FOV açılması (78° -> 89°!) + nefes çekme/üfleme mikro odaklanması
-	cam.fov = lerpf(cam.fov, 78.0 + sprint_k * 11.5 + _cam_fov_mod, minf(dt * 7.5, 1.0))
+	var smoke_fov := 3.5 if smoke_buff > 0.0 else 0.0 # sigara hızı: hafif FOV açılması
+	cam.fov = lerpf(cam.fov, 78.0 + sprint_k * 11.5 + smoke_fov + _cam_fov_mod, minf(dt * 7.5, 1.0))
 
 	if _fp_crate_anchor:
 		_place_kick = lerpf(_place_kick, 0.0, minf(dt * 14.0, 1.0))
@@ -1303,14 +1302,14 @@ func _camera(dt: float) -> void:
 					lift = 1.0
 					var sip_k := sin(((u - 0.30) / 0.38) * PI)
 					tilt = 0.45 + 0.55 * sip_k
-					target_pitch_mod = 0.048 * sip_k
-					target_fov_mod = -1.2 * sip_k
+					target_pitch_mod = 0.11 * sip_k
 				else:
 					var dn := smoothstep(0.68, 1.0, u)
 					lift = 1.0 - dn
 					tilt = 0.45 * lift
-				a_pos = Vector3(-0.18, 0.145, 0.16) * lift
-				a_rot = Vector3(-26.0 * tilt, -16.0 * lift, 10.0 * lift)
+				# Bardak ağız hizasında, ekranın alt-ortasında kalır; yudumda baş hafif geriye yatar
+				a_pos = Vector3(-0.15, 0.045, 0.085) * lift
+				a_rot = Vector3(-48.0 * tilt, -12.0 * lift, 8.0 * lift)
 
 			"tea_stir":
 				# Bardağı hafif ortaya yaklaştır ve içindeki kaşığı dairesel şıngırdat!

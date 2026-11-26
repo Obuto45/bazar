@@ -106,7 +106,7 @@ func _ready() -> void:
 	_voice_audio.unit_size = 6.5
 	_voice_audio.max_distance = 48.0
 	_voice_audio.attenuation_model = AudioStreamPlayer3D.ATTENUATION_INVERSE_DISTANCE
-	_voice_audio.volume_db = 2.0
+	_voice_audio.volume_db = -2.5
 	add_child(_voice_audio)
 	if DisplayServer.get_name() != "headless":
 		_engine_audio.play()

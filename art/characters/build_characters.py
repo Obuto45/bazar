@@ -743,17 +743,15 @@ def build_hirsiz():
     add_sphere(head, hm, (0.312, 0.312, 0.335), Vector((0, 0.01, 0.0)), seg=36, rings=20, cut=lambda d: d.z < 0.6)
     # kırmızı kep (saçın üstünde; yanlardan kazınmış kısım görünür)
     cap = v.mat("Hat", (0.82, 0.1, 0.1), rough=0.7)
-    cdet = v.mat("HatDetail", (0.97, 0.97, 0.97), rough=0.6)
     tilt = (math.radians(-8), 0, 0)
-    add_sphere(head, cap, (0.325, 0.33, 0.26), Vector((0, 0.015, 0.165)), rot=tilt, seg=36, rings=16, cut=lambda d: d.z < -0.02)
-    add_cyl(head, cap, 0.326, 0.326, 0.035, Vector((0, 0.015, 0.17)), rot=tilt, seg=36, cap=False)
-    add_sphere(head, cap, (0.24, 0.2, 0.02), Vector((0, -0.37, 0.165)), rot=(math.radians(-10), 0, 0), seg=28, rings=8,
+    add_sphere(head, cap, (0.25, 0.255, 0.2), Vector((0, 0.015, 0.255)), rot=tilt, seg=36, rings=16, cut=lambda d: d.z < -0.02)
+    add_cyl(head, cap, 0.251, 0.251, 0.028, Vector((0, 0.015, 0.26)), rot=tilt, seg=36, cap=False)
+    add_sphere(head, cap, (0.18, 0.15, 0.016), Vector((0, -0.28, 0.255)), rot=(math.radians(-10), 0, 0), seg=28, rings=8,
                cut=lambda d: d.y > 0.6)                                                       # siperlik
-    add_sphere(head, cap, (0.03, 0.03, 0.018), Vector((0, 0.0, 0.43)), seg=12, rings=6)       # tepe düğmesi
-    add_rbox(head, cdet, (0.11, 0.015, 0.06), Vector((0, -0.31, 0.29)), rot=(0.55, 0, 0))      # ön logo
+    add_sphere(head, cap, (0.024, 0.024, 0.015), Vector((0, 0.0, 0.455)), seg=12, rings=6)       # tepe düğmesi
     for a in (0.6, 1.6, 2.6, 3.7, 4.7, 5.7):
         add_tube(head, v.mat("Seam", (0.6, 0.06, 0.06), rough=0.8),
-                 [(math.sin(a) * 0.05, 0.015 + math.cos(a) * 0.05, 0.42), (math.sin(a) * 0.24, 0.015 + math.cos(a) * 0.24, 0.33)], 0.004, seg=5)
+                 [(math.sin(a) * 0.04, 0.015 + math.cos(a) * 0.04, 0.448), (math.sin(a) * 0.185, 0.015 + math.cos(a) * 0.185, 0.385)], 0.004, seg=5)
     add_tube(head, v.mats["Skin"], [(0.287, -0.06, 0.14), (0.293, 0.0, 0.135), (0.288, 0.06, 0.15)], 0.007, seg=6)
     # sakal gölgesi (çene)
     add_sphere(head, v.mat("Stubble", (0.72, 0.56, 0.47), rough=1.0), (0.19, 0.2, 0.12), Vector((0, -0.085, -0.19)), seg=24, rings=12,

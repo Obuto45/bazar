@@ -5,7 +5,7 @@ Arkadaşlarla veya tek başına oynanan low-poly Türk semt pazarı oyunu. Godot
 ## Oyna (indir)
 
 [Son sürümü indir](https://github.com/Obuto45/bazar/releases/latest) → zip'i bir klasöre aç → `Bazar.exe`.
-- **Tek başına:** Ana menüden **TEK OYNA (Solo)** ile anında pazara gir.
+- **Tek başına:** Ana menüden **TEK OYNA (Kariyer)** → **Yeni Pazar** ya da kayıtlıysa **Devam Et (Gün N)**.
 - **Arkadaşla:** Steam açıkken **ÇOKLU OYNA (Lobi)** → **Steam Lobisi Kur** → **Arkadaşlar** → **Davet et** → **Pazarı Aç**.
 Oyun her açılışta yeni sürüm var mı bakar; varsa kendini günceller ve yeniden başlar.
 
@@ -18,12 +18,43 @@ Oyun her açılışta yeni sürüm var mı bakar; varsa kendini günceller ve ye
 ## Yeni sürüm yayınlama
 
 ```powershell
-./release.ps1 0.5 "Değişiklik notları"
+./release.ps1 0.6 "Değişiklik notları"
 ```
 
 ## Kontroller
 
-WASD yürü • Shift koş (hız çizgileri + FOV) • Boşluk zıpla • Fare bak • **1–6** kişisel envanter (`0` el boş) • **P** Pazarcı Dükkanı • **E** kasa al / sat / korna / radyo koy • **Sol Tık** ürün diz / eldeki eşyayı kullan • **Q** kasayı fırlat • Tekerlek / Z-X fiyat • **B** veya mikrofon bağır • **R** pazarlığa "olmaz" de / radyoyu geri al • **F** tezgah zili • **Tab** skor • **M** mikrofon • **ESC** menü
+| Tuş | İş |
+|---|---|
+| WASD / Shift / Boşluk / Fare | yürü / koş (hız çizgileri + FOV) / zıpla / bak |
+| **1–6**, `0` | kişisel envanter, el boş |
+| **E** | kasa al / müşteriye sat / kapkaççıyı yakala / korna / radyo koy |
+| **Sol Tık** (basılı) | ürün diz / eldeki eşyayı kullan (sigara, megafon, 💦 fısfıs...) |
+| **Q** | kasayı fırlat |
+| Tekerlek / **Z**-**X** | fiyat düşür / artır |
+| **B** veya mikrofon | bağır (müşteri çek) |
+| **R** | pazarlığa "olmaz" de / radyoyu geri al |
+| **F** | tezgah zili |
+| **P** | Pazarcı Dükkanı |
+| **Tab** | skor tablosu |
+| **M** | mikrofon aç/kapa |
+| **H** | rehber adımını geç |
+| **ESC** | menü: ayarlar + tam tuş listesi |
+
+Oyun içinde alttaki ipucu satırı duruma göre değişir (kasa elde, tezgah boş, kapkaççı var...); tam tuş listesi ESC menüsündedir.
+
+## v0.6 Büyük Pazar Güncellemesi
+
+- **Kariyer (Tek Oyna):** Her gün sonunda `user://career.json` dosyasına kaydedilir (gün, para, envanter, tezgah geliştirmeleri, itibar, rekorlar). Menüde **Devam Et (Gün N)** veya **Yeni Pazar**. Kayıt atomik yazılır, bozuk dosya yok sayılır.
+- **Günlük Görevler:** Her gün 3 görev (X TL kazan, N domates sat, teyzelere sat, kombo yap, kapkaççı yakala, ≥4★ itibarla bitir, cezasız bitir...). Tamamlayınca TL ödülü ve fanfar.
+- **Hava Durumu:** Her gün güneşli / bulutlu / yağmurlu (çoklu oyunda herkes için aynı). Yağmurda müşteri az ama acelecidir.
+- **Kapkaççılar:** Kapüşonlu yaramaz çocuklar tezgahlardan ürün aşırır; bak ve **E** ile yakala, 30 TL ödül!
+- **Tazelik & İtibar:** Ürünler gün içinde bayatlar (💦 Su Fısfısı ile tazele); mutlu müşteri tezgah itibarını (★) yükseltir, itibar müşteri çeker.
+- **Kombo:** Arka arkaya hızlı satışlar kombo yapar; 3'ten itibaren +%10 … +%50 kazanç. Ekranda büyük kombo yazısı.
+- **Zorluk eğrisi:** 1. gün sakin (güneşli, geç zabıta, tek kapkaççı); sonraki günler daha kalabalık, daha seçici müşteriler, daha sık zabıta ve kapkaççı.
+- **İlk açılış rehberi:** Kasayı al → diz → fiyatla → bağır → sat → toptancıdan al → fısfısla; her adım oyun durumundan algılanır, **H** ile geçilebilir, ESC menüsünden baştan gösterilebilir.
+- **Gün sonu özeti:** Skor tablosu, günün istatistikleri, görevler, kariyer rekorları (🆕 YENİ REKOR!).
+- **Ayarlar:** Yüksek/düşük grafik kalitesi, menü müziği, ekran ölçeklemesi (UI her çözünürlükte okunur).
+- Paralel yerel test için: `-- --mptest host port=7791` (varsayılan port 7777), hava zorlama: `weather=rain`.
 
 ## Oynanış
 
@@ -44,7 +75,7 @@ WASD yürü • Shift koş (hız çizgileri + FOV) • Boşluk zıpla • Fare b
 |---|---|
 | `net.gd` | Steam lobi, davet, SteamMultiplayerPeer, ENet yedeği (autoload `Net`) |
 | `sfx.gd` | Prosedürel SFX, Türk kamyonet havalı kornası, Hicaz Arabesk müzik ve ambiyans (autoload `Sfx`) |
-| `main.gd` | Solo/Çoklu menü, `P` Dükkanı, Hotbar, koşma hız çizgileri, gün döngüsü, olaylar, MP senkronu |
+| `main.gd` | Menü, kariyer kaydı, `P` Dükkanı, HUD (görevler, kombo, itibar, rehber), gün döngüsü, hava, kapkaççı, zorluk, MP senkronu |
 | `player.gd` | Envanter (`1–6`), sigara/puro/megafon/bıçak/radyo mekaniği, bağırma, düşük sarsıntı, koşma FOV |
 | `items.gd` | Kişisel envanter eşyaları kataloğu ve 3D modelleri |
 | `wholesaler.gd` | Sürüşlü Ford Transit Toptancı AI, dörtlüler, havalı korna ve 7 çeşit kasa tedariği |
@@ -56,4 +87,4 @@ WASD yürü • Shift koş (hız çizgileri + FOV) • Boşluk zıpla • Fare b
 | `vfx.gd` | 3D partiküller (sigara/puro dumanı, kor, müzik notaları, altın para, toz, darbe, ses halkaları) |
 | `lowpoly.gd` | Düz gölgeli mesh + prosedürel yüzey dokuları (asfalt, beton, branda, ahşap, sıva) |
 | `updater.gd` | GitHub Release'ten otomatik güncelleme (autoload `Updater`) |
-| `settings.gd` | Ses ve ekran ayarları (autoload `Settings`) |
+| `settings.gd` | Ses, ekran, grafik kalitesi ve rehber durumu (autoload `Settings`) |

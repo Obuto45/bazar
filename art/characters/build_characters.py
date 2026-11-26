@@ -725,10 +725,63 @@ def build_simitci():
     return v
 
 
+def build_hirsiz():
+    """Tas kafa hırsız: sıfır numara tıraş, siyah şişme mont, spor ayakkabı, çatık kaş, yara bandı."""
+    v = Variant("hirsiz", {
+        "Shirt": (0.07, 0.07, 0.08), "Pants": (0.2, 0.24, 0.34), "Shoe": (0.96, 0.96, 0.96), "Sole": (0.85, 0.15, 0.15),
+        "Skin": (0.88, 0.68, 0.53), "Lid": (0.82, 0.62, 0.48), "SkinLid": (0.85, 0.65, 0.5)})
+    head = v.obj["Head"]
+    delete_mats(head, ["Hat", "HatDetail"])
+    head_hair_op(head, v, brow="Brow", mustache=None, cap=None, side=None, brow_scale=1.2, brow_tilt=-0.5)
+    v.mat("Brow", (0.12, 0.09, 0.07), rough=0.9)
+    # sıfır numara tıraş: kafatasına yapışık, tene yakın gölge (Hair)
+    hair_cap(v, head, (0.66, 0.5, 0.42), front=-0.05, up=0.6, low=-0.15, R=(0.294, 0.294, 0.296), at=(0, 0.004, 0.004))
+    v.mats["Hair"].node_tree.nodes["Principled BSDF"].inputs["Roughness"].default_value = 1.0
+    # sakal gölgesi (çene)
+    add_sphere(head, v.mat("Stubble", (0.72, 0.56, 0.47), rough=1.0), (0.19, 0.2, 0.12), Vector((0, -0.085, -0.19)), seg=24, rings=12,
+               cut=lambda d: d.y > -0.3 or d.z > -0.05)
+    # yara bandı (alında çapraz)
+    bd = v.mat("Bandage", (0.98, 0.9, 0.78), rough=0.8)
+    for rz in (0.75, -0.75):
+        add_rbox(head, bd, (0.12, 0.016, 0.035), Vector((0.13, -0.24, 0.17)), rot=(0.65, 0.45, rz - 0.4))
+    b = v.obj["Body"]
+    delete_mats(b, ["Shoe"])  # kemer montun altında
+    body_scale(v, sx=1.08, sy=1.06, belly=0.02)
+    # şişme mont: Shirt bölgesine yatay dikiş şişkinlikleri
+    def puff(co):
+        if co.z < -0.15:
+            return co
+        k = 1.0 + 0.085 * abs(math.sin((co.z + 0.2) * math.pi / 0.1)) ** 0.5 + 0.02
+        return Vector((co.x * k, co.y * k, co.z))
+    deform(b, puff, mats=["Shirt"])
+    # mont eteği pantolonu biraz örtsün
+    add_torus(b, v.mats["Shirt"], 0.262, 0.04, Vector((0, 0, -0.1)), seg=36, rseg=8)
+    # dik yaka + fermuar + cepler
+    add_torus(b, v.mats["Shirt"], 0.13, 0.05, Vector((0, 0, 0.265)), seg=32, rseg=8, squash=(1.0, 1.6))
+    zp = v.mat("Zipper", (0.72, 0.72, 0.75), rough=0.3, metal=0.9)
+    add_tube(b, zp, [(0, -0.183, 0.27), (0, -0.258, 0.15), (0, -0.282, 0.04), (0, -0.282, -0.06), (0, -0.268, -0.12)], 0.007, seg=6)
+    add_rbox(b, zp, (0.022, 0.012, 0.04), Vector((0, -0.19, 0.25)), rot=(0.6, 0, 0))
+    for sx in (-1, 1):
+        add_tube(b, zp, [(sx * 0.1, -0.265, -0.02), (sx * 0.16, -0.235, -0.07)], 0.005, seg=6)
+    # spor ayakkabı: kalın taban (Sole) + yan şerit + bağcıklar
+    st = v.mat("Stripe", (0.85, 0.15, 0.15), rough=0.5)
+    lace = v.mat("Lace", (0.15, 0.15, 0.17), rough=0.8)
+    for fn in ("FootL", "FootR"):
+        f = v.obj[fn]
+        deform(f, lambda co: Vector((co.x * 1.05, co.y * 1.08, co.z - 0.012)), mats=["Sole"])
+        deform(f, lambda co: Vector((co.x, co.y, co.z * 1.25 - 0.012)) if co.z < -0.08 else co, mats=["Sole"])
+        for sx in (-1, 1):
+            add_tube(f, st, [(sx * 0.083, 0.04, -0.03), (sx * 0.085, -0.04, -0.015), (sx * 0.075, -0.11, -0.04)], 0.009, seg=6)
+        for i in range(3):
+            add_rbox(f, lace, (0.07, 0.014, 0.012), Vector((0, -0.04 - i * 0.035, 0.03 - i * 0.012)), rot=(0.3, 0, 0))
+    hands(v, x=0.37)
+    return v
+
+
 BUILDERS = [
     ("pazarci", build_pazarci), ("musteri_erkek", build_musteri_erkek), ("musteri_kadin", build_musteri_kadin),
     ("teyze", build_teyze), ("emekli", build_emekli), ("cocuk", build_cocuk), ("kapkac", build_kapkac),
-    ("zabita", build_zabita), ("cayci", build_cayci), ("simitci", build_simitci),
+    ("hirsiz", build_hirsiz), ("zabita", build_zabita), ("cayci", build_cayci), ("simitci", build_simitci),
 ]
 
 

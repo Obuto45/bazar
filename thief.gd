@@ -6,6 +6,7 @@ extends Node3D
 signal caught(catcher_id: int, item_id: String)
 
 const MODEL := preload("res://models/char_kapkac.glb")
+const MODEL_BALD := preload("res://models/char_hirsiz.glb") # tas kafa, siyah şişme mont, spor ayakkabı
 const LP := preload("res://lowpoly.gd")
 const Produce := preload("res://produce.gd")
 const VFX := preload("res://vfx.gd")
@@ -96,11 +97,19 @@ func _ready() -> void:
 func _build_visual() -> void:
 	rig = Node3D.new()
 	add_child(rig)
-	var src := MODEL.instantiate()
+	# Yarısı kapüşonlu velet, yarısı tas kafa şişme montlu hırsız
+	var bald := absi(color_seed / 2) % 2 == 1
+	var src := (MODEL_BALD if bald else MODEL).instantiate()
 	var hoodie: Color = HOODIES[absi(color_seed) % HOODIES.size()]
 	var skin: Color = [Color(0.96, 0.78, 0.62), Color(0.86, 0.66, 0.5), Color(0.74, 0.54, 0.4)][absi(color_seed / 3) % 3]
 	var cols := {"Shirt": hoodie, "Pants": Color(0.2, 0.22, 0.28), "Skin": skin, "Lid": skin.darkened(0.06),
 		"SkinLid": skin.darkened(0.03), "Shoe": Color(0.9, 0.9, 0.92)}
+	if bald:
+		# siyah mont ve spor ayakkabı modelin kendi renginde kalır
+		cols.erase("Shirt")
+		cols.erase("Shoe")
+		cols["Hair"] = skin.darkened(0.22)
+		cols["Stubble"] = skin.darkened(0.14)
 	for n in PART_NAMES:
 		var m: Node3D = src.find_child(n, true, false)
 		var w := Node3D.new()
@@ -131,7 +140,7 @@ func _build_visual() -> void:
 	_carry_root = Node3D.new()
 	_carry_root.position = Vector3(0, 0.12, 0.06)
 	(parts["HandR"] as Node3D).add_child(_carry_root)
-	scale = Vector3(0.84, 0.84, 0.84)
+	scale = Vector3(0.92, 0.92, 0.92) if bald else Vector3(0.84, 0.84, 0.84)
 
 
 func _build_bubble_and_area() -> void:

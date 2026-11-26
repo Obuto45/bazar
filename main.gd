@@ -1164,11 +1164,12 @@ func show_toast(msg: String, color := Color(1.0, 0.94, 0.78)) -> void:
 func _on_money_earned(amount: int, total: int, tip: int) -> void:
 	money_lbl.text = "%d TL" % total
 	var sale := amount - tip
-	if sale <= 0 and tip in _pending_rewards:
-		# Görev ödülü (tip yolundan gelir): satış sayılmaz
-		_pending_rewards.erase(tip)
-		qstats["rewards"] = int(qstats.get("rewards", 0)) + tip
-		money_pop.text = "🎯 +%d TL Görev Ödülü" % tip
+	var rw := tip if (sale <= 0 and tip in _pending_rewards) else (sale if (tip == 0 and sale in _pending_rewards) else -1)
+	if rw > 0:
+		# Görev ödülü (is_sale=false ya da bahşiş yolu): satış sayılmaz
+		_pending_rewards.erase(rw)
+		qstats["rewards"] = int(qstats.get("rewards", 0)) + rw
+		money_pop.text = "🎯 +%d TL Görev Ödülü" % rw
 		money_pop.add_theme_color_override("font_color", GOLD)
 		_animate_money_pop()
 		_refresh_shop_panel()
@@ -2856,7 +2857,11 @@ func rpc_request_quest_reward(idx: int) -> void:
 		return
 	paid[idx] = true
 	_quest_paid[pid] = paid
-	p.award_money(0, int(q["r"]), false)
+	# D'nin award_money(amount, tip, haggle, is_sale) imzası varsa satış/kombo sayılmadan öde
+	if p.get_method_argument_count("award_money") >= 4:
+		p.call("award_money", int(q["r"]), 0, false, false)
+	else:
+		p.award_money(0, int(q["r"]), false)
 
 
 func _refresh_quests_panel() -> void:
@@ -3329,7 +3334,9 @@ func _apply_career(c: Dictionary) -> void:
 			ups[u] = true
 		var rep := float(c.get("reputation", 2.5))
 		st.apply_snapshot({"upgrades": ups, "has_radio": bool(c.get("has_radio", false)), "radio_playing": false, "reputation": rep})
-		if "reputation" in st:
+		if st.has_method("set_reputation"):
+			st.call("set_reputation", rep)
+		elif "reputation" in st:
 			st.set("reputation", rep)
 	if bool(c.get("tutorial_done", false)) and not Settings.tutorial_done:
 		Settings.tutorial_done = true

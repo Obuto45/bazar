@@ -118,6 +118,7 @@ var shop_left_col: Control
 var shop_right_col: Control
 var shop_empty_lbl: Label
 var current_shop := ""
+var shop_look_box: VBoxContainer
 var scoreboard_wrap: ColorRect
 var scoreboard_list: VBoxContainer
 var summary_wrap: ColorRect
@@ -1044,6 +1045,9 @@ func _build_shop_panel(layer: CanvasLayer, theme: Theme) -> void:
 	xbtn.custom_minimum_size.x = 84
 	expand_row = [xbtn, xdl, xp]
 
+	shop_look_box = VBoxContainer.new()
+	shop_look_box.add_theme_constant_override("separation", 6)
+	root_v.add_child(shop_look_box)
 	shop_empty_lbl = _lbl(root_v, "🚧 Yakında", 14, 0.85)
 	shop_empty_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_btn(root_v, "✖  [ESC]", _close_shop, 30)
@@ -1269,12 +1273,14 @@ func open_shop(shop_id: String) -> void:
 		(shop_item_rows[iid] as Control).visible = iid in items
 	for key in upgrade_rows:
 		(upgrade_rows[key][2] as Control).visible = key in ups
+	var looks: Array = info.get("looks", [])
+	shop_look_box.visible = not looks.is_empty()
 	var can_expand := bool(info.get("expand", false))
 	if expand_row.size() > 2:
 		(expand_row[2] as Control).visible = can_expand
 	shop_left_col.visible = not items.is_empty()
 	shop_right_col.visible = not ups.is_empty() or can_expand
-	shop_empty_lbl.visible = items.is_empty() and ups.is_empty() and not can_expand
+	shop_empty_lbl.visible = items.is_empty() and ups.is_empty() and not can_expand and looks.is_empty()
 	_refresh_shop_panel()
 	shop_wrap.show()
 	_pop_in(shop_wrap)
@@ -1297,6 +1303,7 @@ func _refresh_shop_panel() -> void:
 	if me == null or st == null:
 		return
 	shop_wallet_lbl.text = "💰 %d TL" % int(me.money)
+	_refresh_look_rows(me)
 	var mult := Shops.price_mult(current_shop, _day_prog()) if current_shop != "" else 1.0
 	for iid in shop_item_btns:
 		var btn: Button = shop_item_btns[iid]
@@ -1356,6 +1363,86 @@ func _update_eyelids(me: Node) -> void:
 	lid_top.size = Vector2(vs.x, h)
 	lid_bot.position = Vector2(0.0, vs.y - h)
 	lid_bot.size = Vector2(vs.x, h)
+
+
+## Berber / terzi: her tür için bir satır seçenek düğmesi; mevcut seçim işaretli.
+func _refresh_look_rows(me: Node) -> void:
+	if shop_look_box == null:
+		return
+	for c in shop_look_box.get_children():
+		c.queue_free()
+	if current_shop == "" or not Shops.SHOPS.has(current_shop):
+		return
+	var cur: Dictionary = me.get("look") if me.get("look") != null else {}
+	for kind in Shops.SHOPS[current_shop].get("looks", []):
+		var info: Dictionary = Shops.LOOKS[kind]
+		var t := _lbl(shop_look_box, "%s  •  %d TL" % [str(info["title"]), int(info["cost"])], 14, 1.0)
+		t.add_theme_color_override("font_color", GOLD)
+		var row := HFlowContainer.new()
+		row.add_theme_constant_override("h_separation", 6)
+		shop_look_box.add_child(row)
+		var opts: Array = info["opts"]
+		for i in opts.size():
+			var sel: bool = int(cur.get(kind, -1)) == i or (int(cur.get(kind, -1)) == -1 and kind in ["hair", "must", "hat"] and i == 0)
+			var o = opts[i]
+			var b: Button
+			if o is Color:
+				b = _btn(row, "✔" if sel else " ", _on_buy_look.bind(kind, i), 30)
+				b.custom_minimum_size = Vector2(44, 30)
+				var sb := _sb(o, 6, 2)
+				sb.set_border_width_all(3 if sel else 1)
+				sb.border_color = GOLD if sel else Color(0, 0, 0, 0.6)
+				for st_name in ["normal", "hover", "pressed", "disabled"]:
+					b.add_theme_stylebox_override(st_name, sb)
+			else:
+				b = _btn(row, ("✔ " if sel else "") + str(o), _on_buy_look.bind(kind, i), 30)
+				b.custom_minimum_size.x = 96
+			b.disabled = sel or int(me.money) < int(info["cost"])
+
+
+func _on_buy_look(kind: String, idx: int) -> void:
+	if Net.online():
+		rpc_request_look.rpc_id(1, kind, idx, current_shop)
+	else:
+		rpc_request_look(kind, idx, current_shop)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func rpc_request_look(kind: String, idx: int, shop_id := "") -> void:
+	if Net.online() and not multiplayer.is_server():
+		return
+	if not Shops.LOOKS.has(kind) or players == null or not Shops.SHOPS.has(shop_id):
+		return
+	if not kind in (Shops.SHOPS[shop_id].get("looks", []) as Array) or not Shops.is_open(shop_id, _day_prog()):
+		return
+	if idx < 0 or idx >= (Shops.LOOKS[kind]["opts"] as Array).size():
+		return
+	var pid := multiplayer.get_remote_sender_id() if Net.online() else 1
+	if pid == 0:
+		pid = 1
+	var p := players.get_node_or_null(str(pid))
+	if p == null:
+		return
+	var cost := int(Shops.LOOKS[kind]["cost"])
+	if int(p.money) < cost:
+		_notify_peer(pid, "💸 %d TL gerek" % cost, Color(1.0, 0.45, 0.4))
+		return
+	p.spend_money(cost, str(Shops.LOOKS[kind]["title"]))
+	p.set_look_synced(kind, idx)
+	if Net.online() and pid != 1:
+		rpc_look_done.rpc_id(pid)
+	else:
+		rpc_look_done()
+
+
+## Alıcının ekranında: panel kapanır ve 3.5 sn aynada yeni görünüm.
+@rpc("authority", "call_local", "reliable")
+func rpc_look_done() -> void:
+	_close_shop()
+	var me := players.get_node_or_null(str(multiplayer.get_unique_id() if Net.online() else 1)) if players else null
+	if me and me.has_method("show_mirror"):
+		me.show_mirror()
+	show_toast("🪞 Yakıştı!", Color(1.0, 0.9, 0.6))
 
 
 func _on_buy_expansion() -> void:

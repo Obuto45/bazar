@@ -9,6 +9,7 @@ const StallScript := preload("res://stall.gd")
 const Items := preload("res://items.gd")
 const VFX := preload("res://vfx.gd")
 const Shops := preload("res://shops.gd")
+const LOOK_FILE := "user://gorunum.cfg"
 
 signal money_earned(amount: int, total: int, tip: int)
 signal money_spent(amount: int, total: int, reason: String)
@@ -104,6 +105,16 @@ var daily_tips := 0
 var daily_sold := 0
 var daily_haggles := 0
 var _ko_phase := 0 # 0 yok, 1 ragdoll, 2 toparlanma
+## Berber/terzi görünümü: -1 = modelin varsayılanı. Bkz. Shops.LOOKS.
+var look := {"hair": 0, "hcol": -1, "must": 0, "shirt": -1, "hat": 0}
+var _hair_surf := [] # [MeshInstance3D, yüzey, varsayılan malzeme]
+var _hat_surf := []
+var _shirt_mats: Array[BaseMaterial3D] = []
+var _hair_mats: Array[BaseMaterial3D] = []
+var _look_extra: Node3D
+var _base_hair := Color.BLACK
+var _base_shirt := Color.WHITE
+var _mirror_t := 0.0
 ## Bira: her şişe sarhoşluğu 1 artırır (60 sn'de bir kademe iner, çay da indirir). 3. şişede gözler kapanır ve bayılır.
 const DRUNK_SHOUT := [1.0, 1.3, 1.5]
 const DRUNK_SWAY := [0.0, 0.018, 0.04]
@@ -270,9 +281,8 @@ func _ready() -> void:
 		tag.hide()
 	elif is_multiplayer_authority():
 		tag.hide()
-		for n in ["Body", "Head"]:
-			for mi in parts[n].find_children("*", "MeshInstance3D", true, false):
-				mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
+		_load_look()
+		_set_self_visible(false)
 		cam_root = Node3D.new()
 		add_child(cam_root)
 		cam = Camera3D.new()
@@ -309,6 +319,8 @@ func _ready() -> void:
 		_refresh_equipped_visual()
 	else:
 		_setup_voice_playback()
+		if Net.online():
+			rpc_ask_look.rpc_id(get_multiplayer_authority()) # sonradan katılan da görünümü görsün
 		_shout_lbl = Label3D.new()
 		_shout_lbl.position.y = 2.02
 		_shout_lbl.billboard = BaseMaterial3D.BILLBOARD_ENABLED
@@ -631,6 +643,13 @@ func _build_model(hair: Color, shirt: Color) -> void:
 					var c := mat.duplicate() as BaseMaterial3D
 					c.albedo_color = hair if mat.resource_name == "Hair" else shirt
 					mi.set_surface_override_material(i, c)
+					if mat.resource_name == "Hair":
+						_hair_mats.append(c)
+						_hair_surf.append([mi, i, c])
+					else:
+						_shirt_mats.append(c)
+				elif mat and mat.resource_name in ["Hat", "HatDetail"]:
+					_hat_surf.append([mi, i, null])
 	_tp_item_anchor = Node3D.new()
 	_tp_item_anchor.position = Vector3(0.0, 0.04, 0.14)
 	_tp_item_anchor.rotation_degrees = Vector3(0, 180, 0)
@@ -645,6 +664,11 @@ func _build_model(hair: Color, shirt: Color) -> void:
 	_blink_cd = randf_range(1.2, 4.5)
 	_saccade_cd = randf_range(0.8, 2.6)
 	src.free()
+	_base_hair = hair
+	_base_shirt = shirt
+	_look_extra = Node3D.new()
+	_look_extra.name = "LookExtra"
+	(parts["Head"] as Node3D).add_child(_look_extra)
 
 
 func _unhandled_input(e: InputEvent) -> void:
@@ -1510,6 +1534,9 @@ func _local(dt: float) -> void:
 
 ## Azaltılmış yumuşak ekran sarsılması + canlı koşma FOV efekti + 1. şahıs eşya animasyonları!
 func _camera(dt: float) -> void:
+	if _mirror_t > 0.0:
+		_mirror_camera(dt)
+		return
 	var kr := clampf((spd - WALK) / (RUN - WALK), 0.0, 1.0)
 	bob_k = lerpf(bob_k, 0.0 if air else clampf(spd / WALK, 0.0, 1.0), minf(dt * 8.0, 1.0))
 	# Ekran sarsılması ~%65 azaltıldı: kaymak gibi akıcı yürüyüş ve koşu!
@@ -1942,6 +1969,162 @@ func _animate(dt: float) -> void:
 	head.rotation.y = lerp_angle(head.rotation.y, rig.rotation.y + rel, minf(dt * 20.0, 1.0))
 	head.rotation.x = lerpf(head.rotation.x, -look_pitch * 0.6 + head_tilt_tp, f)
 	head.rotation.z = lerpf(head.rotation.z, -sin(phase) * 0.045 * kw, f)
+
+
+# ---------- Berber / Terzi görünümü ----------
+
+func _set_self_visible(on: bool) -> void:
+	var mode := GeometryInstance3D.SHADOW_CASTING_SETTING_ON if on else GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
+	for n in ["Body", "Head"]:
+		for mi in parts[n].find_children("*", "MeshInstance3D", true, false):
+			(mi as GeometryInstance3D).cast_shadow = mode
+
+
+static func _invisible_mat() -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.albedo_color = Color(0, 0, 0, 0)
+	return m
+
+
+func _load_look() -> void:
+	var cf := ConfigFile.new()
+	if cf.load(LOOK_FILE) == OK:
+		for k in look:
+			look[k] = int(cf.get_value("look", k, look[k]))
+	_apply_look()
+	if Net.online():
+		rpc_set_look.rpc(look)
+
+
+func _save_look() -> void:
+	var cf := ConfigFile.new()
+	for k in look:
+		cf.set_value("look", k, look[k])
+	cf.save(LOOK_FILE)
+
+
+## Host (satın alma sonrası) ya da sahibi çağırır: herkeste görünüm güncellenir.
+func set_look_synced(kind: String, value: int) -> void:
+	var nl := look.duplicate()
+	nl[kind] = value
+	if Net.online():
+		rpc_set_look.rpc(nl)
+	else:
+		rpc_set_look(nl)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func rpc_set_look(nl: Dictionary) -> void:
+	if Net.online() and multiplayer.get_remote_sender_id() not in [0, 1, get_multiplayer_authority()]:
+		return
+	for k in look:
+		if nl.has(k):
+			look[k] = int(nl[k])
+	_apply_look()
+	if is_multiplayer_authority():
+		_save_look()
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func rpc_ask_look() -> void:
+	if is_multiplayer_authority():
+		rpc_set_look.rpc_id(multiplayer.get_remote_sender_id(), look)
+
+
+func _look_color(kind: String, fallback: Color) -> Color:
+	var idx := int(look.get(kind, -1))
+	var opts: Array = Shops.LOOKS[kind]["opts"]
+	return opts[idx] if idx >= 0 and idx < opts.size() else fallback
+
+
+func _apply_look() -> void:
+	if _look_extra == null:
+		return
+	var hc := _look_color("hcol", _base_hair)
+	var sc := _look_color("shirt", _base_shirt)
+	for m in _hair_mats:
+		m.albedo_color = hc
+	for m in _shirt_mats:
+		m.albedo_color = sc
+	var hair := int(look["hair"])
+	var hat := int(look["hat"])
+	var inv := _invisible_mat()
+	for e in _hair_surf:
+		(e[0] as MeshInstance3D).set_surface_override_material(int(e[1]), inv if hair == 1 else e[2])
+	for e in _hat_surf:
+		(e[0] as MeshInstance3D).set_surface_override_material(int(e[1]), null if hat == 0 else inv)
+	for c in _look_extra.get_children():
+		c.queue_free()
+	var x := Node3D.new()
+	_look_extra.add_child(x)
+	var bare := hat == 1 # şapkasızken tepe saçı görünür
+	match hair:
+		2: # Kıvırcık: tepe ve ense bukleleri
+			for i in 14:
+				var a := float(i) / 14.0 * TAU
+				var r := 0.2 + 0.06 * float(i % 2)
+				var p := Vector3(cos(a) * r, 0.2 + 0.05 * float(i % 3), sin(a) * r - 0.02)
+				if bare or p.y < 0.2 or p.z < -0.1:
+					LP.add(x, LP.sphere(0.075, 6, 4), p, hc, Vector3.ZERO, 0.9)
+			if bare:
+				LP.add(x, LP.sphere(0.12, 7, 5), Vector3(0, 0.27, 0.0), hc, Vector3.ZERO, 0.9)
+		3: # Jöleli dik: parlak sivri tutamlar
+			if bare:
+				for i in 7:
+					var zz := -0.15 + float(i) * 0.06
+					var xx := 0.05 * (float(i % 3) - 1.0)
+					LP.add(x, LP.prism(Vector3(0.09, 0.16, 0.09)), Vector3(xx, 0.32, zz), hc, Vector3(-0.25, 0, 0.15 * (float(i % 3) - 1.0)), 0.25, 0.2)
+				LP.add(x, LP.ellipsoid(0.29, 0.1, 0.31, 9, 5), Vector3(0, 0.2, 0.0), hc, Vector3.ZERO, 0.3)
+		4: # Yandan ayrık: düz taranmış kubbe + ayrım çizgisi
+			if bare:
+				LP.add(x, LP.ellipsoid(0.315, 0.13, 0.335, 10, 6), Vector3(0.0, 0.2, 0.0), hc, Vector3.ZERO, 0.45)
+				LP.add(x, LP.box(Vector3(0.012, 0.01, 0.3)), Vector3(0.1, 0.33, 0.02), Color(0.86, 0.68, 0.55), Vector3(0, 0, 0.3))
+	match int(look["must"]):
+		1: # İnce bıyık
+			LP.add(x, LP.box(Vector3(0.15, 0.022, 0.03)), Vector3(0, -0.07, 0.345), hc, Vector3.ZERO, 0.8)
+		2: # Pala bıyık: iki kalın, uçları aşağı kıvrık
+			for sx: float in [-1.0, 1.0]:
+				LP.add(x, LP.ellipsoid(0.085, 0.032, 0.035, 7, 4), Vector3(sx * 0.07, -0.075, 0.34), hc, Vector3(0, 0, sx * -0.35), 0.85)
+				LP.add(x, LP.ellipsoid(0.03, 0.05, 0.03, 6, 4), Vector3(sx * 0.145, -0.11, 0.325), hc, Vector3(0, 0, sx * 0.3), 0.85)
+	match hat:
+		2: # Takke: beyaz örgü takke
+			LP.add(x, LP.ellipsoid(0.305, 0.13, 0.32, 10, 5), Vector3(0, 0.215, 0.0), Color(0.96, 0.95, 0.92), Vector3.ZERO, 0.95)
+			LP.add(x, LP.cyl(0.305, 0.31, 0.025, 12), Vector3(0, 0.19, 0.0), Color(0.86, 0.85, 0.82), Vector3.ZERO, 0.95)
+		3: # Fötr: koyu kahve geniş siperlik + bantlı tepe
+			var fc := Color(0.24, 0.17, 0.12)
+			LP.add(x, LP.cyl(0.44, 0.44, 0.025, 14), Vector3(0, 0.2, 0.02), fc, Vector3.ZERO, 0.85)
+			LP.add(x, LP.cyl(0.25, 0.28, 0.2, 12), Vector3(0, 0.31, 0.02), fc, Vector3.ZERO, 0.85)
+			LP.add(x, LP.cyl(0.282, 0.282, 0.045, 12), Vector3(0, 0.235, 0.02), Color(0.1, 0.08, 0.07), Vector3.ZERO, 0.7)
+	if is_multiplayer_authority() and not npc and _mirror_t <= 0.0:
+		for mi in x.find_children("*", "MeshInstance3D", true, false):
+			(mi as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
+
+
+## Satın almadan sonra 3.5 sn ayna: kamera yüzün önüne geçip sana bakar.
+func show_mirror() -> void:
+	_mirror_t = 3.5
+	_set_self_visible(true)
+	if _fp_item_anchor:
+		_fp_item_anchor.visible = false
+	for mi in _look_extra.find_children("*", "MeshInstance3D", true, false):
+		(mi as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+
+
+func _mirror_camera(dt: float) -> void:
+	_mirror_t -= dt
+	var ht := (parts["Head"] as Node3D).global_transform
+	var fwd := ht.basis.z
+	fwd.y = 0.0
+	fwd = fwd.normalized() if fwd.length_squared() > 0.001 else Vector3(0, 0, 1)
+	var eye := ht.origin + fwd * 1.2 + Vector3(0, 0.08, 0)
+	var target := Transform3D(Basis.looking_at(ht.origin - eye, Vector3.UP), eye)
+	cam_root.global_transform = cam_root.global_transform.interpolate_with(target, minf(dt * 8.0, 1.0))
+	if _mirror_t <= 0.0:
+		_set_self_visible(false)
+		_apply_look()
+		if _fp_item_anchor:
+			_fp_item_anchor.visible = true
 
 
 # ---------- Bira ve sarhoşluk ----------

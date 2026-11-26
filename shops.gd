@@ -17,10 +17,23 @@ const SHOPS := {
 	"telefoncu": {"sign": "TELEFONCU", "name": "Telefoncu", "icon": "📱", "open": [0.30, 0.85],
 		"items": ["megafon", "radyo"], "upgrades": []},
 	"berber": {"sign": "BERBER", "name": "Berber", "icon": "💈", "open": [0.0, 0.80],
-		"items": [], "upgrades": []},
+		"items": [], "upgrades": [], "looks": ["hair", "hcol", "must"]},
 	"terzi": {"sign": "TERZİ", "name": "Terzi", "icon": "🧵", "open": [0.0, 0.80],
-		"items": [], "upgrades": []},
+		"items": [], "upgrades": [], "looks": ["shirt", "hat"]},
 }
+
+## Berber / terzi görünüm seçenekleri: tür -> {başlık, fiyat, seçenekler}. Renk seçenekleri Color, diğerleri ad.
+const LOOKS := {
+	"hair": {"title": "✂️ Saç", "cost": 25, "opts": ["Kısa", "Kel", "Kıvırcık", "Jöleli Dik", "Yandan Ayrık"]},
+	"hcol": {"title": "🎨 Saç Rengi", "cost": 10, "opts": [Color(0.2, 0.12, 0.07), Color(0.08, 0.06, 0.05),
+		Color(0.75, 0.55, 0.25), Color(0.55, 0.22, 0.1), Color(0.4, 0.28, 0.18), Color(0.85, 0.8, 0.7)]},
+	"must": {"title": "🥸 Bıyık", "cost": 15, "opts": ["Yok", "İnce", "Pala"]},
+	"shirt": {"title": "👕 Gömlek Rengi", "cost": 20, "opts": [Color(0.85, 0.2, 0.18), Color(0.2, 0.5, 0.9),
+		Color(0.98, 0.75, 0.15), Color(0.3, 0.75, 0.35), Color(0.65, 0.35, 0.85), Color(1.0, 0.5, 0.7),
+		Color(0.15, 0.75, 0.75), Color(1.0, 0.55, 0.15), Color(0.95, 0.95, 0.93), Color(0.15, 0.15, 0.17)]},
+	"hat": {"title": "🧢 Şapka", "cost": 30, "opts": ["Kasket", "Yok", "Takke", "Fötr"]},
+}
+
 
 static func id_for_sign(sign: String) -> String:
 	for k in SHOPS:

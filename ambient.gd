@@ -49,10 +49,10 @@ const CAT_COLS := [
 enum PState { GROUND, FLY_UP, PERCHED, RETURN, FEED }
 
 const VENDOR_OFFERS := {
-	"cay": {"price": 5, "hint": "[E] 🍵 İnce belli çay al — 5 TL  (eline al & yudumla!)",
-		"ask": "Abi çay ister misin?\nTavşan kanı, 5 lira!", "thanks": "Afiyet olsun abi, sıcak iç!", "bye": "Sonra uğrarım abi!"},
-	"simit": {"price": 10, "hint": "[E] 🥯 Sıcak simit al — 10 TL  (eline al & ısır!)",
-		"ask": "Sıcak simit abi?\nÇıtır çıtır, 10 lira!", "thanks": "Bereket versin abi, çıtır çıtır!", "bye": "Kolay gelsin abi!"},
+	"cay": {"price": 12, "hint": "[E] 🍵 Ayağına gelen çay — 12 TL  (Kıraathanede 10 TL)",
+		"ask": "Abi çay ister misin?\nTavşan kanı, 12 lira!", "thanks": "Afiyet olsun abi, sıcak iç!", "bye": "Sonra uğrarım abi!"},
+	"simit": {"price": 18, "hint": "[E] 🥯 Ayağına gelen simit — 18 TL  (Fırında 15 TL)",
+		"ask": "Sıcak simit abi?\nÇıtır çıtır, 18 lira!", "thanks": "Bereket versin abi, çıtır çıtır!", "bye": "Kolay gelsin abi!"},
 }
 
 var bazaar: Node3D
@@ -632,6 +632,7 @@ func vendor_purchase(area: Area3D) -> void:
 			lbl.text = str(VENDOR_OFFERS[p["kind"]]["thanks"])
 			lbl.visible = true
 			p["lbl_t"] = 2.4
+			p.erase("call")
 			p["wait"] = 2.0 # teşekkür edip bir an bekler, sonra dolaşmaya devam
 			return
 
@@ -704,11 +705,74 @@ func _build_people() -> void:
 	_people.append(cay)
 
 
+## [T] "Çaycı!": kıraathane çaycısı seslenen oyuncunun yanına gelir ve 30 sn bekler (bu bilgisayarda yerel).
+func call_cay_to(world_pos: Vector3) -> bool:
+	for p in _people:
+		if p["kind"] == "cay":
+			var t := to_local(world_pos)
+			t.y = (p["root"] as Node3D).position.y
+			p["call"] = t
+			p["call_t"] = 40.0
+			p["wait"] = 0.0
+			var lbl: Label3D = p["label"]
+			lbl.text = "Geliyorum abi! 🍵"
+			lbl.visible = true
+			p["lbl_t"] = 2.4
+			return true
+	return false
+
+
+func _tick_called(p: Dictionary, dt: float) -> bool:
+	if not p.has("call"):
+		return false
+	p["call_t"] = float(p["call_t"]) - dt
+	if float(p["call_t"]) <= 0.0:
+		p.erase("call")
+		return false
+	var root: Node3D = p["root"]
+	var legs: Array[Node3D] = p["legs"]
+	var lbl: Label3D = p["label"]
+	if lbl.visible:
+		p["lbl_t"] = float(p["lbl_t"]) - dt
+		if float(p["lbl_t"]) <= 0.0:
+			lbl.visible = false
+	var target: Vector3 = p["call"]
+	var to := target - root.position
+	to.y = 0.0
+	var d := to.length()
+	if d < 0.9:
+		# Vardı: oyuncuya dönüp teklif eder, satın alınana ya da süre bitene kadar bekler
+		var pl := _local_player()
+		if pl:
+			var tp := pl.global_position - root.global_position
+			root.rotation.y = lerp_angle(root.rotation.y, atan2(-tp.x, -tp.z), dt * 5.0)
+		for l in legs:
+			l.rotation.x = lerpf(l.rotation.x, 0.0, dt * 6.0)
+		if not lbl.visible and float(p.get("ask_cd", 0.0)) <= 0.0:
+			lbl.text = str(VENDOR_OFFERS[p["kind"]]["ask"])
+			lbl.visible = true
+			p["lbl_t"] = 3.0
+			p["ask_cd"] = 7.0
+		p["ask_cd"] = float(p.get("ask_cd", 0.0)) - dt
+		return true
+	var dir := to / d
+	dir = StallScript.steer_all(self, root.position, dir, d - 0.2)
+	root.position = StallScript.keepout_all(self, root.position + dir * minf(d, 1.7 * dt))
+	root.rotation.y = lerp_angle(root.rotation.y, atan2(-dir.x, -dir.z), dt * 6.0)
+	var ph := _t * 8.0
+	legs[0].rotation.x = sin(ph) * 0.5
+	legs[1].rotation.x = -sin(ph) * 0.5
+	(p["body"] as Node3D).position.y = absf(sin(ph)) * 0.03
+	return true
+
+
 func _tick_person(p: Dictionary, dt: float) -> void:
 	var root: Node3D = p["root"]
 	var legs: Array[Node3D] = p["legs"]
 	var arms: Array[Node3D] = p["arms"]
 	var lbl: Label3D = p["label"]
+	if _tick_called(p, dt):
+		return
 	if _tick_near_player(p, dt):
 		return
 	# Bağırma balonu

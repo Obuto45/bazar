@@ -51,7 +51,7 @@ E  kasa al / sat / yakala / korna
 Sol Tık  ürün diz (basılı tut) / eşya kullan
 Q  kasayı fırlat   •   Tekerlek / Z-X  fiyat
 B / Mikrofon  bağır   •   R  pazarlığa "olmaz"
-F  tezgah zili   •   Dükkan kapısına bak + E  alışveriş
+F  tezgah zili   •   T  çaycıyı çağır   •   Dükkan kapısına bak + E  alışveriş
 Tab  skor tablosu   •   M  mikrofon aç/kapa
 H  rehber adımını geç   •   ESC  menü"""
 
@@ -288,7 +288,7 @@ func _setup_input() -> void:
 		"fwd": KEY_W, "back": KEY_S, "left": KEY_A, "right": KEY_D,
 		"jump": KEY_SPACE, "run": KEY_SHIFT, "mic_mute": KEY_M,
 		"interact": KEY_E, "throw_crate": KEY_Q, "price_down": KEY_Z, "price_up": KEY_X, "shout": KEY_B,
-		"refuse_offer": KEY_R, "ring_bell": KEY_F, "scoreboard": KEY_TAB,
+		"refuse_offer": KEY_R, "ring_bell": KEY_F, "scoreboard": KEY_TAB, "call_tea": KEY_T,
 		"tutorial_skip": KEY_H,
 	}
 	for a in keys:

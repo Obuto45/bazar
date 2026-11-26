@@ -683,6 +683,9 @@ func _unhandled_input(e: InputEvent) -> void:
 		return
 	if _ko_phase != 0:
 		return
+	if e.is_action_pressed("call_tea") and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+		_call_cay()
+		return
 	if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
 		_place_held = false
 		return
@@ -2637,6 +2640,27 @@ func _day_progress() -> float:
 	if main and main.has_method("_day_prog"):
 		return float(main.call("_day_prog"))
 	return 0.4
+
+
+var _cay_call_cd := 0.0
+
+
+## [T]: "Çaycııı!" — kıraathane çaycısı yanına gelir (ayağına gelen çay biraz pahalı).
+func _call_cay() -> void:
+	var now := Time.get_ticks_msec() * 0.001
+	if now < _cay_call_cd:
+		_toast("🍵 Çaycı zaten yolda", Color(0.9, 0.85, 0.7))
+		return
+	var amb := get_tree().get_first_node_in_group("ambient")
+	if amb == null or not amb.has_method("call_cay_to"):
+		return
+	var fwd := -cam.global_transform.basis.z if cam else Vector3(0, 0, -1)
+	fwd.y = 0.0
+	if amb.call_cay_to(global_position + fwd.normalized() * 1.1):
+		_cay_call_cd = now + 25.0
+		_toast("📣 Çaycııı, bir çay!", Color(1.0, 0.85, 0.55))
+		var w := _find_world()
+		VFX.spawn_floating_text(w, global_position + Vector3(0, 2.0, 0), "📣 Çaycııı!", Color(1.0, 0.85, 0.5), 38)
 
 
 func _toast(msg: String, col := Color(1.0, 0.94, 0.78)) -> void:

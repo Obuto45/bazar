@@ -34,6 +34,7 @@ Oyun her açılışta yeni sürüm var mı bakar; varsa kendini günceller ve ye
 | **B** veya mikrofon | bağır (müşteri çek) |
 | **R** | pazarlığa "olmaz" de / radyoyu geri al |
 | **F** | tezgah zili |
+| **T** | "Çaycııı!" — çaycı yanına gelir (ayağına çay 12 TL, kıraathanede 10 TL) |
 | **E** (dükkan kapısına bakarak) | arka sokaktaki dükkandan alışveriş |
 | **Tab** | skor tablosu |
 | **M** | mikrofon aç/kapa |
@@ -59,7 +60,7 @@ Oyun içinde alttaki ipucu satırı duruma göre değişir (kasa elde, tezgah bo
 
 - **Gerçekçi Türk Semt Pazarı:** Dokulu asfalt cadde, kaldırım bordürleri, demir iskele üstü mavi/yeşil/çizgili brandalar, sallanan ampuller, plastik hal kasaları, Türk mahalle apartmanları ve Kuzey/Güney Giriş-Çıkış kapıları.
 - **Ford Transit Toptancı ("GARDAŞLAR SEBZE MEYVE"):** Havalı korna çalarak Kuzey Kapısından pazara girer, dörtlülerini yakıp park eder ve oyun başına bir kez gelir (geri sayım HUD'da). Her çeşitten **tek kasa** satar; fiyatlar farklıdır (ucuz / pahalı), bazıları **%20-40 indirimli** etiketlidir. İlk gelen alır, stok sınırlıdır. Kabine `[E]` ile korna çaldırabilirsin.
-- **Arka Sokaktaki Dükkanlar:** Pazarın iki yanındaki gerçek dükkanların kapısına bakıp `[E]` ile alışveriş yapılır; her dükkanın açılış saati vardır (kapalıyken kepenk iner). **Tekel Bayi** (tombul mavi şişe bira, sigara, puro; öğlen açılır), **Fırın** (simit, açma; akşam kapanır), **Kıraathane** (çay), **Market** (meyve bıçağı, su fısfısı), **Nalbur** (tezgah geliştirmeleri; akşam pazarında kapanır), **Telefoncu** (megafon, radyo), **Berber**, **Terzi**. Dükkana gitmek tezgahı sahipsiz bırakmak demek!
+- **Arka Sokaktaki Dükkanlar:** Pazarın iki yanındaki gerçek dükkanların kapısına bakıp `[E]` ile alışveriş yapılır; her dükkanın açılış saati vardır (kapalıyken kepenk iner). **Tekel Bayi** (tombul mavi şişe bira, sigara, puro; öğlen açılır), **Fırın** (simit, açma; akşam kapanır), **Kıraathane** (çay), **Market** (meyve bıçağı, su fısfısı), **Nalbur** (tezgah geliştirmeleri, tezgah genişletme, nazar boncuğu / flama / sardunya / "Bereket" tabelası süsleri, akşamları yanan ampul zinciri; akşam pazarında kapanır), **Telefoncu** (megafon, radyo), **Berber**, **Terzi**. Dükkana gitmek tezgahı sahipsiz bırakmak demek!
 - **Bira ve Sarhoşluk:** Her şişe bağırmayı güçlendirir (+%30 / +%50) ama kamera sallanır, 2. şişeden sonra fiyat ayarı kayar. 3. şişede gözler kapanır ve ~8 sn bayılırsın. Zabıta sarhoş esnafa 25 TL ceza keser, teyze ve emekli amca sarhoştan almaz ve laf sokar. Çay her yudumda bir kademe ayıltır.
 - **Berber ve Terzi:** Berberde saç (kısa, kel, kıvırcık, jöleli dik, yandan ayrık), saç rengi ve bıyık (ince, pala); terzide gömlek rengi ve şapka (kasket, takke, fötr ya da şapkasız). Alınca 3.5 sn aynada kendini görürsün; görünüm kaydedilir ve diğer oyuncular da seni böyle görür.
 - **Kedi ve Kuş Besleme:** Simit veya açmadan sağ tıkla parça at: güvercinler toplanır, gezgin tekir yer ve sonra tezgahının yanına gelip bir süre miyavlar.

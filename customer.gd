@@ -1226,6 +1226,11 @@ func _speed_mult() -> float:
 var _drunk_scold_cd := 0.0
 
 
+func _evening() -> bool:
+	var sc := get_tree().current_scene
+	return sc != null and sc.has_method("_day_prog") and float(sc.call("_day_prog")) >= 0.80
+
+
 func _say(txt: String, dur := 3.2) -> void:
 	if txt == "":
 		return
@@ -1518,8 +1523,8 @@ func _evaluate_stalls(only_louder_override: bool) -> void:
 
 		# Ek çekicilik bonusları: Süslü Işıklar, Arabesk Radyo, Küba Purosu Prestiji!
 		var charm := 0.0
-		if st.has_upgrade("lights"):
-			charm += 0.18
+		if st.has_upgrade("lights") and _evening():
+			charm += 0.10 # ampuller akşam pazarında yanar
 		if st.has_radio and st.radio_playing:
 			charm += 0.18 if archetype != Archetype.EMEKLI else 0.3 # amca arabeske bayılır
 		if owner and owner.has_method("has_prestige_aura") and owner.has_prestige_aura():

@@ -13,7 +13,7 @@ const SHOPS := {
 	"market": {"sign": "MARKET", "name": "Market", "icon": "🛒", "open": [0.0, 1.01],
 		"items": ["bicak", "sopa", "spray"], "upgrades": []},
 	"nalbur": {"sign": "NALBUR", "name": "Nalbur", "icon": "🔧", "open": [0.0, 0.80],
-		"items": [], "upgrades": ["megaphone", "lights", "big_crate", "bell"], "expand": true},
+		"items": [], "upgrades": ["megaphone", "lights", "big_crate", "bell", "nazar", "flama", "saksi", "tabela"], "expand": true},
 	"telefoncu": {"sign": "TELEFONCU", "name": "Telefoncu", "icon": "📱", "open": [0.30, 0.85],
 		"items": ["megafon", "radyo"], "upgrades": []},
 	"berber": {"sign": "BERBER", "name": "Berber", "icon": "💈", "open": [0.0, 0.80],

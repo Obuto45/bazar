@@ -26,7 +26,7 @@ const UPGRADES := {
 	"lights": {
 		"name": "Süslü Tente & Işıklar",
 		"cost": 100,
-		"desc": "Tezgahın ışıl ışıl parlar; pasif müşteri cazibesi +%22 artar.",
+		"desc": "Renkli ampul zinciri. Akşam pazarında yanar, müşteri ilgisi +%10; gündüz süs.",
 	},
 	"big_crate": {
 		"name": "Geniş Kasa & Hızlı Dizim",
@@ -38,8 +38,28 @@ const UPGRADES := {
 		"cost": 90,
 		"desc": "Tezgaha zil ekler: [E] veya [F] ile çal, 10 sn güçlü müşteri çek!",
 	},
+	"nazar": {
+		"name": "Nazar Boncuğu",
+		"cost": 20,
+		"desc": "Tentenin önünde sallanan kocaman nazar boncuğu. Sadece süs (ama nazar değmez!).",
+	},
+	"flama": {
+		"name": "Renkli Flama",
+		"cost": 30,
+		"desc": "Tentenin önüne üçgen bayraklı flama ipi. Sadece süs.",
+	},
+	"saksi": {
+		"name": "Sardunya Saksısı",
+		"cost": 25,
+		"desc": "Tezgah köşesine kırmızı sardunyalı teneke saksı. Sadece süs.",
+	},
+	"tabela": {
+		"name": "\"Bereket\" Tabelası",
+		"cost": 40,
+		"desc": "Tentenin üstüne el yazısı \"Bereket Versin\" tabelası. Sadece süs.",
+	},
 }
-const UPGRADE_ORDER := ["megaphone", "lights", "big_crate", "bell"]
+const UPGRADE_ORDER := ["megaphone", "lights", "big_crate", "bell", "nazar", "flama", "saksi", "tabela"]
 const SLOT_SPACING := 0.8
 const KEEPOUT_BACK := -1.3 # NPC yasak bölgesi: tezgah + arka alan (yerel z)
 const KEEPOUT_FRONT := 1.2
@@ -591,6 +611,58 @@ func _build_upgrade_attachments() -> void:
 	bell.hide()
 	add_child(bell)
 	_upgrade_visuals["bell"] = bell
+
+	# --- Nalbur süsleri (yalnızca görünüş) ---
+	var nazar := Node3D.new()
+	nazar.position = Vector3(0, 2.34, 1.22)
+	LP.add(nazar, LP.cyl(0.004, 0.004, 0.3, 4), Vector3(0, 0.15, 0), Color(0.15, 0.15, 0.2))
+	var rings := [[0.15, Color(0.06, 0.18, 0.62)], [0.105, Color(0.96, 0.96, 0.98)], [0.07, Color(0.45, 0.75, 0.98)], [0.035, Color(0.05, 0.05, 0.08)]]
+	for k in rings.size():
+		var rr: Array = rings[k]
+		LP.add(nazar, LP.cyl(float(rr[0]), float(rr[0]), 0.03, 14), Vector3(0, -0.12, 0.002 * float(k)), rr[1], Vector3(PI / 2, 0, 0), 0.18, 0.1)
+	nazar.hide()
+	add_child(nazar)
+	_upgrade_visuals["nazar"] = nazar
+
+	var flama := Node3D.new()
+	var fw := half_width() * 2.0 - 0.2
+	LP.add(flama, LP.box(Vector3(fw, 0.008, 0.008)), Vector3(0, 2.62, 1.24), Color(0.85, 0.85, 0.8))
+	var fcols := [Color(0.9, 0.15, 0.15), Color(0.98, 0.82, 0.12), Color(0.15, 0.55, 0.9), Color(0.2, 0.7, 0.3), Color(0.95, 0.95, 0.95)]
+	var nf := int(fw / 0.28)
+	for i in nf:
+		var fx := -fw * 0.5 + (float(i) + 0.5) * fw / float(nf)
+		var sag := -0.06 * sin(float(i) / float(maxi(nf - 1, 1)) * PI)
+		LP.add(flama, LP.prism(Vector3(0.16, 0.2, 0.01)), Vector3(fx, 2.52 + sag, 1.24), fcols[i % fcols.size()], Vector3(0, 0, PI), 0.6)
+	flama.hide()
+	add_child(flama)
+	_upgrade_visuals["flama"] = flama
+
+	var saksi := Node3D.new()
+	saksi.position = Vector3(half_width() - 0.2, 0.58, 0.6)
+	LP.add(saksi, LP.cyl(0.1, 0.09, 0.17, 10), Vector3(0, 0.085, 0), Color(0.78, 0.76, 0.72), Vector3.ZERO, 0.4, 0.6)
+	LP.add(saksi, LP.cyl(0.103, 0.103, 0.04, 10), Vector3(0, 0.11, 0), Color(0.85, 0.65, 0.15), Vector3.ZERO, 0.5)
+	LP.add(saksi, LP.ellipsoid(0.13, 0.09, 0.13, 7, 4), Vector3(0, 0.22, 0), Color(0.22, 0.5, 0.2), Vector3.ZERO, 0.9)
+	for i in 6:
+		var a := float(i) * TAU / 6.0
+		LP.add(saksi, LP.sphere(0.04, 6, 3), Vector3(cos(a) * 0.08, 0.3 + 0.03 * float(i % 2), sin(a) * 0.08), Color(0.9, 0.1, 0.15), Vector3.ZERO, 0.7)
+	saksi.hide()
+	add_child(saksi)
+	_upgrade_visuals["saksi"] = saksi
+
+	var tabela := Node3D.new()
+	tabela.position = Vector3(0, 3.5, 1.1) # tezgah adı ve yıldız yazısının üstünde
+	LP.add(tabela, LP.box(Vector3(1.3, 0.34, 0.04)), Vector3.ZERO, Color(0.96, 0.92, 0.78))
+	LP.add(tabela, LP.box(Vector3(1.36, 0.4, 0.03)), Vector3(0, 0, -0.012), Color(0.55, 0.12, 0.1))
+	var tl := Label3D.new()
+	tl.text = "Bereket Versin"
+	tl.font_size = 40
+	tl.outline_size = 0
+	tl.modulate = Color(0.6, 0.1, 0.08)
+	tl.position = Vector3(0, 0, 0.025)
+	tabela.add_child(tl)
+	tabela.hide()
+	add_child(tabela)
+	_upgrade_visuals["tabela"] = tabela
 
 
 func _show_upgrade_visual(key: String) -> void:

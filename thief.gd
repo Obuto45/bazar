@@ -109,6 +109,7 @@ func _build_visual() -> void:
 		cols.erase("Shirt")
 		cols.erase("Shoe")
 		cols["Stubble"] = skin.darkened(0.14)
+		cols["Fade"] = skin.darkened(0.3)
 	for n in PART_NAMES:
 		var m: Node3D = src.find_child(n, true, false)
 		var w := Node3D.new()

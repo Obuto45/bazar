@@ -726,7 +726,7 @@ def build_simitci():
 
 
 def build_hirsiz():
-    """Tas kafa hırsız: sıfır numara tıraş, siyah şişme mont, spor ayakkabı, çatık kaş, yara bandı."""
+    """Keko tıraşlı hırsız: yanlar kazınmış, üstü jöleli, siyah şişme mont, spor ayakkabı, çatık kaş, yara bandı."""
     v = Variant("hirsiz", {
         "Shirt": (0.07, 0.07, 0.08), "Pants": (0.2, 0.24, 0.34), "Shoe": (0.96, 0.96, 0.96), "Sole": (0.85, 0.15, 0.15),
         "Skin": (0.88, 0.68, 0.53), "Lid": (0.82, 0.62, 0.48), "SkinLid": (0.85, 0.65, 0.5)})
@@ -734,8 +734,20 @@ def build_hirsiz():
     delete_mats(head, ["Hat", "HatDetail"])
     head_hair_op(head, v, brow="Brow", mustache=None, cap=None, side=None, brow_scale=1.2, brow_tilt=-0.5)
     v.mat("Brow", (0.12, 0.09, 0.07), rough=0.9)
-    # tas kafa: saç yok, parlak kafa derisi
-    v.mats["Skin"].node_tree.nodes["Principled BSDF"].inputs["Roughness"].default_value = 0.38
+    # keko tıraşı: yanlar/ense sıfıra yakın kazınmış (Fade), üstte jöleli dikleştirilmiş kısa saç
+    # bloğu (Hair), arada net çizgi + yanda kazınmış "çizik"
+    fade = v.mat("Fade", (0.5, 0.38, 0.32), rough=1.0)
+    add_sphere(head, fade, (0.296, 0.295, 0.297), Vector((0, 0.003, 0.004)), seg=36, rings=18,
+               cut=lambda d: (d.y < -0.28 and d.z < 0.62) or d.z < -0.22)
+    hm = v.mat("Hair", (0.08, 0.06, 0.05), rough=0.35)
+    add_sphere(head, hm, (0.312, 0.312, 0.335), Vector((0, 0.01, 0.0)), seg=36, rings=20, cut=lambda d: d.z < 0.6)
+    # önde jöleyle dikleştirilmiş tutamlar (alın çizgisi boyunca)
+    for x in (-0.15, -0.09, -0.03, 0.03, 0.09, 0.15):
+        y = -math.sqrt(max(0.0, 0.245 ** 2 - x * x)) + 0.02
+        add_cyl(head, hm, 0.042, 0.003, 0.085, Vector((x, y - 0.02, 0.25)), rot=(-0.6, x * 1.8, 0), seg=10)
+    for x, y in ((-0.06, -0.08), (0.05, -0.06), (0.0, 0.05), (-0.1, 0.03), (0.1, 0.04)):
+        add_cyl(head, hm, 0.045, 0.003, 0.06, Vector((x, y, 0.335 - (x * x + y * y) * 0.5)), rot=(-0.25, x, 0), seg=10)
+    add_tube(head, v.mats["Skin"], [(0.287, -0.06, 0.14), (0.293, 0.0, 0.135), (0.288, 0.06, 0.15)], 0.007, seg=6)
     # sakal gölgesi (çene)
     add_sphere(head, v.mat("Stubble", (0.72, 0.56, 0.47), rough=1.0), (0.19, 0.2, 0.12), Vector((0, -0.085, -0.19)), seg=24, rings=12,
                cut=lambda d: d.y > -0.3 or d.z > -0.05)

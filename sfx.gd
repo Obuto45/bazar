@@ -48,7 +48,14 @@ var _rain_player: AudioStreamPlayer
 var _wind_player: AudioStreamPlayer
 var _weather := "clear"
 var _thunder_timer := 20.0
-var _radio_players: Array = [] # arabesk döngüsü hazır olmadan oluşturulan radyolar (WeakRef)
+## Radyo: Pixabay İçerik Lisanslı 10 arabesk parça (kaynaklar audio/radio/KAYNAKLAR.md). Her radyo kendi sırasıyla çalar.
+const RADIO_TRACKS: Array[String] = [
+	"res://audio/radio/askin_kaderi.ogg", "res://audio/radio/ayrilamam.ogg", "res://audio/radio/bilemezsin.ogg",
+	"res://audio/radio/bu_sevda_degil.ogg", "res://audio/radio/dus_bahcesi.ogg", "res://audio/radio/goruyorum.ogg",
+	"res://audio/radio/gulusum_var.ogg", "res://audio/radio/harap_oldum.ogg", "res://audio/radio/kirik_saatler.ogg",
+	"res://audio/radio/yanimda_kal.ogg",
+]
+var _radio_streams := {} # yol -> AudioStream (ilk kullanımda yüklenir)
 var _gen_task := -1
 var _gen_abort := false
 
@@ -107,7 +114,6 @@ func _bg_jobs() -> Array:
 		["thunder", _synth_thunder],
 		# uzun döngüler
 		["menu_music", _synth_menu_music],
-		["arabesk", _synth_arabesk_loop],
 		["amb_bed", _synth_amb_bed],
 		["amb_vendor1", _synth_vendor_call.bind(0)],
 		["amb_vendor2", _synth_vendor_call.bind(1)],
@@ -141,15 +147,6 @@ func _on_bg_clip(clip_name: String, w: AudioStreamWAV, us: int) -> void:
 		"menu_music":
 			if _menu_on:
 				set_menu_music(true)
-		"arabesk":
-			for r in _radio_players:
-				var p := (r as WeakRef).get_ref() as AudioStreamPlayer3D
-				if p:
-					var was_playing := p.playing
-					p.stream = w
-					if was_playing:
-						p.play()
-			_radio_players.clear()
 		"amb_bed":
 			if _amb_on and _amb_player:
 				var pos := _amb_player.get_playback_position() if _amb_player.playing else 0.0
@@ -401,17 +398,35 @@ func _play_amb_3d(clip: String, vol_db: float, pitch: float, height: float, swee
 func make_radio_player() -> AudioStreamPlayer3D:
 	var p := AudioStreamPlayer3D.new()
 	p.bus = BUS_SFX
-	if _clips.has("arabesk"):
-		p.stream = _clips["arabesk"]
-	else:
-		# Döngü arka planda üretiliyor: sessiz yer tutucu ile başla, hazır olunca değiştirilir.
-		p.stream = _clips["silence"]
-		_radio_players.append(weakref(p))
+	var idx := randi() % RADIO_TRACKS.size()
+	p.set_meta("radio_idx", idx)
+	p.stream = _radio_stream(idx)
+	p.finished.connect(radio_next.bind(p, true)) # parça bitince sıradakine geç
 	p.volume_db = -5.0
 	p.unit_size = 4.2
 	p.max_distance = 19.0
 	p.attenuation_model = AudioStreamPlayer3D.ATTENUATION_INVERSE_DISTANCE
 	return p
+
+
+func _radio_stream(idx: int) -> AudioStream:
+	var path := RADIO_TRACKS[posmod(idx, RADIO_TRACKS.size())]
+	if not _radio_streams.has(path):
+		_radio_streams[path] = load(path)
+	return _radio_streams[path]
+
+
+## Radyoda sıradaki parçaya geç (aynı parça art arda gelmez). force_play: kapalıysa da çalmaya başla.
+func radio_next(p: AudioStreamPlayer3D, force_play := false) -> void:
+	if p == null or not is_instance_valid(p):
+		return
+	var n := RADIO_TRACKS.size()
+	var idx := (int(p.get_meta("radio_idx", 0)) + 1 + randi() % maxi(n - 1, 1)) % n
+	p.set_meta("radio_idx", idx)
+	var was := p.playing
+	p.stream = _radio_stream(idx)
+	if (was or force_play) and DisplayServer.get_name() != "headless":
+		p.play()
 
 
 ## Ford Transit dizel motor rölanti / sürüş sesi.
@@ -494,7 +509,7 @@ func _build_all_clips() -> void:
 	_add("megaphone_pop", _synth_megaphone_pop)
 	_add("knife_swing", _synth_knife_swing)
 	_add("knife_hit", _synth_knife_hit)
-	# "arabesk" radyo döngüsü ve v0.6 efektleri arka planda üretilir (bkz. _bg_generate / make_radio_player).
+	# v0.6 efektleri arka planda üretilir (bkz. _bg_generate / make_radio_player).
 
 
 ## İkonik Türk kamyonet / toptancı 5-borulu havalı korna (melodik brass akor fanfarı!).
@@ -883,85 +898,6 @@ func _synth_knife_hit() -> AudioStreamWAV:
 		var sting := sin(TAU * 980.0 * t) * exp(-t * 24.0) * 0.28
 		buf[i] = clampf((punch * 0.72 + lp * exp(-t * 20.0) * 0.4 + sting) * 0.85, -0.95, 0.95)
 	return _make_wav(buf)
-
-
-## Hicaz makamında (D - Eb - F# - G - A - Bb - C# - D) duygulu Arabesk yaylı + bağlama + darbuka döngüsü (8 sn)!
-func _synth_arabesk_loop() -> AudioStreamWAV:
-	var bpm := 100.0
-	var beat := 60.0 / bpm # 0.60 sn
-	var total_beats := 16.0 # 9.6 sn pürüzsüz tam cümle
-	var dur := total_beats * beat
-	var n := int(RATE * dur)
-	var buf := PackedFloat32Array()
-	buf.resize(n)
-	# Hicaz notaları (Hz): D4=293.66, Eb4=311.13, F#4=369.99, G4=392.00, A4=440.00, Bb4=466.16, C#5=554.37, D5=587.33
-	# [başlangıç_vuruş, süre_vuruş, frekans]
-	var melody := [
-		[0.0, 1.5, 440.00], [1.5, 0.5, 466.16], [2.0, 1.0, 440.00], [3.0, 1.0, 392.00],
-		[4.0, 1.5, 369.99], [5.5, 0.5, 392.00], [6.0, 1.0, 369.99], [7.0, 1.0, 311.13],
-		[8.0, 1.5, 587.33], [9.5, 0.5, 554.37], [10.0, 1.0, 466.16], [11.0, 1.0, 440.00],
-		[12.0, 1.0, 392.00], [13.0, 0.5, 369.99], [13.5, 0.5, 311.13], [14.0, 2.0, 293.66],
-	]
-	var baglama := [293.66, 440.0, 369.99, 440.0, 311.13, 440.0, 369.99, 311.13]
-	var rng := RandomNumberGenerator.new()
-	rng.seed = 1984
-	var lp_str := 0.0
-	var lead_phase := 0.0
-	var prev_freq := 440.0
-	var dum_beats := PackedFloat32Array([0.0, 2.5])
-	var tek_beats := PackedFloat32Array([1.0, 1.5, 3.0, 3.5])
-
-	for i in n:
-		var t := float(i) / float(RATE)
-		var b_pos := t / beat
-
-		# 1) Arabesk yaylı (keman/viyola) vibrato + glissando melodi
-		var target_f := 293.66
-		var m_env := 0.0
-		for nd in melody:
-			var b0: float = nd[0]; var bl: float = nd[1]; var f: float = nd[2]
-			if b_pos >= b0 and b_pos < b0 + bl:
-				target_f = f
-				var lt := (b_pos - b0) / bl
-				m_env = sin(clampf(lt / 0.14, 0.0, 1.0) * PI * 0.5) * (1.0 - maxf(lt - 0.86, 0.0) / 0.14)
-				break
-		prev_freq = lerpf(prev_freq, target_f, 0.0045) # duygulu yaylı kaydırma (glissando)
-		var vib := 1.0 + 0.013 * sin(TAU * 5.6 * t) # yoğun arabesk vibrato
-		lead_phase += TAU * (prev_freq * vib) / float(RATE)
-		var saw := sin(lead_phase) * 0.55 + sin(lead_phase * 2.0) * 0.28 + sin(lead_phase * 3.0) * 0.16 + sin(lead_phase * 4.0) * 0.08
-		lp_str += 0.24 * (saw * m_env - lp_str)
-
-		# 2) Bağlama / Ud arpeji (her yarım vuruşta)
-		var step8 := int(floor(b_pos * 2.0))
-		var st_dt := (b_pos * 2.0 - float(step8)) * (beat * 0.5)
-		var bf: float = baglama[step8 % baglama.size()] * 0.5
-		var pluck := (sin(TAU * bf * st_dt) * 0.6 + sin(TAU * bf * 2.0 * st_dt) * 0.35 + sin(TAU * bf * 3.0 * st_dt) * 0.15) * exp(-st_dt * 9.5)
-
-		# 3) Darbuka ritmi (4 vuruşluk Düm - Tek - Tek - Düm - Tek)
-		var bar_b := fmod(b_pos, 4.0)
-		var perc := 0.0
-		# Düm (0.0 ve 2.5)
-		for db: float in dum_beats:
-			var dt_d := (bar_b - db) * beat
-			if dt_d >= 0.0 and dt_d < 0.22:
-				perc += sin(TAU * lerpf(130.0, 68.0, dt_d / 0.16) * dt_d) * exp(-dt_d * 18.0) * 0.55
-		# Tek (1.0, 1.5, 3.0, 3.5)
-		for tb: float in tek_beats:
-			var dt_t := (bar_b - tb) * beat
-			if dt_t >= 0.0 and dt_t < 0.09:
-				perc += (sin(TAU * 480.0 * dt_t) * 0.4 + rng.randf_range(-1.0, 1.0) * 0.35) * exp(-dt_t * 44.0) * 0.35
-
-		# 4) Derin D2 bas dem (drone)
-		var bass := sin(TAU * 73.42 * t) * 0.18 + sin(TAU * 146.83 * t) * 0.10
-
-		buf[i] = clampf(lp_str * 0.52 + pluck * 0.28 + perc * 0.34 + bass * 0.25, -0.92, 0.92)
-	# Döngü dikişinde tıkırtı olmasın: uçlarda 6 ms'lik yumuşak geçiş (tempo korunur).
-	var edge := int(RATE * 0.006)
-	for i in edge:
-		var k := float(i) / float(edge)
-		buf[i] *= k
-		buf[n - 1 - i] *= k
-	return _make_wav(buf, true)
 
 
 func _synth_coin() -> AudioStreamWAV:

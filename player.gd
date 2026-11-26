@@ -742,9 +742,8 @@ func _use_secondary_item() -> void:
 		"radyo":
 			_sec_cd = 0.48
 			_radio_freq_idx = (_radio_freq_idx + 1) % 4
-			var freqs: Array[float] = [1.0, 1.07, 0.93, 1.14]
 			if _hand_radio_audio:
-				_hand_radio_audio.pitch_scale = freqs[_radio_freq_idx]
+				Sfx.radio_next(_hand_radio_audio) # frekans değişince başka şarkı
 			if _fp_item_visual:
 				var dial := _fp_item_visual.find_child("Dial", true, false) as MeshInstance3D
 				if dial and dial.material_override is StandardMaterial3D:

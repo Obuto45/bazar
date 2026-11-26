@@ -9,6 +9,22 @@ const BUS_SFX := "SFX"
 const BUS_AMB := "Ambience"
 const BUS_MUSIC := "Music"
 
+## Toptancı (manav) kamyoneti için rastgele çalınan 5 gerçek Hİ-DO havalı korna (mono 44.1 kHz OGG).
+const TRUCK_HORN_NAMES: Array[String] = [
+	"horn_01_islik",
+	"horn_02_salyangoz",
+	"horn_04_tekli_55cm",
+	"horn_05_ikili_duz",
+	"horn_08_arap",
+]
+const TRUCK_HORN_STREAMS: Array[AudioStream] = [
+	preload("res://audio/horns/horn_01_islik.ogg"),
+	preload("res://audio/horns/horn_02_salyangoz.ogg"),
+	preload("res://audio/horns/horn_04_tekli_55cm.ogg"),
+	preload("res://audio/horns/horn_05_ikili_duz.ogg"),
+	preload("res://audio/horns/horn_08_arap.ogg"),
+]
+
 const AMB_VOL_DB := -26.0
 const MENU_VOL_DB := -10.0
 const RAIN_VOL_DB := -20.0
@@ -161,13 +177,20 @@ func _ensure_bus(bus_name: String) -> void:
 
 
 ## Klibi döndürür. Arka planda henüz üretilmemişse (veya headless süreçteyse) o anda üretir.
-func get_clip(clip_name: String) -> AudioStreamWAV:
+func get_clip(clip_name: String) -> AudioStream:
 	if not _clips.has(clip_name):
 		for j in _bg_jobs():
 			if j[0] == clip_name:
 				_clips[clip_name] = (j[1] as Callable).call()
 				break
 	return _clips.get(clip_name, null)
+
+
+## Seçili 5 gerçek manav kornasından (0..4) istenen akışı döndürür.
+func get_truck_horn_stream(idx: int) -> AudioStream:
+	if TRUCK_HORN_STREAMS.is_empty():
+		return _clips.get("air_horn", null)
+	return TRUCK_HORN_STREAMS[posmod(idx, TRUCK_HORN_STREAMS.size())]
 
 
 func play(clip_name: String, vol_db := -4.0, pitch := 1.0, pitch_jitter := 0.06) -> void:
@@ -451,7 +474,9 @@ func _build_all_clips() -> void:
 	_add("ui_click", _synth_tick.bind(820.0))
 	_add("ambience", _synth_ambience_loop.bind(3.0))
 	_add("silence", _synth_silence)
-	# v0.5 efektleri
+	# v0.5 efektleri + 5 gerçek Hİ-DO manav kornası
+	for i in TRUCK_HORN_NAMES.size():
+		_clips[TRUCK_HORN_NAMES[i]] = TRUCK_HORN_STREAMS[i]
 	_add("air_horn", _synth_turkish_air_horn)
 	_add("air_horn_short", _synth_air_horn_short)
 	_add("truck_engine", _synth_truck_engine_loop.bind(1.6))

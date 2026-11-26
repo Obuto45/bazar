@@ -44,6 +44,15 @@ var _net_pos := Vector3(0, 0, ENTER_Z)
 var _wheel_rot := 0.0
 var _blink_t := 0.0
 var _horn_cd := 0.0
+var _last_horn_idx := -1
+
+const HORN_CALLOUTS: Array[String] = [
+	"📣 FİİİUUUV! ISLIK KORNA — TOPTANCI GELDİ!",
+	"📣 DÜÜÜT! SALYANGOZ KORNA — TOPTANCI GELDİ!",
+	"📣 BOOOONK! HAVALI KORNA — TOPTANCI GELDİ!",
+	"📣 DAAA-DAAA! İKİLİ HAVALI KORNA!",
+	"📣 DA-DA-DA-DAAA! ARAP KORNA — TOPTANCI GELDİ!",
+]
 
 var _model_root: Node3D
 var _wheels: Array[Node3D] = []
@@ -55,6 +64,7 @@ var _crate_areas: Array[Area3D] = []
 var _crate_labels: Dictionary = {} # item_id -> Label3D
 var _sign_lbl: Label3D
 var _engine_audio: AudioStreamPlayer3D
+var _horn_audio: AudioStreamPlayer3D
 var _prices: Dictionary = {}
 var _deal_item := "domates"
 var _event_item := ""
@@ -70,6 +80,14 @@ func _ready() -> void:
 	_engine_audio = Sfx.make_truck_engine_player()
 	_engine_audio.position = Vector3(0, 1.0, 2.0)
 	add_child(_engine_audio)
+	_horn_audio = AudioStreamPlayer3D.new()
+	_horn_audio.bus = Sfx.BUS_SFX
+	_horn_audio.position = Vector3(0, 2.05, 2.35)
+	_horn_audio.unit_size = 7.0
+	_horn_audio.max_distance = 58.0
+	_horn_audio.attenuation_model = AudioStreamPlayer3D.ATTENUATION_INVERSE_DISTANCE
+	_horn_audio.volume_db = 1.5
+	add_child(_horn_audio)
 	if DisplayServer.get_name() != "headless":
 		_engine_audio.play()
 	_set_rack_active(false)
@@ -379,22 +397,39 @@ func rpc_request_honk() -> void:
 		_fire_horn(false)
 
 
+func _pick_random_horn_idx() -> int:
+	var n := Sfx.TRUCK_HORN_STREAMS.size()
+	if n <= 1:
+		return 0
+	var idx := randi() % n
+	if idx == _last_horn_idx:
+		idx = (idx + 1 + randi() % (n - 1)) % n
+	_last_horn_idx = idx
+	return idx
+
+
 func _fire_horn(short_blast: bool) -> void:
-	_horn_cd = 2.0
+	_horn_cd = 2.4
+	var horn_idx := _pick_random_horn_idx()
 	if Net.online():
-		rpc_play_horn.rpc(short_blast)
+		rpc_play_horn.rpc(short_blast, horn_idx)
 	else:
-		rpc_play_horn(short_blast)
+		rpc_play_horn(short_blast, horn_idx)
 
 
 @rpc("authority", "call_local", "reliable")
-func rpc_play_horn(short_blast: bool) -> void:
-	_horn_cd = 2.0
+func rpc_play_horn(short_blast: bool, horn_idx: int = -1) -> void:
+	_horn_cd = 2.4
+	var idx := horn_idx if horn_idx >= 0 else _pick_random_horn_idx()
 	var horn_pos := global_position + Vector3(0, 2.2, 2.2)
-	Sfx.play_3d("air_horn_short" if short_blast else "air_horn", horn_pos, self, 2.5, 1.0, 52.0)
+	if DisplayServer.get_name() != "headless" and _horn_audio:
+		_horn_audio.stop()
+		_horn_audio.stream = Sfx.get_truck_horn_stream(idx)
+		_horn_audio.pitch_scale = randf_range(0.985, 1.015)
+		_horn_audio.play()
 	VFX.spawn_sound_ring(self, horn_pos, 6.2, Color(1.0, 0.78, 0.22))
-	VFX.spawn_floating_text(self, horn_pos + Vector3(0, 0.85, 0),
-		"📣 DÜT DÜÜÜT!" if short_blast else "📣 DAAA-DA-DA-DAAA! TOPTANCI GELDİ!", Color(1.0, 0.88, 0.28), 46)
+	var callout := "📣 DÜT DÜÜÜT! TOPTANCI KALKIYOR!" if short_blast else HORN_CALLOUTS[posmod(idx, HORN_CALLOUTS.size())]
+	VFX.spawn_floating_text(self, horn_pos + Vector3(0, 0.85, 0), callout, Color(1.0, 0.88, 0.28), 46)
 
 
 @rpc("authority", "call_local", "reliable")

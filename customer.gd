@@ -1529,6 +1529,21 @@ func _evaluate_stalls(only_louder_override: bool) -> void:
 			charm += 0.18 if archetype != Archetype.EMEKLI else 0.3 # amca arabeske bayılır
 		if owner and owner.has_method("has_prestige_aura") and owner.has_prestige_aura():
 			charm += 0.18 if archetype == Archetype.VIP else 0.10
+		# Bira dökülen tezgah veya bira kokan pazarcı müşterileri kaçırır!
+		var st_stink: float = float(st.get("stink_t")) if st.get("stink_t") != null else 0.0
+		if st_stink > 0.0:
+			charm -= 0.42
+			if _drunk_scold_cd <= 0.0 and dist < 8.5:
+				_drunk_scold_cd = 10.0
+				_emote("🤢")
+				_say("🤢 Iyy! Bu tezgah leş gibi bira kokuyor!", 2.8)
+		var own_stink: float = float(owner.get("stink_t")) if (owner and owner.get("stink_t") != null) else 0.0
+		if own_stink > 0.0:
+			charm -= 0.26
+			if _drunk_scold_cd <= 0.0 and dist < 7.5:
+				_drunk_scold_cd = 10.0
+				_emote("🤢")
+				_say("🤢 Pazarcı leş gibi bira kokuyor, uzak dur!", 2.8)
 
 		var variety := clampf(float(matched) / float(maxi(wants.size(), 1)), 0.0, 1.0)
 		var proximity := clampf(1.0 - dist / hearing_range, 0.0, 1.0)

@@ -71,6 +71,8 @@ const FRESH_DECAY := 0.65 / 300.0
 const FRESH_SYNC_SEC := 1.0
 const ROTTEN := 0.45
 const SPRAY_AMOUNT := 0.35
+const STINK_DECAY_MULT := 4.0 # Bira dökülen tezgahta ürünler 4 kat hızlı çürür!
+const SMOKE_ROT_AMOUNT := 0.10 # Sigara dumanı üflenince -%10 tazelik!
 const REP_MAX := 5.0
 const PILE_W := 0.68
 const PILE_D := 0.58
@@ -114,6 +116,8 @@ var reputation := 2.5
 var _rep_label: Label3D
 var _fresh_sync_t := 0.0
 var _fresh_vis_t := 0.0
+var stink_t := 0.0 # >0 iken tezgah bira kokar ve ürünler çok daha hızlı bozulur!
+var _beer_stink_fx_cd := 0.0
 var _stink_cd := 1.0
 var _slot_piles: Array = [] # her yuva için {"item", "root", "xf"} veya {}
 var _slot_tags: Array[Node3D] = []
@@ -273,13 +277,20 @@ func _day_paused() -> bool:
 
 ## Tüm eşler tazeliği yerelde akıcı düşürür; host her ~1 sn'de yetkili değerleri yayınlar.
 func _tick_freshness(dt: float) -> void:
+	if stink_t > 0.0:
+		stink_t = maxf(stink_t - dt, 0.0)
+		_beer_stink_fx_cd -= dt
+		if _beer_stink_fx_cd <= 0.0:
+			_beer_stink_fx_cd = 0.65
+			VFX.spawn_stink_puff(self, to_global(Vector3(randf_range(-0.9, 0.9), 0.95, randf_range(-0.35, 0.35))), true)
 	if not _day_paused():
+		var stink_mult := STINK_DECAY_MULT if stink_t > 0.0 else 1.0
 		for i in slots.size():
 			var s := slots[i]
 			if str(s["item"]) == "" or int(s["count"]) <= 0:
 				continue
 			var shelf := float(ITEMS.get(s["item"], {}).get("shelf", 1.0))
-			s["fresh"] = maxf(float(s.get("fresh", 1.0)) - FRESH_DECAY * shelf * dt, 0.0)
+			s["fresh"] = maxf(float(s.get("fresh", 1.0)) - FRESH_DECAY * shelf * stink_mult * dt, 0.0)
 	if _is_host() and Net.online():
 		_fresh_sync_t += dt
 		if _fresh_sync_t >= FRESH_SYNC_SEC:
@@ -340,7 +351,7 @@ func _apply_fresh_visual(idx: int) -> void:
 		bc = Color(1.0, 0.8, 0.16).lerp(Color(0.3, 0.9, 0.3), clampf((f - 0.55) / 0.35, 0.0, 1.0))
 	_slot_fresh_mats[idx].albedo_color = bc
 	_slot_fresh_mats[idx].emission = bc
-	_slot_flies[idx].visible = stocked and f < ROTTEN
+	_slot_flies[idx].visible = stocked and (f < ROTTEN or stink_t > 0.0)
 
 
 func _animate_flies() -> void:
@@ -1203,18 +1214,81 @@ func get_item_freshness(item_id: String) -> float:
 	return best if best >= 0.0 else 1.0
 
 
-## Host: dolu tüm yuvaları tazeler (su fısfısı) ve herkese parıltı efektiyle yayınlar.
+## Host: dolu tüm yuvaları tazeler (su fısfısı), varsa bira kokusunu da yıkar ve herkese yayınlar.
 func refresh_freshness(amount := SPRAY_AMOUNT) -> void:
 	if not _is_host():
 		return
 	for s in slots:
 		if str(s["item"]) != "" and int(s["count"]) > 0:
 			s["fresh"] = minf(float(s.get("fresh", 1.0)) + amount, 1.0)
+	if stink_t > 0.0:
+		if Net.online():
+			rpc_sync_stink.rpc(0.0, false)
+		else:
+			rpc_sync_stink(0.0, false)
 	_fresh_sync_t = 0.0
 	if Net.online():
 		rpc_sync_freshness.rpc(_fresh_values(), true)
 	else:
 		rpc_sync_freshness(_fresh_values(), true)
+
+
+## Host: rakip bira şişesi tezgaha çarpınca kötü koku + 4x hızlı çürüme + anlık -%15 tazelik!
+func apply_beer_sabotage(dur := 35.0, instant_rot := 0.15) -> void:
+	if not _is_host():
+		return
+	for s in slots:
+		if str(s["item"]) != "" and int(s["count"]) > 0:
+			s["fresh"] = maxf(float(s.get("fresh", 1.0)) - instant_rot, 0.0)
+	_fresh_sync_t = 0.0
+	var new_stink := maxf(stink_t, dur)
+	if Net.online():
+		rpc_sync_stink.rpc(new_stink, true)
+		rpc_sync_freshness.rpc(_fresh_values(), false)
+	else:
+		rpc_sync_stink(new_stink, true)
+		rpc_sync_freshness(_fresh_values(), false)
+
+
+@rpc("authority", "call_local", "reliable")
+func rpc_sync_stink(dur: float, announce := false) -> void:
+	stink_t = maxf(dur, 0.0)
+	_beer_stink_fx_cd = 0.0
+	for i in slots.size():
+		_apply_fresh_visual(i)
+	if announce and is_inside_tree():
+		var top_p := to_global(Vector3(0, 1.15, 0.2))
+		VFX.spawn_beer_shatter(self, top_p)
+		VFX.spawn_floating_text(self, top_p + Vector3(0, 0.35, 0), "🍺🤢 TEZGAH BİRA KOKUYOR! (4x ÇÜRÜME)", Color(0.75, 0.92, 0.25), 42)
+
+
+## Host: rakip tezgaha sigara/puro dumanı üfleyince tüm ürünlerde -%10 tazelik kaybı!
+func apply_smoke_rot(amount := SMOKE_ROT_AMOUNT) -> void:
+	if not _is_host():
+		return
+	var any := false
+	for s in slots:
+		if str(s["item"]) != "" and int(s["count"]) > 0:
+			s["fresh"] = maxf(float(s.get("fresh", 1.0)) - amount, 0.0)
+			any = true
+	if not any:
+		return
+	_fresh_sync_t = 0.0
+	if Net.online():
+		rpc_sync_freshness.rpc(_fresh_values(), false)
+		rpc_smoke_rot_fx.rpc()
+	else:
+		rpc_sync_freshness(_fresh_values(), false)
+		rpc_smoke_rot_fx()
+
+
+@rpc("authority", "call_local", "reliable")
+func rpc_smoke_rot_fx() -> void:
+	if not is_inside_tree():
+		return
+	var p := to_global(Vector3(0, 1.15, 0.25))
+	VFX.spawn_smoke_puff(self, p, Vector3.UP, true)
+	VFX.spawn_floating_text(self, p + Vector3(0, 0.3, 0), "🚬💨 DUMAN SİNDİ! -%10 TAZELİK", Color(0.84, 0.86, 0.90), 38)
 
 
 ## Sahibin fısfıs isteği (istemci → host). Host: mesafe/sahiplik doğrular, tazeler.
@@ -1480,6 +1554,7 @@ func export_snapshot() -> Dictionary:
 		"has_radio": has_radio,
 		"radio_playing": radio_playing,
 		"reputation": reputation,
+		"stink_t": stink_t,
 	}
 
 
@@ -1509,6 +1584,9 @@ func apply_snapshot(d: Dictionary) -> void:
 		_refresh_rep_label()
 	bell_boost = float(d.get("bell_boost", 0.0))
 	bell_cd = float(d.get("bell_cd", 0.0))
+	stink_t = maxf(float(d.get("stink_t", 0.0)), 0.0)
+	for i in slots.size():
+		_apply_fresh_visual(i)
 	rpc_set_stall_radio(bool(d.get("has_radio", false)), bool(d.get("radio_playing", false)))
 
 

@@ -294,6 +294,81 @@ static func spawn_crumbs(parent: Node, world_pos: Vector3) -> void:
 		Color(0.96, 0.90, 0.72), 0.25, 0.95, 110.0, Vector3(0, -5.4, 0), Vector3(0, 0.15, 0), 0.6, 1.1)
 
 
+## 🍺💥 Kırılan Pazar Pilsen şişesi: kehribar cam kırıkları + köpüklü bira sıçraması + koku bulutu!
+static func spawn_beer_shatter(parent: Node, world_pos: Vector3) -> void:
+	if not _ok(parent):
+		return
+	var shard := LP.prism(Vector3(0.036, 0.045, 0.009))
+	var sm := _vcol_mat(0.08, 0.1, false, true)
+	_spawn_oneshot(parent, world_pos, 16, 0.85, shard, sm,
+		Color(0.42, 0.16, 0.03, 0.94), 1.6, 4.2, 115.0, Vector3(0, -9.8, 0), Vector3.UP, 0.65, 1.35)
+	var foam := LP.sphere(0.032, 5, 3)
+	var fm := _vcol_mat(0.55, 0.0, false, true)
+	_spawn_oneshot(parent, world_pos, 18, 0.72, foam, fm,
+		Color(0.96, 0.88, 0.56, 0.85), 1.2, 3.2, 130.0, Vector3(0, -6.5, 0), Vector3.UP, 0.6, 1.4)
+	spawn_stink_puff(parent, world_pos + Vector3(0, 0.15, 0), true)
+
+
+## 🤢 Kötü koku dumanı (bira dökülen oyuncu veya tezgahın üstünde yükselen yeşilimsi-sarı pis koku).
+static func spawn_stink_puff(parent: Node, world_pos: Vector3, wide := false) -> void:
+	if not _ok(parent):
+		return
+	var p := CPUParticles3D.new()
+	p.one_shot = true
+	p.explosiveness = 0.25
+	p.amount = 18 if wide else 10
+	p.lifetime = 1.65
+	p.mesh = LP.sphere(0.085 if wide else 0.058, 6, 4)
+	var sm := _vcol_mat(0.95, 0.0, true, true)
+	p.material_override = sm
+	p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	p.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
+	p.emission_sphere_radius = 0.52 if wide else 0.22
+	p.direction = Vector3.UP
+	p.spread = 28.0
+	p.initial_velocity_min = 0.30
+	p.initial_velocity_max = 0.68
+	p.gravity = Vector3(0.06, 0.24, 0.04)
+	p.scale_amount_curve = _scale_curve(0.50, 1.45, 2.1, 0.45)
+	var g := Gradient.new()
+	g.set_color(0, Color(0.48, 0.84, 0.14, 0.0))
+	g.set_color(1, Color(0.42, 0.72, 0.12, 0.0))
+	g.add_point(0.18, Color(0.52, 0.88, 0.16, 0.68))
+	g.add_point(0.62, Color(0.46, 0.78, 0.14, 0.48))
+	p.color_ramp = g
+	parent.add_child(p)
+	p.global_position = world_pos
+	p.emitting = true
+	var tw := p.create_tween()
+	tw.tween_interval(p.lifetime + 0.35)
+	tw.tween_callback(p.queue_free)
+
+
+## ✍️ Zabıta ceza makbuzu kağıdı: zabıtanın defterinden suçlunun yüzüne doğru süzülür!
+static func spawn_ticket_slip(parent: Node, from_pos: Vector3, to_pos: Vector3) -> void:
+	if not _ok(parent):
+		return
+	var slip := MeshInstance3D.new()
+	slip.mesh = LP.box(Vector3(0.14, 0.008, 0.19))
+	var m := StandardMaterial3D.new()
+	m.albedo_color = Color(1.0, 0.92, 0.52)
+	m.emission_enabled = true
+	m.emission = Color(1.0, 0.85, 0.35)
+	m.emission_energy_multiplier = 0.35
+	slip.material_override = m
+	slip.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	parent.add_child(slip)
+	slip.global_position = from_pos
+	var mid := from_pos.lerp(to_pos, 0.5) + Vector3(0, 0.35, 0)
+	var tw := slip.create_tween()
+	tw.tween_property(slip, "global_position", mid, 0.28).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tw.parallel().tween_property(slip, "rotation_degrees", Vector3(220, 140, 45), 0.28)
+	tw.tween_property(slip, "global_position", to_pos, 0.38).set_trans(Tween.TRANS_SINE)
+	tw.parallel().tween_property(slip, "rotation_degrees", Vector3(380, 290, 90), 0.38)
+	tw.tween_property(slip, "scale", Vector3.ONE * 0.01, 0.25)
+	tw.tween_callback(slip.queue_free)
+
+
 ## Meyve bıçağı darbe efekti (kırmızı kıvılcım + şok).
 static func spawn_hit_burst(parent: Node, world_pos: Vector3) -> void:
 	var mesh := LP.prism(Vector3(0.08, 0.09, 0.03))

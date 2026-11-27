@@ -60,16 +60,16 @@ const SHIRTS := [Color(0.85, 0.2, 0.18), Color(0.2, 0.5, 0.9), Color(0.98, 0.75,
 
 # 1. şahıs el tutuşu (eşya yerel uzayı): [konum, euler derece, ölçek]. Sağ el eşyayı tutar.
 const FP_GRIP := {
-	"cay": [Vector3(0.04, -0.01, 0.05), Vector3(-25, 0, 10), 0.8],
+	"cay": [Vector3(0.018, -0.056, 0.022), Vector3(-12, -10, 6), 0.66],
 	"simit": [Vector3(0.02, -0.115, 0.02), Vector3(-20, 0, 0), 0.8],
 	"acma": [Vector3(0.02, -0.105, 0.02), Vector3(-20, 0, 0), 0.8],
-	"bira": [Vector3(0.0, -0.06, 0.03), Vector3(-10, 0, 0), 0.8],
+	"bira": [Vector3(0.052, 0.048, -0.006), Vector3(-6, -16, 12), 0.68],
 	"radyo": [Vector3(0.0, 0.215, 0.0), Vector3(0, 0, 90), 0.8],
 	"megafon": [Vector3(0.0, -0.04, 0.03), Vector3.ZERO, 0.8],
 	"bicak": [Vector3(0.0, -0.01, 0.05), Vector3(80, 0, 0), 0.6],
 	"spray": [Vector3(0.0, -0.03, 0.04), Vector3.ZERO, 0.7],
-	"sigara": [Vector3(0.03, -0.07, 0.05), Vector3(-30, 0, 0), 0.6],
-	"puro": [Vector3(0.03, -0.07, 0.05), Vector3(-30, 0, 0), 0.6],
+	"sigara": [Vector3(0.030, -0.026, 0.030), Vector3(-12, 16, -16), 0.54],
+	"puro": [Vector3(0.034, -0.028, 0.032), Vector3(-12, 16, -16), 0.58],
 	"sopa": [Vector3(0.0, 0.0, 0.0), Vector3(0, 0, 0), 0.8],
 }
 const CRUMB_SPEED := 7.5
@@ -236,6 +236,10 @@ var spd := 0.0
 var tea_buff := 0.0 # çay: bağırma +%25 (yudum başı +15sn, en çok 60sn)
 var simit_buff := 0.0 # simit: %15 hızlı yürüyüş (ısırık başı +18sn, en çok 60sn)
 var smoke_buff := 0.0 # sigara/puro: %25 hızlı yürüyüş/koşu (nefes başı +12sn / puro +16sn, en çok 30sn)
+var stink_t := 0.0 # >0 iken oyuncu bira kokar (yeşil koku bulutu + sinekler + müşteri cezası)
+var _stink_fx_cd := 0.0
+var _stink_flies: Node3D
+var _stink_fly_t := 0.0
 var air := false
 var phase := 0.0
 var land_t := 0.0
@@ -456,6 +460,29 @@ func _update_fp_hands() -> void:
 			mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY if pair[1] else GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 
 
+func _current_ash_ratio() -> float:
+	if not is_multiplayer_authority():
+		return 0.22
+	if active_slot >= 0 and active_slot < inventory.size() and not inventory[active_slot].is_empty():
+		return clampf(float(inventory[active_slot].get("ash", 0.18)), 0.0, 1.0)
+	return 0.18
+
+
+func _apply_live_cig_ash(visual: Node3D, burn_r: float, ash_r: float) -> void:
+	if visual == null:
+		return
+	var rem := clampf(1.0 - burn_r, 0.22, 1.0)
+	var pap := visual.find_child("CigPaper", true, false) as Node3D
+	if pap:
+		pap.scale.z = rem
+	var tip_grp := visual.find_child("CigTipGroup", true, false) as Node3D
+	if tip_grp:
+		tip_grp.position.z = -0.088 * rem
+		var ash_b := tip_grp.find_child("AshBody", true, false) as Node3D
+		if ash_b:
+			ash_b.scale.z = lerpf(0.28, 2.15, clampf(ash_r, 0.0, 1.0))
+
+
 func _refresh_equipped_visual() -> void:
 	_update_fp_hands()
 	if _fp_item_visual:
@@ -468,10 +495,11 @@ func _refresh_equipped_visual() -> void:
 	if iid == "" or not Items.CATALOG.has(iid):
 		return
 	var br := _current_burn_ratio()
+	var ar := _current_ash_ratio()
 	if is_multiplayer_authority() and _fp_item_anchor:
-		_fp_item_visual = Items.build_item_model(iid, br)
+		_fp_item_visual = Items.build_item_model(iid, br, ar)
 		_fp_item_anchor.add_child(_fp_item_visual)
-		# Eşya her zaman elde: sağ el eşyaya takılır, tüm kullanım animasyonlarında birlikte hareket eder
+		# Karakterin kendi sağ eli (FP_GRIP ile her eşyaya tam oturtulur)
 		var grip: Array = FP_GRIP.get(iid, [Vector3(0.0, -0.05, 0.04), Vector3.ZERO, 0.7])
 		var fh := _make_fp_hand("HandR", float(grip[2]))
 		fh.position = grip[0]
@@ -480,14 +508,14 @@ func _refresh_equipped_visual() -> void:
 		# Eşyaya özel doğal 1. şahıs tutuş açısı
 		match iid:
 			"sigara", "puro":
-				_fp_base_pos = Vector3(0.22, -0.17, -0.34)
-				_fp_base_rot = Vector3(12, 24, -10)
+				_fp_base_pos = Vector3(0.21, -0.175, -0.34)
+				_fp_base_rot = Vector3(10.0, 28.0, -8.0)
 			"cay":
-				_fp_base_pos = Vector3(0.24, -0.165, -0.37)
-				_fp_base_rot = Vector3(4, -10, 0)
+				_fp_base_pos = Vector3(0.22, -0.175, -0.37)
+				_fp_base_rot = Vector3(6.0, -12.0, 2.0)
 			"bira":
-				_fp_base_pos = Vector3(0.24, -0.2, -0.37)
-				_fp_base_rot = Vector3(4, -10, 0)
+				_fp_base_pos = Vector3(0.23, -0.20, -0.39)
+				_fp_base_rot = Vector3(5.0, -10.0, 3.0)
 			"simit", "acma":
 				_fp_base_pos = Vector3(0.23, -0.20, -0.37)
 				_fp_base_rot = Vector3(10, -24, 12)
@@ -885,6 +913,10 @@ func _use_secondary_item() -> void:
 		"sigara", "puro":
 			_sec_cd = 0.55
 			_start_action("ash_flick", iid, 0.42)
+			# Külü silkince kül boyunu sıfırla ve görseli anında tazele!
+			if active_slot >= 0 and active_slot < inventory.size() and str(inventory[active_slot].get("id", "")) == iid:
+				inventory[active_slot]["ash"] = 0.06
+				_apply_live_cig_ash(_fp_item_visual, _current_burn_ratio(), 0.06)
 			_trigger_item_fx_synced("ash_flick", iid, tip_pos, fwd)
 		"cay":
 			_sec_cd = 0.98
@@ -894,6 +926,10 @@ func _use_secondary_item() -> void:
 			# Sağ tık: kuşlara / kediye simit-açma parçası fırlat (parça ısırık yerine geçer)
 			_sec_cd = 0.9
 			_start_action("simit_throw", iid, 0.62)
+		"bira":
+			# Sağ tık: bira şişesini kısa-orta mesafeye fırlat!
+			_sec_cd = 0.45
+			_throw_beer()
 		"bicak":
 			_sec_cd = 0.65
 			_start_action("knife_spin", iid, 0.56)
@@ -955,6 +991,7 @@ func _finish_consumable_step(iid: String, toast_when_empty: String) -> void:
 	if int(sl.get("puffs", 0)) >= max_p:
 		sl["uses"] = int(sl.get("uses", 1)) - 1
 		sl["puffs"] = 0
+		sl["ash"] = 0.14
 		if int(sl["uses"]) <= 0:
 			inventory[active_slot] = {}
 			active_slot = -1
@@ -984,10 +1021,21 @@ func _tick_item_action(dt: float) -> void:
 				_action_stage = 2
 				var mouth_p := _get_mouth_world()
 				_trigger_item_fx_synced("smoke_exhale", _action_item, mouth_p, fwd)
+				_check_smoke_sabotage(fwd)
 				var is_puro := _action_item == "puro"
 				smoke_buff = minf(smoke_buff + (16.0 if is_puro else 12.0), 30.0)
 				if active_slot >= 0 and active_slot < inventory.size() and str(inventory[active_slot].get("id", "")) == _action_item:
-					inventory[active_slot]["puffs"] = int(inventory[active_slot].get("puffs", 0)) + 1
+					var sl_s := inventory[active_slot]
+					sl_s["puffs"] = int(sl_s.get("puffs", 0)) + 1
+					var new_ash := float(sl_s.get("ash", 0.18)) + (0.26 if is_puro else 0.34)
+					if new_ash >= 1.0:
+						# Kül çok uzadı: kendiliğinden kopup düşer!
+						sl_s["ash"] = 0.10
+						_trigger_item_fx_synced("ash_flick", _action_item, _get_smoke_tip_world(), fwd)
+						_toast("🚬 Kül çok uzadı, kendiliğinden düştü!", Color(0.85, 0.85, 0.88))
+					else:
+						sl_s["ash"] = new_ash
+					_apply_live_cig_ash(_fp_item_visual, _current_burn_ratio(), float(sl_s["ash"]))
 					inventory_changed.emit()
 
 		"tea_sip":
@@ -1026,6 +1074,12 @@ func _tick_item_action(dt: float) -> void:
 					inventory_changed.emit()
 
 		"beer_sip":
+			# İlk yuduma başlarken kapağı anında aç!
+			if u >= 0.08 and _fp_item_visual:
+				var cap := _fp_item_visual.find_child("CrownCap", true, false) as Node3D
+				if cap and cap.visible:
+					cap.visible = false
+					Sfx.play("ash_flick", -6.0, 1.35)
 			if _action_stage == 0 and u >= 0.34:
 				_action_stage = 1
 				_trigger_item_fx_synced("beer_sip", _action_item, _get_mouth_world(), Vector3.UP)
@@ -1123,6 +1177,9 @@ func _check_bat_hit(fwd: Vector3) -> void:
 		var kd: Vector3 = best.global_position - global_position
 		best.knockout_synced(Vector3(kd.x, 0, kd.z))
 		add_trauma(0.2)
+		var main := _find_main()
+		if main and main.has_method("request_assault_report"):
+			main.request_assault_report(best.name.to_int(), "sopa")
 
 
 func _throw_bat() -> void:
@@ -1178,6 +1235,9 @@ func rpc_throw_bat(start_p: Vector3, vel: Vector3) -> void:
 			d.y = 0.0
 			b.knockout_synced(d)
 			rb.linear_velocity *= 0.2
+			var main := _find_main()
+			if main and main.has_method("request_assault_report"):
+				main.request_assault_report(b.name.to_int(), "sopa")
 		elif not bool(rb.get_meta("hit_done", false)):
 			rb.set_meta("hit_done", true)
 			Sfx.play_3d("crate_hit", rb.global_position, w, -9.0, 1.4)
@@ -1186,6 +1246,199 @@ func rpc_throw_bat(start_p: Vector3, vel: Vector3) -> void:
 	tw.tween_interval(14.0)
 	tw.tween_property(rb, "scale", Vector3.ONE * 0.01, 0.5)
 	tw.tween_callback(rb.queue_free)
+
+
+## Bira şişesi fırlatma (kısa-orta menzil ~6-7.5 m): rakip oyuncuyu yere serip kokutur, rakip tezgahı 4x hızlı çürütür!
+func _throw_beer() -> void:
+	if _ko_phase != 0 or _faint_t > 0.0:
+		return
+	if active_slot < 0 or active_slot >= inventory.size() or str(inventory[active_slot].get("id", "")) != "bira":
+		return
+	var sl := inventory[active_slot]
+	sl["uses"] = int(sl.get("uses", 1)) - 1
+	sl["puffs"] = 0
+	if int(sl["uses"]) <= 0:
+		inventory[active_slot] = {}
+		active_slot = -1
+	_sync_equipped_to_peers()
+	_refresh_equipped_visual()
+	inventory_changed.emit()
+	var fwd := -cam.global_transform.basis.z if cam else Vector3(0, 0, -1)
+	var start_p := (cam.global_position if cam else global_position + Vector3(0, 1.2, 0)) + fwd * 0.48 + Vector3(0, -0.10, 0)
+	var vel := fwd * 7.8 + Vector3.UP * 2.5 + velocity * 0.22
+	add_trauma(0.11)
+	if Net.online():
+		rpc_throw_beer.rpc(start_p, vel)
+	else:
+		rpc_throw_beer(start_p, vel)
+
+
+@rpc("authority", "call_local", "reliable")
+func rpc_throw_beer(start_p: Vector3, vel: Vector3) -> void:
+	var w := _find_world()
+	if w == null:
+		return
+	Sfx.play_3d("crate_throw", start_p, w, -5.0, 1.52)
+	var rb := RigidBody3D.new()
+	rb.name = "ThrownBeer"
+	rb.mass = 0.65
+	rb.gravity_scale = 1.15
+	rb.continuous_cd = true
+	rb.contact_monitor = true
+	rb.max_contacts_reported = 6
+	rb.add_collision_exception_with(self)
+	rb.set_meta("hit_done", false)
+	var cs := CollisionShape3D.new()
+	var cyl := CylinderShape3D.new()
+	cyl.radius = 0.06
+	cyl.height = 0.24
+	cs.shape = cyl
+	cs.position = Vector3(0, 0.04, 0)
+	rb.add_child(cs)
+	var vis := Items.build_item_model("bira")
+	vis.scale = Vector3.ONE * 1.12
+	rb.add_child(vis)
+	# Tezgah yuvaları (Area3D layer 4) çarpışma sensörü: şişe meyvelere çarpar çarpmaz kırılır!
+	var det := Area3D.new()
+	det.collision_layer = 0
+	det.collision_mask = 4
+	det.monitoring = true
+	det.monitorable = false
+	var dcs := CollisionShape3D.new()
+	var dsph := SphereShape3D.new()
+	dsph.radius = 0.16
+	dcs.shape = dsph
+	det.add_child(dcs)
+	rb.add_child(det)
+	w.add_child(rb)
+	rb.look_at_from_position(start_p, start_p + vel)
+	rb.linear_velocity = vel
+	rb.angular_velocity = rb.global_transform.basis.x * -11.0 + Vector3(0, 4.5, 0)
+	var on_shatter := func(hit_node: Node, direct_stall_owner: int) -> void:
+		if not is_instance_valid(rb) or bool(rb.get_meta("hit_done", false)):
+			return
+		rb.set_meta("hit_done", true)
+		var hit_p := rb.global_position
+		var hit_v := rb.linear_velocity
+		Sfx.play_3d("glass_shatter", hit_p, w, -1.5, randf_range(0.93, 1.07), 34.0)
+		VFX.spawn_beer_shatter(w, hit_p)
+		if is_multiplayer_authority():
+			_resolve_beer_impact(hit_node, hit_p, hit_v, direct_stall_owner)
+		rb.queue_free()
+	det.area_entered.connect(func(a: Area3D) -> void:
+		if not is_instance_valid(rb) or bool(rb.get_meta("hit_done", false)):
+			return
+		if str(a.get_meta("kind", "")) == "slot":
+			var so := int(a.get_meta("stall_owner", -1))
+			if so > 0 and so != _my_peer_id():
+				on_shatter.call(a, so)
+	)
+	rb.body_entered.connect(func(b: Node) -> void:
+		on_shatter.call(b, -1)
+	)
+	var tw := rb.create_tween()
+	tw.tween_interval(6.0)
+	tw.tween_callback(func() -> void:
+		if is_instance_valid(rb):
+			rb.queue_free()
+	)
+
+
+func _stall_from_node(n: Node) -> Node:
+	var cur := n
+	while cur:
+		if cur.has_method("apply_beer_sabotage") and cur.get("owner_id") != null:
+			return cur
+		cur = cur.get_parent()
+	return null
+
+
+func _resolve_beer_impact(hit_body: Node, hit_p: Vector3, hit_v: Vector3, direct_stall_owner := -1) -> void:
+	var w := _find_world()
+	var main := _find_main()
+	if w == null or main == null:
+		return
+	var my_id := _my_peer_id()
+	# 0) Doğrudan rakip tezgah yuvasına / meyvelerine çarpma!
+	if direct_stall_owner > 0 and direct_stall_owner != my_id:
+		if main.has_method("request_beer_hit_stall"):
+			main.request_beer_hit_stall(direct_stall_owner)
+		return
+	# 1) Rakip oyuncu isabeti (doğrudan çarpışma veya 1.35 m sıçrama yarıçapı)
+	var vic: Node3D = null
+	if hit_body != self and hit_body.has_method("apply_beer_hit_synced") and not bool(hit_body.get("npc")):
+		vic = hit_body as Node3D
+	else:
+		var pg := w.get_node_or_null("Players")
+		var best_d := 1.35
+		if pg:
+			for p in pg.get_children():
+				if p == self or not (p is Node3D) or bool(p.get("npc")) or not p.has_method("apply_beer_hit_synced"):
+					continue
+				var pn := p as Node3D
+				var fd := _flat_dist(hit_p, pn.global_position)
+				if fd < best_d and absf(hit_p.y - (pn.global_position.y + 0.85)) < 1.35:
+					best_d = fd
+					vic = pn
+	if vic:
+		var kd := Vector3(hit_v.x, 0.0, hit_v.z)
+		if kd.length_squared() < 0.05:
+			kd = vic.global_position - global_position
+			kd.y = 0.0
+		if main.has_method("request_beer_hit_player"):
+			main.request_beer_hit_player(vic.name.to_int(), kd)
+		return
+	# 2) Rakip tezgah isabeti (doğrudan gövdeye veya 2.55 m tezgah alanına)
+	var st := _stall_from_node(hit_body)
+	if st != null and int(st.owner_id) == my_id:
+		st = null
+	if st == null:
+		var sg := w.get_node_or_null("Stalls")
+		var best_sd := 2.55
+		if sg:
+			for s in sg.get_children():
+				if not (s is Node3D) or int(s.owner_id) == my_id:
+					continue
+				var sn := s as Node3D
+				var sd := _flat_dist(hit_p, sn.global_position)
+				if sd < best_sd and absf(hit_p.y - sn.global_position.y) < 2.4:
+					best_sd = sd
+					st = s
+	if st and main.has_method("request_beer_hit_stall"):
+		main.request_beer_hit_stall(int(st.owner_id))
+
+
+## Sigara/puro dumanı üflenince yakındaki ve bakılan rakip tezgaha -%10 tazelik sabotajı uygular!
+func _check_smoke_sabotage(fwd: Vector3) -> void:
+	var w := _find_world()
+	var main := _find_main()
+	if w == null or main == null or not main.has_method("request_smoke_sabotage"):
+		return
+	var sg := w.get_node_or_null("Stalls")
+	if sg == null:
+		return
+	var my_id := _my_peer_id()
+	var f2 := Vector3(fwd.x, 0.0, fwd.z)
+	if f2.length_squared() < 0.001:
+		return
+	f2 = f2.normalized()
+	var best_st: Node = null
+	var best_d := 3.6
+	for s in sg.get_children():
+		if not (s is Node3D) or int(s.owner_id) == my_id:
+			continue
+		if s.has_method("total_stock") and int(s.total_stock()) <= 0:
+			continue
+		var sn := s as Node3D
+		var diff := sn.global_position - global_position
+		var fd := Vector2(diff.x, diff.z).length()
+		if fd < best_d:
+			var dir2 := Vector3(diff.x, 0.0, diff.z).normalized()
+			if dir2.dot(f2) > 0.30:
+				best_d = fd
+				best_st = s
+	if best_st:
+		main.request_smoke_sabotage(int(best_st.owner_id), _action_item)
 
 
 func _set_hand_radio_synced(on: bool, pos := -1.0) -> void:
@@ -1385,6 +1638,62 @@ func rpc_on_knife_hit(knock_dir: Vector3) -> void:
 			_do_throw_crate()
 
 
+func apply_beer_hit_synced(knock_dir: Vector3, stink_dur := 25.0) -> void:
+	if Net.online():
+		rpc_on_beer_hit.rpc(knock_dir, stink_dur)
+	else:
+		rpc_on_beer_hit(knock_dir, stink_dur)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func rpc_on_beer_hit(knock_dir: Vector3, stink_dur := 25.0) -> void:
+	if Net.online() and multiplayer.get_remote_sender_id() not in [0, 1]:
+		return
+	stink_t = maxf(stink_t, stink_dur)
+	var w := _find_world()
+	if w:
+		Sfx.play_3d("glass_shatter", global_position + Vector3(0, 1.1, 0), w, -0.5, 0.96, 32.0)
+		VFX.spawn_beer_shatter(w, global_position + Vector3(0, 1.05, 0))
+		VFX.spawn_stink_puff(w, global_position + Vector3(0, 1.15, 0), true)
+		VFX.spawn_floating_text(w, global_position + Vector3(0, 1.9, 0), "🍺🤢 ŞİŞE YEDİN! LEŞ GİBİ KOKUYORSUN!", Color(0.66, 0.96, 0.28), 44)
+	if is_multiplayer_authority():
+		add_trauma(0.55)
+		if held_crate:
+			_do_throw_crate()
+		_toast("🍺🤢 Kafana bira şişesi yedin! %dsn kötü kokacaksın!" % int(round(stink_dur)), Color(0.68, 0.95, 0.30))
+	rpc_knockout(knock_dir, 2.5)
+
+
+func _tick_stink_visual(dt: float) -> void:
+	var w := _find_world()
+	var origin := global_position + Vector3(0, 1.25, 0)
+	if _ko_phase != 0 and parts.has("Body") and is_instance_valid(parts["Body"]):
+		origin = (parts["Body"] as Node3D).global_position + Vector3(0, 0.35, 0)
+	_stink_fx_cd -= dt
+	if _stink_fx_cd <= 0.0 and w:
+		_stink_fx_cd = 0.52
+		VFX.spawn_stink_puff(w, origin + Vector3(randf_range(-0.22, 0.22), 0.0, randf_range(-0.22, 0.22)), false)
+	if _stink_flies == null:
+		_stink_flies = Node3D.new()
+		_stink_flies.top_level = true
+		var fmesh := LP.sphere(0.018, 4)
+		var fmat := LP.mat(Color(0.07, 0.10, 0.05), 0.5)
+		for _i in 4:
+			var mi := MeshInstance3D.new()
+			mi.mesh = fmesh
+			mi.material_override = fmat
+			mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			_stink_flies.add_child(mi)
+		add_child(_stink_flies)
+	_stink_flies.show()
+	_stink_flies.global_position = origin
+	_stink_fly_t += dt * 4.4
+	for j in _stink_flies.get_child_count():
+		var a := _stink_fly_t + float(j) * 1.57
+		var r := 0.28 + 0.08 * sin(_stink_fly_t * 1.6 + float(j))
+		(_stink_flies.get_child(j) as Node3D).position = Vector3(cos(a) * r, 0.18 + sin(a * 2.1 + float(j)) * 0.12, sin(a) * r)
+
+
 func _process(dt: float) -> void:
 	if npc:
 		return
@@ -1411,6 +1720,18 @@ func _process(dt: float) -> void:
 
 	if is_multiplayer_authority():
 		_tick_item_action(dt)
+		# Standart sigara mekaniği: yanan sigara elde dururken yavaşça kül uzatır, çok uzarsa kendiliğinden düşer!
+		if _action_kind == "" and active_slot >= 0 and active_slot < inventory.size():
+			var eq_s := equipped_item_id()
+			if eq_s == "sigara" and str(inventory[active_slot].get("id", "")) == "sigara":
+				var cur_ash := float(inventory[active_slot].get("ash", 0.18)) + dt * 0.016
+				if cur_ash >= 1.0:
+					cur_ash = 0.10
+					var fwd_s := -cam.global_transform.basis.z if cam else Vector3(0, 0, -1)
+					_trigger_item_fx_synced("ash_flick", "sigara", _get_smoke_tip_world(), fwd_s)
+					_toast("🚬 Kül çok uzadı, yere düştü!", Color(0.85, 0.85, 0.88))
+				inventory[active_slot]["ash"] = cur_ash
+				_apply_live_cig_ash(_fp_item_visual, _current_burn_ratio(), cur_ash)
 
 	# Elde çalan Arabesk Radyo notaları
 	if _hand_radio_playing:
@@ -1418,6 +1739,13 @@ func _process(dt: float) -> void:
 		if _radio_note_cd <= 0.0:
 			_radio_note_cd = 1.15
 			VFX.spawn_music_note(_find_world(), global_position + Vector3(0, 1.25, 0))
+
+	# Bira kokusu bulutu + vızıldayan sinekler (tüm eşlerde görünür!)
+	if stink_t > 0.0:
+		stink_t = maxf(stink_t - dt, 0.0)
+		_tick_stink_visual(dt)
+	elif _stink_flies and _stink_flies.visible:
+		_stink_flies.hide()
 
 	_tick_shout_rings(dt)
 	if is_multiplayer_authority():
@@ -1605,7 +1933,7 @@ func _camera(dt: float) -> void:
 
 		match _action_kind:
 			"smoke_drag":
-				# 3 aşamalı sigara/puro animasyonu: ağza götür -> derin çek (kor parlar!) -> indir & ileri duman üfle!
+				# 3 aşamalı sigara/puro animasyonu: filtreyi ağza götür -> derin çek (kor parlar!) -> indir & ileri duman üfle!
 				var lift := 0.0
 				if u < 0.24:
 					lift = smoothstep(0.0, 0.24, u)
@@ -1620,43 +1948,47 @@ func _camera(dt: float) -> void:
 					var rel := sin(((u - 0.56) / 0.44) * PI)
 					target_fov_mod = 1.3 * rel
 					ember_boost = (1.0 - exh) * 1.4
-				a_pos = Vector3(-0.19, 0.095, 0.165) * lift
-				a_rot = Vector3(12.0, -34.0, -16.0) * lift
+				a_pos = Vector3(-0.18, 0.068, 0.135) * lift
+				a_rot = Vector3(8.0, -28.0, 14.0) * lift
 
 			"ash_flick":
-				# Keskin bilek vuruşuyla kül silkme!
+				# Keskin bilek vuruşu + işaret parmağı dokunuşuyla kül silkme!
 				var f1 := sin(u * PI)
 				var snap := sin(clampf((u - 0.28) / 0.36, 0.0, 1.0) * PI)
-				a_pos = Vector3(-0.04 * f1, -0.03 * f1 - 0.045 * snap, -0.02 * f1)
-				a_rot = Vector3(-28.0 * snap - 8.0 * f1, -12.0 * f1, -14.0 * snap)
+				a_pos = Vector3(-0.04 * f1, -0.025 * f1 - 0.038 * snap, -0.02 * f1)
+				a_rot = Vector3(-24.0 * snap - 6.0 * f1, -10.0 * f1, -12.0 * snap)
+				var idx_f := _fp_item_visual.find_child("IndexFinger", true, false) as Node3D
+				if idx_f:
+					var j1 := idx_f.get_node_or_null("J1") as Node3D
+					if j1:
+						j1.rotation_degrees.x = -10.0 - 28.0 * snap
 
 			"beer_sip":
-				# Şişeyi ağza kaldır, dibini kaldırıp kafaya dik, yavaşça indir
+				# Şişeyi ağza kaldır ve şişe ağzını (+X dönüşüyle) OYUNCUYA doğru yatırıp yudumla!
 				var lift_b := smoothstep(0.0, 0.28, u) * (1.0 - smoothstep(0.72, 1.0, u))
 				var sip_b := sin(clampf((u - 0.28) / 0.44, 0.0, 1.0) * PI)
-				a_pos = Vector3(-0.15, 0.06, 0.09) * lift_b
-				a_rot = Vector3(-40.0 * lift_b - 45.0 * sip_b, -10.0 * lift_b, 8.0 * lift_b)
-				target_pitch_mod = 0.16 * sip_b
+				a_pos = Vector3(-0.19, 0.035, 0.085) * lift_b
+				a_rot = Vector3(24.0 * lift_b + 38.0 * sip_b, 8.0 * lift_b, 6.0 * lift_b)
+				target_pitch_mod = 0.12 * sip_b
 
 			"tea_sip":
-				# İnce belli çayı ağza kaldır -> eğip sıcak yudumla -> yavaşça geri indir!
+				# İnce belli çayı tabağıyla ağza kaldır -> nazikçe (+X) oyuncuya eğip sıcak yudumla -> geri indir!
 				var lift := 0.0
 				var tilt := 0.0
 				if u < 0.30:
 					lift = smoothstep(0.0, 0.30, u)
-					tilt = lift * 0.45
+					tilt = lift * 0.35
 				elif u < 0.68:
 					lift = 1.0
 					var sip_k := sin(((u - 0.30) / 0.38) * PI)
-					tilt = 0.45 + 0.55 * sip_k
-					target_pitch_mod = 0.11 * sip_k
+					tilt = 0.35 + 0.65 * sip_k
+					target_pitch_mod = 0.09 * sip_k
 				else:
 					var dn := smoothstep(0.68, 1.0, u)
 					lift = 1.0 - dn
-					tilt = 0.45 * lift
-				# El bardağı ağız hizasına (alt-orta) getirir; ağız kenarı OYUNCUYA (kameraya, +Z) doğru yatar
-				a_pos = Vector3(-0.21, 0.03, 0.06) * lift
-				a_rot = Vector3(72.0 * tilt, 0.0, 0.0)
+					tilt = 0.35 * lift
+				a_pos = Vector3(-0.18, 0.048, 0.085) * lift
+				a_rot = Vector3(42.0 * tilt, 6.0 * lift, 4.0 * lift)
 
 			"tea_stir":
 				# Bardağı hafif ortaya yaklaştır ve içindeki kaşığı dairesel şıngırdat!
@@ -3073,6 +3405,8 @@ func _do_throw_crate() -> void:
 	if not held_crate:
 		if is_holding_item("sopa") and _ko_phase == 0:
 			_throw_bat()
+		elif is_holding_item("bira") and _ko_phase == 0:
+			_throw_beer()
 		return
 	var fwd := -cam.global_transform.basis.z if cam else Vector3(0, 0, -1)
 	var start_p := (_fp_crate_anchor.global_position if _fp_crate_anchor else global_position + Vector3(0, 0.9, 0)) + fwd * 0.25
@@ -3333,6 +3667,7 @@ func export_snapshot() -> Dictionary:
 		"daily_sold": daily_sold, "daily_haggles": daily_haggles,
 		"held_crate": held_crate, "held_item": held_item, "held_count": held_count,
 		"equipped": equipped_item_id(), "hand_radio": _hand_radio_playing,
+		"stink_t": stink_t,
 	}
 
 
@@ -3344,6 +3679,7 @@ func apply_snapshot(d: Dictionary) -> void:
 	daily_tips = int(d.get("daily_tips", 0))
 	daily_sold = int(d.get("daily_sold", 0))
 	daily_haggles = int(d.get("daily_haggles", 0))
+	stink_t = maxf(float(d.get("stink_t", 0.0)), 0.0)
 	_remote_item_id = str(d.get("equipped", ""))
 	_apply_held_crate(bool(d.get("held_crate", false)), str(d.get("held_item", "")), int(d.get("held_count", 0)))
 	rpc_set_hand_radio(bool(d.get("hand_radio", false)))

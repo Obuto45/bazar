@@ -24,6 +24,8 @@ const TRUCK_HORN_STREAMS: Array[AudioStream] = [
 	preload("res://audio/horns/horn_05_ikili_duz.ogg"),
 	preload("res://audio/horns/horn_08_arap.ogg"),
 ]
+## Gerçek şişe kırılma kaydı ("Breaking Bottle" by spookymodem, CC-BY 3.0; bkz. audio/sfx/KAYNAKLAR.md).
+const GLASS_SHATTER_STREAM: AudioStream = preload("res://audio/sfx/glass_shatter.ogg")
 
 const AMB_VOL_DB := -26.0
 const MENU_VOL_DB := -10.0
@@ -562,6 +564,8 @@ func _build_all_clips() -> void:
 	_add("radio_tune", _synth_radio_tune)
 	_add("mega_chirp", _synth_mega_chirp)
 	_add("knife_spin", _synth_knife_spin)
+	_clips["glass_shatter"] = GLASS_SHATTER_STREAM
+	_add("ticket_write", _synth_ticket_write)
 	_add("megaphone_pop", _synth_megaphone_pop)
 	_add("knife_swing", _synth_knife_swing)
 	_add("knife_hit", _synth_knife_hit)
@@ -886,6 +890,36 @@ func _synth_knife_spin() -> AudioStreamWAV:
 		var ping := sin(TAU * lerpf(2100.0, 2900.0, t / dur) * t) * 0.18 * pulse
 		var env := sin(clampf(t / dur, 0.0, 1.0) * PI)
 		buf[i] = clampf(((w - lp) * 0.65 * pulse + ping) * env * 0.78, -0.9, 0.9)
+	return _make_wav(buf)
+
+
+## Zabıta ceza makbuzu yazma: hızlı kalem cızırtısı + kağıt koparma sesi.
+func _synth_ticket_write() -> AudioStreamWAV:
+	var dur := 0.52
+	var n := int(RATE * dur)
+	var buf := PackedFloat32Array()
+	buf.resize(n)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 155
+	var strokes := [[0.03, 0.08], [0.13, 0.07], [0.22, 0.09], [0.33, 0.06]]
+	var lp := 0.0
+	for i in n:
+		var t := float(i) / float(RATE)
+		var w := rng.randf_range(-1.0, 1.0)
+		lp += 0.32 * (w - lp)
+		var v := 0.0
+		for st: Array in strokes:
+			var t0: float = float(st[0])
+			var ln: float = float(st[1])
+			if t >= t0 and t < t0 + ln:
+				var env := sin(((t - t0) / ln) * PI)
+				v += (w - lp) * env * 0.45 + sin(TAU * 1950.0 * t) * env * 0.08
+		# Sonunda kısa makbuz koparma cırtı
+		if t >= 0.41:
+			var rt := (t - 0.41) / 0.11
+			var env := sin(clampf(rt, 0.0, 1.0) * PI)
+			v += (w - lp * 0.6) * env * 0.65
+		buf[i] = clampf(v * 0.88, -0.92, 0.92)
 	return _make_wav(buf)
 
 

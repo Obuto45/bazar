@@ -681,6 +681,7 @@ func _build_hotbar(layer: CanvasLayer, theme: Theme) -> void:
 		["tea", Color(0.95, 0.45, 0.22)],
 		["simit", Color(1.0, 0.78, 0.28)],
 		["smoke", Color(0.68, 0.84, 1.0)],
+		["stink", Color(0.56, 0.90, 0.26)],
 	]:
 		var bp := PanelContainer.new()
 		var bsb := _sb(Color(0.09, 0.06, 0.04, 0.86), 8, 3)
@@ -1555,6 +1556,24 @@ func rpc_request_buy_upgrade(key: String, shop_id := "") -> void:
 	_broadcast_toast("⭐ %s: %s" % [Net.display_name(pid), str(StallScript.UPGRADES[key]["name"])], Color(0.58, 1.0, 0.65))
 
 
+## Zabıta acil müdahale sevk yardımcısı (host çağırır): varsa yönlendirir, yoksa en yakın kapıdan koşturur!
+func _dispatch_zabita(att: Node3D, attacker_id: int, weapon: String, fine: int, reason: String) -> void:
+	if world == null:
+		return
+	var existing_z := world.get_node_or_null("Zabita")
+	if existing_z:
+		if Net.online():
+			rpc_redirect_zabita.rpc(attacker_id, weapon, fine, reason)
+		else:
+			rpc_redirect_zabita(attacker_id, weapon, fine, reason)
+	else:
+		var from_n := att.global_position.z < 0.0 if att else true
+		if Net.online():
+			rpc_spawn_zabita.rpc(from_n, attacker_id, weapon, fine, reason)
+		else:
+			rpc_spawn_zabita(from_n, attacker_id, weapon, fine, reason)
+
+
 ## Meyve Bıçağı saldırısı -> Sunucu doğrular ve Zabıta anında saldırganın peşine koşar!
 func request_knife_attack(target_id: int) -> void:
 	if Net.online():
@@ -1584,17 +1603,136 @@ func rpc_request_knife_attack(target_id: int) -> void:
 	knock.y = 0.0
 	knock = knock.normalized() if knock.length_squared() > 0.01 else Vector3(1, 0, 0)
 	vic.apply_knife_hit_synced(knock)
-	_broadcast_toast("🔪 %s → %s 🚨" % [Net.display_name(attacker_id), Net.display_name(target_id)], Color(1.0, 0.32, 0.26))
-	# Zabıta zaten sahnedeyse saldırgana yönlendir, yoksa hemen en yakın kapıdan koşarak gönder!
-	var existing_z := world.get_node_or_null("Zabita")
-	if existing_z:
-		existing_z.start_chase(attacker_id)
+	_broadcast_toast("🔪 %s → %s 🚨 Zabıta geliyor!" % [Net.display_name(attacker_id), Net.display_name(target_id)], Color(1.0, 0.32, 0.26))
+	_dispatch_zabita(att, attacker_id, "bicak", 50, "Bıçaklı Saldırı Cezası!")
+
+
+## Sopa saldırısı ihbarı -> Zabıta koşup ceza yazar ve sopaya el koyar!
+func request_assault_report(target_id: int, weapon := "sopa") -> void:
+	if Net.online():
+		rpc_request_assault_report.rpc_id(1, target_id, weapon)
 	else:
-		var from_n := att.global_position.z < 0.0
-		if Net.online():
-			rpc_spawn_zabita.rpc(from_n, attacker_id)
-		else:
-			rpc_spawn_zabita(from_n, attacker_id)
+		rpc_request_assault_report(target_id, weapon)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func rpc_request_assault_report(target_id: int, weapon := "sopa") -> void:
+	if Net.online() and not multiplayer.is_server():
+		return
+	if players == null or world == null:
+		return
+	var attacker_id := multiplayer.get_remote_sender_id() if Net.online() else 1
+	if attacker_id == 0:
+		attacker_id = 1
+	if attacker_id == target_id:
+		return
+	var att := players.get_node_or_null(str(attacker_id)) as Node3D
+	var vic := players.get_node_or_null(str(target_id)) as Node3D
+	if att == null or vic == null:
+		return
+	_broadcast_toast("🏏 %s → %s sopayla vurdu! 🚨 Zabıta geliyor!" % [Net.display_name(attacker_id), Net.display_name(target_id)], Color(1.0, 0.38, 0.26))
+	_dispatch_zabita(att, attacker_id, weapon, 50, "Sopayla Saldırı Cezası!")
+
+
+## Fırlatılan bira şişesi rakip oyuncuya isabet etti -> Yere serer + kötü kokutur + Zabıta gelir!
+func request_beer_hit_player(target_id: int, knock_dir: Vector3) -> void:
+	if Net.online():
+		rpc_request_beer_hit_player.rpc_id(1, target_id, knock_dir)
+	else:
+		rpc_request_beer_hit_player(target_id, knock_dir)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func rpc_request_beer_hit_player(target_id: int, knock_dir: Vector3) -> void:
+	if Net.online() and not multiplayer.is_server():
+		return
+	if players == null or world == null:
+		return
+	var attacker_id := multiplayer.get_remote_sender_id() if Net.online() else 1
+	if attacker_id == 0:
+		attacker_id = 1
+	if attacker_id == target_id:
+		return
+	var att := players.get_node_or_null(str(attacker_id)) as Node3D
+	var vic := players.get_node_or_null(str(target_id)) as Node3D
+	if att == null or vic == null:
+		return
+	if att.global_position.distance_to(vic.global_position) > 16.0:
+		return
+	var kd := Vector3(knock_dir.x, 0.0, knock_dir.z)
+	if kd.length_squared() < 0.01:
+		kd = vic.global_position - att.global_position
+		kd.y = 0.0
+	kd = kd.normalized() if kd.length_squared() > 0.01 else Vector3(0, 0, 1)
+	if vic.has_method("apply_beer_hit_synced"):
+		vic.apply_beer_hit_synced(kd, 25.0)
+	_broadcast_toast("🍺💥 %s → %s'e bira şişesi attı! 🚨 Zabıta geliyor!" % [Net.display_name(attacker_id), Net.display_name(target_id)], Color(0.86, 0.94, 0.28))
+	_dispatch_zabita(att, attacker_id, "bira", 45, "Bira Şişesiyle Saldırı!")
+
+
+## Fırlatılan bira şişesi rakip tezgaha isabet etti -> Kötü koku + 4x çürüme + Zabıta gelir!
+func request_beer_hit_stall(stall_owner_id: int) -> void:
+	if Net.online():
+		rpc_request_beer_hit_stall.rpc_id(1, stall_owner_id)
+	else:
+		rpc_request_beer_hit_stall(stall_owner_id)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func rpc_request_beer_hit_stall(stall_owner_id: int) -> void:
+	if Net.online() and not multiplayer.is_server():
+		return
+	if players == null or stalls == null or world == null:
+		return
+	var attacker_id := multiplayer.get_remote_sender_id() if Net.online() else 1
+	if attacker_id == 0:
+		attacker_id = 1
+	if attacker_id == stall_owner_id:
+		return
+	var att := players.get_node_or_null(str(attacker_id)) as Node3D
+	var st := stalls.get_node_or_null("Stall_%d" % stall_owner_id)
+	if att == null or st == null:
+		return
+	if att.global_position.distance_to((st as Node3D).global_position) > 16.0:
+		return
+	if st.has_method("apply_beer_sabotage"):
+		st.apply_beer_sabotage(35.0, 0.15)
+	_broadcast_toast("🍺🤢 %s, %s'in tezgahına bira attı! (4x çürüme) 🚨" % [Net.display_name(attacker_id), Net.display_name(stall_owner_id)], Color(0.76, 0.94, 0.28))
+	_dispatch_zabita(att, attacker_id, "bira", 40, "Tezgaha Bira Sabotajı!")
+
+
+## Sigara/Puro dumanı rakip tezgaha üflendi -> Tüm ürünlerde -%10 tazelik + Zabıta gelir!
+func request_smoke_sabotage(stall_owner_id: int, weapon := "sigara") -> void:
+	if Net.online():
+		rpc_request_smoke_sabotage.rpc_id(1, stall_owner_id, weapon)
+	else:
+		rpc_request_smoke_sabotage(stall_owner_id, weapon)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func rpc_request_smoke_sabotage(stall_owner_id: int, weapon := "sigara") -> void:
+	if Net.online() and not multiplayer.is_server():
+		return
+	if players == null or stalls == null or world == null:
+		return
+	var attacker_id := multiplayer.get_remote_sender_id() if Net.online() else 1
+	if attacker_id == 0:
+		attacker_id = 1
+	if attacker_id == stall_owner_id:
+		return
+	var att := players.get_node_or_null(str(attacker_id)) as Node3D
+	var st := stalls.get_node_or_null("Stall_%d" % stall_owner_id)
+	if att == null or st == null:
+		return
+	if att.global_position.distance_to((st as Node3D).global_position) > 4.8:
+		return
+	if st.total_stock() <= 0:
+		return
+	if st.has_method("apply_smoke_rot"):
+		st.apply_smoke_rot(0.10)
+	var w_id := weapon if weapon in ["sigara", "puro"] else "sigara"
+	_broadcast_toast("🚬💨 %s, %s'in tezgahına duman üfledi (-%%10 tazelik)! 🚨" % [Net.display_name(attacker_id), Net.display_name(stall_owner_id)], Color(0.86, 0.84, 0.78))
+	_dispatch_zabita(att, attacker_id, w_id, 30, "Tezgaha Duman Sabotajı!")
 
 
 func _refresh_scoreboard_rows(target_box: VBoxContainer, show_crown: bool) -> void:
@@ -2071,17 +2209,26 @@ func rpc_sync_day_time(d_num: int, d_time: float, ev_t: float, crowd_t := 0.0) -
 
 
 @rpc("authority", "call_local", "reliable")
-func rpc_spawn_zabita(from_north: bool, attacker_id := 0) -> void:
+func rpc_spawn_zabita(from_north: bool, attacker_id := 0, weapon := "bicak", fine := 50, reason := "Saldırı Cezası!") -> void:
 	if world == null:
 		return
 	var ex := world.get_node_or_null("Zabita")
 	if ex:
 		if attacker_id > 0:
-			ex.start_chase(attacker_id)
+			ex.start_chase(attacker_id, weapon, fine, reason)
 		return
 	var z := InspectorScript.new()
-	z.init_inspector(from_north, attacker_id)
+	z.init_inspector(from_north, attacker_id, weapon, fine, reason)
 	world.add_child(z)
+
+
+@rpc("authority", "call_local", "reliable")
+func rpc_redirect_zabita(attacker_id: int, weapon := "bicak", fine := 50, reason := "Saldırı Cezası!") -> void:
+	if world == null:
+		return
+	var ex := world.get_node_or_null("Zabita")
+	if ex:
+		ex.start_chase(attacker_id, weapon, fine, reason)
 
 
 @rpc("authority", "call_local", "reliable")
@@ -2963,11 +3110,13 @@ func _update_meta_hud(dt: float, me: Node) -> void:
 		var tea_s := float(me.get("tea_buff")) if me.get("tea_buff") != null else 0.0
 		var sim_s := float(me.get("simit_buff")) if me.get("simit_buff") != null else 0.0
 		var smk_s := float(me.get("smoke_buff")) if me.get("smoke_buff") != null else 0.0
+		var stk_s := float(me.get("stink_t")) if me.get("stink_t") != null else 0.0
 		var any_b := false
 		for entry: Array in [
 			["tea", tea_s, "🍵 %d"],
 			["simit", sim_s, "🥯 %d"],
 			["smoke", smk_s, "🚬 %d"],
+			["stink", stk_s, "🤢 %dsn"],
 		]:
 			var row: Array = buff_pills[str(entry[0])]
 			var p: PanelContainer = row[0]

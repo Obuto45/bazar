@@ -4,6 +4,14 @@ extends RefCounted
 
 const LP := preload("res://lowpoly.gd")
 const VFX := preload("res://vfx.gd")
+const BEER_MODEL := preload("res://models/pazar_pilsen.glb")
+const TEA_MODEL := preload("res://models/turkish_tea.glb")
+const CIG_MODEL := preload("res://models/cigarette.glb")
+const SIMIT_MODEL := preload("res://models/simit.glb")
+const ACMA_MODEL := preload("res://models/acma.glb")
+const MEGA_MODEL := preload("res://models/megaphone.glb")
+const RADIO_MODEL := preload("res://models/arabesk_radio.glb")
+const SPRAY_MODEL := preload("res://models/spray_bottle.glb")
 
 const CATALOG := {
 	"sigara": {
@@ -16,7 +24,7 @@ const CATALOG := {
 		"consumable": true,
 		"left_hint": "Nefes Çek (+12sn %25 Hız)",
 		"right_hint": "Kül Silk",
-		"desc": "5 dal sigara. Elde sürekli tüter! Sol tıkla nefes çekip duman üfle (+12sn Keyif), sağ tıkla kül silk.",
+		"desc": "5 dal sigara. Sol tıkla çekip üfle (+12sn Keyif; rakip tezgaha üflersen -%10 çürütür, Zabıta gelir!), sağ tıkla kül silk.",
 	},
 	"puro": {
 		"name": "Küba Purosu",
@@ -28,7 +36,7 @@ const CATALOG := {
 		"consumable": true,
 		"left_hint": "Derin Çek & Halka Üfle (+16sn Hız)",
 		"right_hint": "Kül Silk",
-		"desc": "Altın bantlı 3 puro. Yoğun duman halkası üfler + Ağır Abi prestiji (+%18 müşteri ilgisi)!",
+		"desc": "Altın bantlı 3 puro. Prestij (+%18 müşteri ilgisi) verir; rakip tezgaha duman üflersen -%10 çürütür (Zabıta gelir!).",
 	},
 	"cay": {
 		"name": "İnce Belli Çay",
@@ -75,8 +83,8 @@ const CATALOG := {
 		"puffs_per_use": 2,
 		"consumable": true,
 		"left_hint": "Yudumla (cesaret!)",
-		"right_hint": "",
-		"desc": "Tombul mavi şişe, 50 cl. Bağırman güçlenir ama kafan güzelleşir; 3. şişede bayılırsın! Çay ayıltır.",
+		"right_hint": "Fırlat  •  [Q] Fırlat",
+		"desc": "Tombul kehribar şişe, 50 cl. Sol tıkla iç, sağ tık/[Q] ile fırlat: rakibi düşürüp kokutur, tezgahını 4x hızlı çürütür (Zabıta gelir!).",
 	},
 	"megafon": {
 		"name": "El Megafonu",
@@ -176,32 +184,46 @@ static func _make_continuous_wisp(thick: bool, is_steam := false) -> CPUParticle
 
 ## Birinci veya üçüncü şahıs için detaylı 3D eşya modeli üretir.
 ## burn_ratio (0..1): sigara/puroyu kısaltır, çay seviyesini düşürür, simitten ısırık alır.
-static func build_item_model(item_id: String, burn_ratio := 0.0) -> Node3D:
+## ash_ratio (0..1): sigara külünün uzama oranı (sağ tıkla silkince sıfırlanır).
+static func build_item_model(item_id: String, burn_ratio := 0.0, ash_ratio := 0.22) -> Node3D:
 	var root := Node3D.new()
 	root.name = "Item_" + item_id
 	var rem := clampf(1.0 - burn_ratio, 0.22, 1.0) # kalan uzunluk/doluluk oranı
 
 	match item_id:
 		"sigara":
-			# Turuncu filtre + beyaz kağıt gövde (yandıkça kısalır) + kül halkası + yanan kor uç + sürekli duman!
-			LP.add(root, LP.cyl(0.0085, 0.0085, 0.036, 8), Vector3(0, 0, 0.018), Color(0.84, 0.54, 0.24), Vector3(PI / 2, 0, 0))
-			var body_len := 0.095 * rem
-			LP.add(root, LP.cyl(0.0084, 0.0084, body_len, 8), Vector3(0, 0, -body_len * 0.5), Color(0.96, 0.95, 0.92), Vector3(PI / 2, 0, 0))
-			# Kül ve kızgın kor ucu
-			var tip_z := -body_len
-			var ash := LP.add(root, LP.cyl(0.0082, 0.0084, 0.012, 7), Vector3(0, 0, tip_z - 0.0045), Color(0.44, 0.44, 0.46), Vector3(PI / 2, 0, 0))
-			ash.name = "AshRing"
-			var ember := LP.add(root, LP.sphere(0.0088, 6, 4), Vector3(0, 0, tip_z - 0.0105), Color(1.0, 0.34, 0.06))
-			ember.name = "Ember"
-			var em := ember.material_override as StandardMaterial3D
-			em.emission_enabled = true
-			em.emission = Color(1.0, 0.32, 0.05)
-			em.emission_energy_multiplier = 2.6
-			var tip := Node3D.new()
-			tip.name = "SmokeTip"
-			tip.position = Vector3(0, 0, tip_z - 0.015)
-			root.add_child(tip)
-			tip.add_child(_make_continuous_wisp(false, false))
+			# Blender'da modellenen mantar filtreli, çizgili kağıtlı, uzayan katmanlı küllü gerçekçi sigara!
+			var c_inst := CIG_MODEL.instantiate()
+			c_inst.name = "CigaretteMesh"
+			root.add_child(c_inst)
+			var pap := c_inst.find_child("CigPaper", true, false) as Node3D
+			if pap:
+				pap.scale.z = rem
+			var tip_grp := c_inst.find_child("CigTipGroup", true, false) as Node3D
+			if tip_grp:
+				tip_grp.position.z = -0.088 * rem
+				var ash_b := tip_grp.find_child("AshBody", true, false) as Node3D
+				if ash_b:
+					ash_b.scale.z = lerpf(0.28, 2.15, clampf(ash_ratio, 0.0, 1.0))
+				var emb := tip_grp.find_child("Ember", true, false) as MeshInstance3D
+				if emb and emb.mesh and emb.mesh.get_surface_count() > 0:
+					var base_m := emb.mesh.surface_get_material(0)
+					if base_m is StandardMaterial3D:
+						var em := (base_m as StandardMaterial3D).duplicate() as StandardMaterial3D
+						em.emission_enabled = true
+						em.emission_energy_multiplier = 2.6
+						emb.material_override = em
+				var tip := Node3D.new()
+				tip.name = "SmokeTip"
+				tip.position = Vector3(0, 0, -0.004)
+				tip_grp.add_child(tip)
+				tip.add_child(_make_continuous_wisp(false, false))
+			else:
+				var tip_fb := Node3D.new()
+				tip_fb.name = "SmokeTip"
+				tip_fb.position = Vector3(0, 0, -0.088 * rem)
+				root.add_child(tip_fb)
+				tip_fb.add_child(_make_continuous_wisp(false, false))
 
 		"puro":
 			# Kalın kahverengi sarma Küba purosu + altın şerit + geniş kızgın kor ucu + yoğun sürekli duman!
@@ -224,138 +246,95 @@ static func build_item_model(item_id: String, burn_ratio := 0.0) -> Node3D:
 			tip.add_child(_make_continuous_wisp(true, false))
 
 		"cay":
-			# Klasik Türk ince belli çay bardağı + kırmızı şeritli porselen tabak + tavşan kanı çay + dönen çay kaşığı + sıcak buhar!
-			var saucer := Node3D.new()
-			saucer.name = "Saucer"
-			root.add_child(saucer)
-			LP.add(saucer, LP.cyl(0.068, 0.048, 0.012, 14), Vector3(0, 0.006, 0), Color(0.97, 0.96, 0.94), Vector3.ZERO, 0.16)
-			LP.add(saucer, LP.torus(0.062, 0.069, 16, 6), Vector3(0, 0.012, 0), Color(0.78, 0.12, 0.12), Vector3.ZERO, 0.22)
-			LP.add(saucer, LP.cyl(0.032, 0.034, 0.004, 12), Vector3(0, 0.013, 0), Color(0.91, 0.90, 0.88), Vector3.ZERO, 0.22)
-
-			# İçindeki tavşan kanı çay (her yudumda seviye iner!)
-			var fill := clampf(1.0 - burn_ratio * 0.88, 0.16, 1.0)
-			var liq_pivot := Node3D.new()
-			liq_pivot.name = "TeaLiquid"
-			liq_pivot.position = Vector3(0, 0.022, 0)
-			liq_pivot.scale = Vector3(1.0, fill, 1.0)
-			root.add_child(liq_pivot)
-			var tea_c := Color(0.56, 0.09, 0.03, 0.90)
-			var l1 := LP.add(liq_pivot, LP.cyl(0.030, 0.024, 0.038, 12), Vector3(0, 0.019, 0), tea_c, Vector3.ZERO, 0.08)
-			(l1.material_override as StandardMaterial3D).transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-			var l2 := LP.add(liq_pivot, LP.cyl(0.024, 0.030, 0.030, 12), Vector3(0, 0.053, 0), tea_c, Vector3.ZERO, 0.08)
-			(l2.material_override as StandardMaterial3D).transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-			var l3 := LP.add(liq_pivot, LP.cyl(0.031, 0.024, 0.024, 12), Vector3(0, 0.080, 0), Color(0.68, 0.16, 0.04, 0.92), Vector3.ZERO, 0.05)
-			(l3.material_override as StandardMaterial3D).transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-
-			# İnce belli şeffaf cam bardak profili (kalın cam taban -> alt göbek -> ince bel -> açılan ağız + altın şerit)
-			var glass_c := Color(0.92, 0.97, 1.0, 0.30)
-			var g_base := LP.add(root, LP.cyl(0.027, 0.026, 0.014, 12), Vector3(0, 0.018, 0), Color(0.88, 0.94, 0.98, 0.48), Vector3.ZERO, 0.06)
-			(g_base.material_override as StandardMaterial3D).transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-			var g_parts := [
-				[0.035, 0.028, 0.036, 0.042], # alt göbek
-				[0.027, 0.035, 0.028, 0.074], # ince bel daralması
-				[0.036, 0.027, 0.034, 0.105], # üst ağız açılması
-			]
-			for gp: Array in g_parts:
-				var seg := LP.add(root, LP.cyl(float(gp[0]), float(gp[1]), float(gp[2]), 14), Vector3(0, float(gp[3]), 0), glass_c, Vector3.ZERO, 0.05)
-				var gm := seg.material_override as StandardMaterial3D
+			# Blender'da modellenen ince belli cam bardak, desenli porselen tabak, 2 küp şeker, dönen kaşık + tavşan kanı çay!
+			var t_inst := TEA_MODEL.instantiate()
+			t_inst.name = "TurkishTeaMesh"
+			root.add_child(t_inst)
+			var fill := clampf(1.0 - burn_ratio * 0.88, 0.14, 1.0)
+			var liq := t_inst.find_child("TeaLiquid", true, false) as MeshInstance3D
+			if liq:
+				liq.scale.y = fill
+				# Godot Forward+ şeffaflık sıralaması: iç çay opak yakut kırmızı, dış cam yarı saydam olmalı!
+				var lm := StandardMaterial3D.new()
+				lm.albedo_color = Color(0.56, 0.055, 0.012)
+				lm.roughness = 0.08
+				lm.metallic_specular = 0.85
+				lm.emission_enabled = true
+				lm.emission = Color(0.45, 0.04, 0.008)
+				lm.emission_energy_multiplier = 0.35
+				liq.material_override = lm
+			var glass_m := t_inst.find_child("TeaGlass", true, false) as MeshInstance3D
+			if glass_m:
+				var gm := StandardMaterial3D.new()
+				gm.albedo_color = Color(0.95, 0.98, 1.0, 0.22)
 				gm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-				gm.metallic_specular = 0.95
-			LP.add(root, LP.torus(0.034, 0.0365, 16, 6), Vector3(0, 0.122, 0), Color(0.96, 0.80, 0.32), Vector3.ZERO, 0.22, 0.85)
-
-			# Dönen paslanmaz çay kaşığı (sağ tıkla karıştırırken Y ekseninde hızla döner!)
-			var sp_piv := Node3D.new()
-			sp_piv.name = "SpoonPivot"
-			sp_piv.position = Vector3(0, 0.028, 0)
-			root.add_child(sp_piv)
-			var sp_arm := Node3D.new()
-			sp_arm.position = Vector3(0.012, 0.052, 0.0)
-			sp_arm.rotation_degrees = Vector3(0, 0, -18)
-			sp_piv.add_child(sp_arm)
-			LP.add(sp_arm, LP.cyl(0.0022, 0.0032, 0.115, 6), Vector3(0, 0.01, 0), Color(0.86, 0.89, 0.93), Vector3.ZERO, 0.15, 0.92)
-			LP.add(sp_arm, LP.ellipsoid(0.0085, 0.012, 0.004, 6, 4), Vector3(0, -0.048, 0), Color(0.88, 0.91, 0.95), Vector3.ZERO, 0.14, 0.94)
-
-			# Sıcak çay buharı kaynağı
+				gm.roughness = 0.05
+				gm.metallic_specular = 1.0
+				glass_m.material_override = gm
 			var tip := Node3D.new()
 			tip.name = "SmokeTip"
-			tip.position = Vector3(0, 0.130, 0)
+			tip.position = Vector3(0, 0.112, 0)
 			root.add_child(tip)
 			if burn_ratio < 0.85:
 				tip.add_child(_make_continuous_wisp(false, true))
 
 		"simit":
-			# Altın kızarmış örgülü susamlı sokak simidi (12 yay parçası; her ısırıkta parça eksilir!)
-			var seg_count := 12
-			var keep_segs := clampi(int(round((1.0 - burn_ratio * 0.72) * float(seg_count))), 4, seg_count)
-			var ring_r := 0.068
-			var crust_c := Color(0.76, 0.44, 0.15)
-			var crust_hi := Color(0.84, 0.52, 0.19)
-			var sesame_c := Color(0.96, 0.90, 0.72)
-			for i in keep_segs:
-				var ang := float(i) / float(seg_count) * TAU - PI * 0.35
-				var p := Vector3(cos(ang) * ring_r, sin(ang) * ring_r, 0.0)
-				var rot := Vector3(0.0, 0.0, ang)
-				var col := crust_c if i % 2 == 0 else crust_hi
-				LP.add(root, LP.ellipsoid(0.022, 0.026, 0.019, 7, 5), p, col, rot, 0.78)
-				# Örgü burgu kabartısı
-				var p2 := Vector3(cos(ang + 0.14) * ring_r, sin(ang + 0.14) * ring_r, 0.003 if i % 2 == 0 else -0.003)
-				LP.add(root, LP.ellipsoid(0.017, 0.021, 0.015, 6, 4), p2, crust_hi, Vector3(0.25, 0, ang + 0.35), 0.74)
-				# Susam taneleri (ön & üst yüzeyde)
-				for s_k in 2:
-					var sa := ang + (0.08 if s_k == 0 else -0.08)
-					var sr := ring_r + (0.010 if s_k == 0 else -0.008)
-					var sz := 0.017 if s_k == 0 else -0.016
-					LP.add(root, LP.box(Vector3(0.0055, 0.0032, 0.0025)), Vector3(cos(sa) * sr, sin(sa) * sr, sz), sesame_c, Vector3(0, 0, sa + 0.5), 0.65)
+			# Blender'da modellenen pekmez kabuklu, bol susamlı çift burgu sokak simidi (10 parça; ısırıldıkça eksilir!)
+			var s_inst := SIMIT_MODEL.instantiate()
+			s_inst.name = "SimitMesh"
+			root.add_child(s_inst)
+			var keep_segs := clampi(int(round((1.0 - burn_ratio * 0.72) * 10.0)), 3, 10)
+			for i in 10:
+				var seg := s_inst.find_child("SimitSeg_%d" % i, true, false) as Node3D
+				if seg:
+					seg.visible = i < keep_segs
 			var tip := Node3D.new()
 			tip.name = "SmokeTip"
 			tip.position = Vector3(0, 0.075, 0)
 			root.add_child(tip)
 
 		"acma":
-			# Yumuşak, parlak (yumurta sürülmüş) burgulu açma halkası: simitten kalın ve tombul, susamsız
-			var seg_n := 10
-			var keep_n := clampi(int(round((1.0 - burn_ratio * 0.72) * float(seg_n))), 4, seg_n)
-			var ar := 0.056
-			var bun := Color(0.85, 0.58, 0.27)
-			var bun_hi := Color(0.93, 0.70, 0.36)
-			for i in keep_n:
-				var ang := float(i) / float(seg_n) * TAU - PI * 0.35
-				var p := Vector3(cos(ang) * ar, sin(ang) * ar, 0.0)
-				var mi := LP.add(root, LP.ellipsoid(0.03, 0.033, 0.03, 8, 6), p, bun if i % 2 == 0 else bun_hi, Vector3(0.0, 0.0, ang), 0.32)
-				(mi.material_override as StandardMaterial3D).metallic_specular = 0.75
-				# Burgu sırtı (hafif çapraz kabartı)
-				var p2 := Vector3(cos(ang + 0.2) * (ar + 0.004), sin(ang + 0.2) * (ar + 0.004), 0.012)
-				LP.add(root, LP.ellipsoid(0.016, 0.026, 0.012, 6, 4), p2, bun_hi.lightened(0.08), Vector3(0.5, 0, ang + 0.6), 0.3)
+			# Blender'da modellenen yumurta sarılı parlak, puf pastane açması + çörek otu (8 parça; ısırıldıkça eksilir!)
+			var a_inst := ACMA_MODEL.instantiate()
+			a_inst.name = "AcmaMesh"
+			root.add_child(a_inst)
+			var keep_n := clampi(int(round((1.0 - burn_ratio * 0.72) * 8.0)), 3, 8)
+			for i in 8:
+				var aseg := a_inst.find_child("AcmaSeg_%d" % i, true, false) as Node3D
+				if aseg:
+					aseg.visible = i < keep_n
 			var tip_a := Node3D.new()
 			tip_a.name = "SmokeTip"
 			tip_a.position = Vector3(0, 0.07, 0)
 			root.add_child(tip_a)
 
 		"bira":
-			# Tombul 50 cl mavi şişe: kalın gövde, yuvarlak omuz, kısa boyun, altın kapak, beyaz-kırmızı etiket
-			var glass := Color(0.12, 0.32, 0.78, 0.82)
-			var b1 := LP.add(root, LP.cyl(0.037, 0.037, 0.11, 12), Vector3(0, 0.055, 0), glass, Vector3.ZERO, 0.08)
-			var b2 := LP.add(root, LP.ellipsoid(0.037, 0.03, 0.037, 12, 6), Vector3(0, 0.11, 0), glass, Vector3.ZERO, 0.08)
-			var b3 := LP.add(root, LP.cyl(0.013, 0.017, 0.045, 10), Vector3(0, 0.152, 0), glass, Vector3.ZERO, 0.08)
-			for mi2 in [b1, b2, b3]:
-				var gm := (mi2 as MeshInstance3D).material_override as StandardMaterial3D
-				gm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-				gm.metallic_specular = 1.0
-			LP.add(root, LP.cyl(0.0335, 0.0335, 0.085, 12), Vector3(0, 0.05, 0), Color(0.86, 0.62, 0.16), Vector3.ZERO, 0.6) # bira
-			LP.add(root, LP.cyl(0.0375, 0.0375, 0.05, 12), Vector3(0, 0.055, 0), Color(0.97, 0.96, 0.92), Vector3.ZERO, 0.6) # etiket
-			LP.add(root, LP.cyl(0.0378, 0.0378, 0.012, 12), Vector3(0, 0.055, 0), Color(0.82, 0.12, 0.14), Vector3.ZERO, 0.6)
-			LP.add(root, LP.cyl(0.0145, 0.0145, 0.01, 10), Vector3(0, 0.178, 0), Color(0.86, 0.7, 0.24), Vector3.ZERO, 0.3, 0.8)
+			# Blender'da modellenen telifsiz 50 cl Pazar Pilsen tombul kehribar şişe!
+			var b_inst := BEER_MODEL.instantiate()
+			b_inst.name = "PazarPilsenMesh"
+			b_inst.rotation_degrees = Vector3(0.0, -14.0, 0.0) # etiket 1. şahısta oyuncuya dönük
+			root.add_child(b_inst)
+			# İlk yudumdan sonra kapağı açılmış ve sıvı seviyesi inmiş görünür
+			if burn_ratio > 0.05:
+				var cap := b_inst.find_child("CrownCap", true, false) as Node3D
+				if cap:
+					cap.visible = false
+				var liq := b_inst.find_child("PilsnerLiquid", true, false) as Node3D
+				if liq:
+					liq.scale.y = clampf(1.0 - burn_ratio * 0.72, 0.28, 1.0)
+				var foam := b_inst.find_child("BeerFoam", true, false) as Node3D
+				if foam:
+					foam.visible = false
 			var tip_b := Node3D.new()
 			tip_b.name = "SmokeTip"
-			tip_b.position = Vector3(0, 0.18, 0)
+			tip_b.position = Vector3(0, 0.21, 0)
 			root.add_child(tip_b)
 
 		"megafon":
-			# Beyaz-kırmızı klasik pazarcı el megafonu + kabza
-			LP.add(root, LP.cyl(0.038, 0.12, 0.24, 10), Vector3(0, 0.04, -0.10), Color(0.96, 0.95, 0.92), Vector3(PI / 2, 0, 0), 0.42)
-			LP.add(root, LP.torus(0.105, 0.125, 12, 6), Vector3(0, 0.04, -0.22), Color(0.88, 0.18, 0.14), Vector3(PI / 2, 0, 0), 0.35)
-			LP.add(root, LP.cyl(0.036, 0.036, 0.07, 8), Vector3(0, 0.04, 0.05), Color(0.88, 0.18, 0.14), Vector3(PI / 2, 0, 0), 0.45)
-			LP.add(root, LP.box(Vector3(0.032, 0.11, 0.042)), Vector3(0, -0.045, 0.02), Color(0.22, 0.22, 0.24), Vector3(0.22, 0, 0))
+			# Blender'da modellenen kırmızı-beyaz pazarcı el megafonu (huni + akustik koni + kabza + tetik)!
+			var m_inst := MEGA_MODEL.instantiate()
+			m_inst.name = "MegaphoneMesh"
+			root.add_child(m_inst)
 			var bell := Node3D.new()
 			bell.name = "SmokeTip"
 			bell.position = Vector3(0, 0.04, -0.24)
@@ -371,22 +350,18 @@ static func build_item_model(item_id: String, burn_ratio := 0.0) -> Node3D:
 			LP.add(root, LP.prism(Vector3(0.026, 0.055, 0.005)), Vector3(0, 0.004, -0.182), Color(0.88, 0.92, 0.96), Vector3(-PI / 2, 0, PI / 2), 0.16, 0.94)
 
 		"radyo":
-			# Retro kasetçalar / transistörlü Arabesk radyo (çift hoparlör + parlayan frekans kadranı + krom anten)
-			LP.add(root, LP.box(Vector3(0.32, 0.18, 0.11)), Vector3(0, 0.09, 0), Color(0.18, 0.17, 0.19), Vector3.ZERO, 0.55)
-			LP.add(root, LP.box(Vector3(0.30, 0.032, 0.015)), Vector3(0, 0.145, -0.055), Color(0.95, 0.78, 0.32), Vector3.ZERO, 0.25)
-			var dial := LP.add(root, LP.box(Vector3(0.28, 0.024, 0.016)), Vector3(0, 0.145, 0.056), Color(1.0, 0.82, 0.35))
-			dial.name = "Dial"
-			var dm := dial.material_override as StandardMaterial3D
-			dm.emission_enabled = true
-			dm.emission = Color(1.0, 0.72, 0.22)
-			dm.emission_energy_multiplier = 1.4
-			for sx: float in [-0.095, 0.095]:
-				LP.add(root, LP.cyl(0.052, 0.052, 0.014, 10), Vector3(sx, 0.072, 0.056), Color(0.28, 0.28, 0.32), Vector3(PI / 2, 0, 0), 0.4, 0.6)
-				LP.add(root, LP.cyl(0.052, 0.052, 0.014, 10), Vector3(sx, 0.072, -0.056), Color(0.28, 0.28, 0.32), Vector3(PI / 2, 0, 0), 0.4, 0.6)
-			# Kaset kapağı + tutma sapı + krom anten
-			LP.add(root, LP.box(Vector3(0.085, 0.065, 0.018)), Vector3(0, 0.072, 0.056), Color(0.12, 0.12, 0.14))
-			LP.add(root, LP.box(Vector3(0.24, 0.018, 0.02)), Vector3(0, 0.215, 0), Color(0.75, 0.76, 0.8), Vector3.ZERO, 0.25, 0.85)
-			LP.add(root, LP.cyl(0.004, 0.006, 0.26, 6), Vector3(0.13, 0.29, -0.02), Color(0.84, 0.86, 0.9), Vector3(0, 0, -0.28), 0.2, 0.9)
+			# Blender'da modellenen 80'ler retro Arabesk kasetçalar boombox (çift hoparlör, kaset yuvası, ışıklı FM kadranı, teleskopik anten)!
+			var r_inst := RADIO_MODEL.instantiate()
+			r_inst.name = "ArabeskRadioMesh"
+			root.add_child(r_inst)
+			var dial := r_inst.find_child("Dial", true, false) as MeshInstance3D
+			if dial and dial.mesh and dial.mesh.get_surface_count() > 0:
+				var base_dm := dial.mesh.surface_get_material(0)
+				var dm := (base_dm.duplicate() as StandardMaterial3D) if (base_dm is StandardMaterial3D) else StandardMaterial3D.new()
+				dm.emission_enabled = true
+				dm.emission = Color(1.0, 0.72, 0.22)
+				dm.emission_energy_multiplier = 1.4
+				dial.material_override = dm
 
 		"sopa":
 			# Ahşap beyzbol sopası: sap +Z, kalın uç -Z (uzunluk ~0.56 m)
@@ -398,20 +373,31 @@ static func build_item_model(item_id: String, burn_ratio := 0.0) -> Node3D:
 			LP.add(root, LP.cyl(0.037, 0.034, 0.07, 9), Vector3(0, 0, -0.445), wood, Vector3(PI / 2, 0, 0), 0.7)
 
 		"spray":
-			# Yarı saydam mavi plastik fısfıs şişesi + içinde su + beyaz tetikli başlık ve uzun nozul
-			var bottle := LP.add(root, LP.cyl(0.036, 0.04, 0.15, 9), Vector3(0, 0.0, 0), Color(0.55, 0.82, 1.0, 0.55), Vector3.ZERO, 0.12)
-			var bm := bottle.material_override as StandardMaterial3D
-			bm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-			bm.metallic_specular = 0.9
-			LP.add(root, LP.cyl(0.031, 0.035, 0.1, 9), Vector3(0, -0.02, 0), Color(0.3, 0.62, 0.98), Vector3.ZERO, 0.1)
-			LP.add(root, LP.cyl(0.026, 0.036, 0.03, 9), Vector3(0, 0.088, 0), Color(0.96, 0.96, 0.98), Vector3.ZERO, 0.4)
-			LP.add(root, LP.box(Vector3(0.05, 0.05, 0.07)), Vector3(0, 0.124, -0.012), Color(0.96, 0.96, 0.98), Vector3.ZERO, 0.4)
-			LP.add(root, LP.cyl(0.008, 0.01, 0.05, 6), Vector3(0, 0.134, -0.065), Color(0.2, 0.62, 0.95), Vector3(PI / 2, 0, 0), 0.35)
-			var trig := LP.add(root, LP.box(Vector3(0.016, 0.05, 0.016)), Vector3(0, 0.096, -0.046), Color(0.2, 0.62, 0.95), Vector3(-0.35, 0, 0), 0.4)
-			trig.name = "Trigger"
+			# Blender'da modellenen ince belli yarı saydam mavi Su Fısfısı + iç su + hareketli tetik + nozul!
+			var sp_inst := SPRAY_MODEL.instantiate()
+			sp_inst.name = "SprayBottleMesh"
+			root.add_child(sp_inst)
+			var sb_m := sp_inst.find_child("SprayBody", true, false) as MeshInstance3D
+			if sb_m:
+				var pm := StandardMaterial3D.new()
+				pm.albedo_color = Color(0.68, 0.88, 1.0, 0.28)
+				pm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+				pm.roughness = 0.06
+				pm.metallic_specular = 1.0
+				sb_m.material_override = pm
+			var sw_m := sp_inst.find_child("SprayWater", true, false) as MeshInstance3D
+			if sw_m:
+				var wm := StandardMaterial3D.new()
+				wm.albedo_color = Color(0.10, 0.54, 0.96)
+				wm.roughness = 0.07
+				wm.metallic_specular = 0.9
+				wm.emission_enabled = true
+				wm.emission = Color(0.08, 0.42, 0.85)
+				wm.emission_energy_multiplier = 0.18
+				sw_m.material_override = wm
 			var nozzle := Node3D.new()
 			nozzle.name = "SmokeTip" # duman ucu ile aynı adı paylaşır: buğu buradan çıkar
-			nozzle.position = Vector3(0, 0.134, -0.095)
+			nozzle.position = Vector3(0, 0.132, -0.098)
 			root.add_child(nozzle)
 
 	return root

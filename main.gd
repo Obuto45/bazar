@@ -247,6 +247,7 @@ func _ready() -> void:
 			get_viewport().get_texture().get_image().save_png(OS.get_user_data_dir() + "/mptest_%s.png" % ("host" if "host" in args else "join"))
 		if me and "host" in args:
 			_selftest_shops(me)
+			await _selftest_truck(me)
 		print("MPTEST_OK ", "host" if "host" in args else "join", " players=", players.get_child_count() if players else 0, " stalls=", stalls.get_child_count() if stalls else 0)
 		get_tree().quit()
 		return
@@ -688,7 +689,14 @@ func _build_hotbar(layer: CanvasLayer, theme: Theme) -> void:
 		var main_l := _lbl(vb, "—", 16, 0.95)
 		main_l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		main_l.autowrap_mode = TextServer.AUTOWRAP_OFF
-		hotbar_slots.append([p, num, main_l, sb])
+		var tex := TextureRect.new()
+		tex.custom_minimum_size = Vector2(26, 26)
+		tex.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		tex.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		tex.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		tex.hide()
+		vb.add_child(tex)
+		hotbar_slots.append([p, num, main_l, sb, tex])
 	hotbar_wrap.hide()
 
 	# Seçili eşyanın Sol / Sağ Tık aksiyon ipucu (hotbar'ın hemen üstünde)
@@ -719,6 +727,8 @@ func _build_hotbar(layer: CanvasLayer, theme: Theme) -> void:
 		["simit", Color(1.0, 0.78, 0.28)],
 		["smoke", Color(0.68, 0.84, 1.0)],
 		["stink", Color(0.56, 0.90, 0.26)],
+		["beer", Color(0.35, 0.6, 1.0)],
+		["prestige", Color(1.0, 0.84, 0.35)],
 	]:
 		var bp := PanelContainer.new()
 		var bsb := _sb(Color(0.09, 0.06, 0.04, 0.86), 8, 3)
@@ -755,6 +765,8 @@ func _refresh_hotbar() -> void:
 			num_l.text = str(i + 1)
 			main_l.text = "—"
 			main_l.modulate.a = 0.4
+			main_l.show()
+			(row[4] as TextureRect).hide()
 		else:
 			var iid := str(sl.get("id", ""))
 			var info_i: Dictionary = Items.CATALOG.get(iid, {"icon": "?", "short": iid, "consumable": false, "puffs_per_use": 1})
@@ -772,6 +784,10 @@ func _refresh_hotbar() -> void:
 			num_l.text = "%d  %s" % [i + 1, badge]
 			main_l.text = str(info_i["icon"])
 			main_l.modulate.a = 1.0
+			var tex_r: TextureRect = row[4]
+			tex_r.texture = load(str(info_i["icon_tex"])) if info_i.has("icon_tex") else null
+			tex_r.visible = tex_r.texture != null
+			main_l.visible = not tex_r.visible
 
 
 func _build_voice_hud(layer: CanvasLayer, theme: Theme) -> void:
@@ -1235,6 +1251,10 @@ func open_shop(shop_id: String) -> void:
 	if not Shops.is_open(shop_id, prog):
 		show_toast("🔒 %s kapalı — %s" % [Shops.display_name(shop_id, prog), Shops.closed_text(shop_id, prog)], Color(1.0, 0.7, 0.4))
 		return
+	var me_g := _my_gender()
+	if Shops.SHOPS[shop_id].has("g") and int(Shops.SHOPS[shop_id]["g"]) != me_g:
+		show_toast("💇 Kuaför kadınlara hizmet veriyor — berbere git" if me_g == 0 else "💈 Berber erkeklere hizmet veriyor — kuaföre git", Color(1.0, 0.7, 0.4))
+		return
 	current_shop = shop_id
 	var info: Dictionary = Shops.SHOPS[shop_id]
 	shop_title_lbl.text = "%s %s" % [str(info["icon"]), Shops.display_sign(shop_id, prog)]
@@ -1258,7 +1278,15 @@ func open_shop(shop_id: String) -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 
+func _my_gender() -> int:
+	var me := players.get_node_or_null(str(multiplayer.get_unique_id() if Net.online() else 1)) if players else null
+	return int(me.look.get("gender", 0)) if me else 0
+
+
 func _close_shop() -> void:
+	var me := players.get_node_or_null(str(multiplayer.get_unique_id() if Net.online() else 1)) if players else null
+	if me and not me._look_preview.is_empty():
+		me.preview_look("", 0)
 	shop_wrap.hide()
 	current_shop = ""
 	if world and not _is_pause_or_modal_open() and not day_ended:
@@ -1347,6 +1375,8 @@ func _refresh_look_rows(me: Node) -> void:
 	var cur: Dictionary = me.get("look") if me.get("look") != null else {}
 	for kind in Shops.SHOPS[current_shop].get("looks", []):
 		var info: Dictionary = Shops.LOOKS[kind]
+		if info.has("g") and int(info["g"]) != int(cur.get("gender", 0)):
+			continue
 		var t := _lbl(shop_look_box, "%s  •  %d TL" % [str(info["title"]), int(info["cost"])], 14, 1.0)
 		t.add_theme_color_override("font_color", GOLD)
 		var row := HFlowContainer.new()
@@ -1354,7 +1384,7 @@ func _refresh_look_rows(me: Node) -> void:
 		shop_look_box.add_child(row)
 		var opts: Array = info["opts"]
 		for i in opts.size():
-			var sel: bool = int(cur.get(kind, -1)) == i or (int(cur.get(kind, -1)) == -1 and kind in ["hair", "must", "hat"] and i == 0)
+			var sel: bool = int(cur.get(kind, -1)) == i
 			var o = opts[i]
 			var b: Button
 			if o is Color:
@@ -1369,6 +1399,8 @@ func _refresh_look_rows(me: Node) -> void:
 				b = _btn(row, ("✔ " if sel else "") + str(o), _on_buy_look.bind(kind, i), 30)
 				b.custom_minimum_size.x = 96
 			b.disabled = sel or int(me.money) < int(info["cost"])
+			b.mouse_entered.connect(me.preview_look.bind(kind, i))
+			b.mouse_exited.connect(me.preview_look.bind("", 0))
 
 
 func _on_buy_look(kind: String, idx: int) -> void:
@@ -1393,6 +1425,9 @@ func rpc_request_look(kind: String, idx: int, shop_id := "") -> void:
 		pid = 1
 	var p := players.get_node_or_null(str(pid))
 	if p == null:
+		return
+	var g := int(p.look.get("gender", 0))
+	if (Shops.LOOKS[kind].has("g") and int(Shops.LOOKS[kind]["g"]) != g) or (Shops.SHOPS[shop_id].has("g") and int(Shops.SHOPS[shop_id]["g"]) != g):
 		return
 	var cost := int(Shops.LOOKS[kind]["cost"])
 	if int(p.money) < cost:
@@ -1463,6 +1498,23 @@ func _on_buy_item(item_id: String) -> void:
 
 
 ## Host doğrular: dükkan açık mı, bu dükkan bunu satıyor mu.
+## mptest host: park etmiş toptancı aracının içinden yürüyerek geçilemiyor mu.
+func _selftest_truck(me) -> void:
+	var tr := world.get_node_or_null("Wholesaler") as Node3D
+	if tr == null:
+		print("TRUCKTEST SKIP")
+		return
+	tr.position = Vector3(0, 0, 0)
+	tr.state = tr.State.PARKED
+	tr.state_timer = 999.0
+	me.global_position = Vector3(2.4, 0.1, 0.0)
+	for i in 90:
+		me.velocity = Vector3(-4.0, me.velocity.y - 0.3, 0.0)
+		me.move_and_slide()
+		await get_tree().physics_frame
+	print("TRUCKTEST ", "OK" if me.global_position.x > 1.0 else "FAIL x=%.2f" % me.global_position.x)
+
+
 ## mptest host: her dükkanın kapısı var mı, açık olanlardan her ürün/süs satın alınabiliyor mu.
 func _selftest_shops(me) -> void:
 	var bad := []
@@ -3142,8 +3194,10 @@ func _update_meta_hud(dt: float, me: Node) -> void:
 		for entry: Array in [
 			["tea", tea_s, "🍵 %d"],
 			["simit", sim_s, "🥯 %d"],
-			["smoke", smk_s, "🚬 %d"],
+			["smoke", smk_s, "🚬 Hız %dsn"],
 			["stink", stk_s, "🤢 %dsn"],
+			["beer", float(me._drunk_t) if int(me.drunk_level) > 0 else 0.0, "🍺 Sarhoş " + str(me.drunk_level) + "/3 • %dsn"],
+			["prestige", float(me.prestige_t), "🎩 Prestij %dsn"],
 		]:
 			var row: Array = buff_pills[str(entry[0])]
 			var p: PanelContainer = row[0]

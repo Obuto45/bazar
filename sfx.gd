@@ -193,6 +193,21 @@ func _ensure_bus(bus_name: String) -> void:
 		AudioServer.add_bus(idx)
 		AudioServer.set_bus_name(idx, bus_name)
 		AudioServer.set_bus_send(idx, BUS_VOICE if bus_name == BUS_VOICE_MEGA else "Master")
+		if bus_name == BUS_VOICE_MEGA:
+			# Megafon hoparlörü: dar bant (telefon/korna tınısı) + hafif cızırtı + biraz daha yüksek
+			var hp := AudioEffectHighPassFilter.new()
+			hp.cutoff_hz = 450.0
+			var lp := AudioEffectLowPassFilter.new()
+			lp.cutoff_hz = 3400.0
+			var dist := AudioEffectDistortion.new()
+			dist.mode = AudioEffectDistortion.MODE_OVERDRIVE
+			dist.drive = 0.45
+			dist.pre_gain = 4.0
+			dist.post_gain = -2.0
+			var amp := AudioEffectAmplify.new()
+			amp.volume_db = 5.0
+			for ef in [hp, lp, dist, amp]:
+				AudioServer.add_bus_effect(idx, ef)
 
 
 ## Klibi döndürür. Arka planda henüz üretilmemişse (veya headless süreçteyse) o anda üretir.

@@ -3,6 +3,9 @@ extends CharacterBody3D
 ## el megafonu (+dB bağırma), meyve bıçağı saldırısı, Arabesk radyo, azaltılmış sarsıntı ve koşma efekti.
 
 const MODEL := preload("res://models/char_pazarci.glb")
+const MODEL_F := preload("res://models/char_musteri_kadin.glb")
+const BODY_PARTS := ["Body", "Head", "HandL", "HandR", "FootL", "FootR"]
+static var _split_cache := {}
 const LP := preload("res://lowpoly.gd")
 const Produce := preload("res://produce.gd")
 const StallScript := preload("res://stall.gd")
@@ -114,9 +117,14 @@ var daily_sold := 0
 var daily_haggles := 0
 var _ko_phase := 0 # 0 yok, 1 ragdoll, 2 toparlanma
 ## Berber/terzi görünümü: -1 = modelin varsayılanı. Bkz. Shops.LOOKS.
-var look := {"hair": 0, "hcol": -1, "must": 0, "shirt": -1, "hat": 0}
+var look := {"gender": 0, "hair": 0, "fhair": 0, "hcol": -1, "must": 0, "shirt": -1, "pants": -1, "vest": 0, "hat": 0}
 var _hair_surf := [] # [MeshInstance3D, yüzey, varsayılan malzeme]
 var _hat_surf := []
+var _must_surf := [] # modelin kendi bıyığı (yalnız erkek)
+var _pants_mats := [] # [malzeme, varsayılan renk]
+var _body_nodes: Array[Node3D] = []
+var _model_gender := -1
+var _look_preview := {} # terzi/berber önizlemesi: satın almadan geçici görünüm
 var _shirt_mats: Array[BaseMaterial3D] = []
 var _hair_mats: Array[BaseMaterial3D] = []
 var _look_extra: Node3D
@@ -244,6 +252,7 @@ var turning := false
 var spd := 0.0
 var tea_buff := 0.0 # çay: bağırma +%25 (yudum başı +15sn, en çok 60sn)
 var simit_buff := 0.0 # simit: %15 hızlı yürüyüş (ısırık başı +18sn, en çok 60sn)
+var prestige_t := 0.0 # puro: prestij (+müşteri ilgisi) süresi; nefes başı +10sn, en çok 40sn (host'a senkron)
 var smoke_buff := 0.0 # sigara/puro: %25 hızlı yürüyüş/koşu (nefes başı +12sn / puro +16sn, en çok 30sn)
 var stink_t := 0.0 # >0 iken oyuncu bira kokar (yeşil koku bulutu + sinekler + müşteri cezası)
 var _stink_fx_cd := 0.0
@@ -396,7 +405,12 @@ func has_inventory_item(item_id: String) -> bool:
 
 
 func has_prestige_aura() -> bool:
-	return is_holding_item("puro")
+	return prestige_t > 0.0
+
+
+@rpc("authority", "call_remote", "unreliable_ordered")
+func rpc_set_prestige(t: float) -> void:
+	prestige_t = t
 
 
 ## Efektif bağırma gücü: normal mikrofon/B + El Megafonu (1.85x) + Tezgah Hoparlörü (1.35x).
@@ -659,6 +673,22 @@ func confiscate_item_synced(item_id: String) -> void:
 		rpc_confiscate_item(item_id)
 
 
+## Sahip istemci, radyoyu tezgaha koyup/geri alınca host'taki envanter kopyasını günceller.
+@rpc("any_peer", "call_remote", "reliable")
+func rpc_owner_set_item(item_id: String, has_it: bool) -> void:
+	if not multiplayer.is_server() or multiplayer.get_remote_sender_id() != get_multiplayer_authority() or item_id != "radyo":
+		return
+	if has_it:
+		for i in inventory.size():
+			if inventory[i].is_empty():
+				inventory[i] = {"id": item_id, "uses": 1, "puffs": 0}
+				return
+	else:
+		for i in inventory.size():
+			if str(inventory[i].get("id", "")) == item_id:
+				inventory[i] = {}
+
+
 @rpc("any_peer", "call_local", "reliable")
 func rpc_confiscate_item(item_id: String) -> void:
 	if Net.online() and multiplayer.get_remote_sender_id() not in [0, 1]:
@@ -719,7 +749,6 @@ func _build_highlight_box() -> void:
 
 
 func _build_model(hair: Color, shirt: Color) -> void:
-	var src := MODEL.instantiate()
 	rig = Node3D.new()
 	add_child(rig)
 	_held_anchor = Node3D.new()
@@ -727,43 +756,78 @@ func _build_model(hair: Color, shirt: Color) -> void:
 	rig.add_child(_held_anchor)
 	head = Node3D.new()
 	add_child(head)
-	for n in ["Body", "Head", "HandL", "HandR", "FootL", "FootR"]:
-		var m: Node3D = src.find_child(n, true, false)
+	for n in BODY_PARTS:
 		var w := Node3D.new()
 		w.name = n
+		(head if n == "Head" else rig).add_child(w)
+		parts[n] = w
+	_tp_item_anchor = Node3D.new()
+	_tp_item_anchor.position = Vector3(0.0, 0.04, 0.14)
+	_tp_item_anchor.rotation_degrees = Vector3(0, 180, 0)
+	(parts["HandR"] as Node3D).add_child(_tp_item_anchor)
+	_base_hair = hair
+	_base_shirt = shirt
+	_look_extra = Node3D.new()
+	_look_extra.name = "LookExtra"
+	(parts["Head"] as Node3D).add_child(_look_extra)
+	_blink_cd = randf_range(1.2, 4.5)
+	_saccade_cd = randf_range(0.8, 2.6)
+	_load_body(0)
+
+
+## Gövde mesh'lerini erkek (pazarcı) ya da kadın modelden yükler; sarmalayıcılar/çapalar (el eşyası, ses, görünüm) yerinde kalır.
+func _load_body(g: int) -> void:
+	_model_gender = g
+	for nd in _body_nodes:
+		if is_instance_valid(nd):
+			nd.get_parent().remove_child(nd)
+			nd.free()
+	_body_nodes.clear()
+	_hair_mats.clear(); _hair_surf.clear(); _must_surf.clear(); _shirt_mats.clear(); _pants_mats.clear(); _hat_surf.clear()
+	var src := (MODEL_F if g == 1 else MODEL).instantiate()
+	for n in BODY_PARTS:
+		var m: Node3D = src.find_child(n, true, false)
+		var w: Node3D = parts[n]
 		rest[n] = m.position
 		m.get_parent().remove_child(m)
 		m.owner = null
 		m.transform = Transform3D.IDENTITY
 		w.add_child(m)
+		w.move_child(m, 0)
+		_body_nodes.append(m)
 		if n == "Head":
-			head.add_child(w)
 			head.position = rest[n]
 		else:
-			rig.add_child(w)
 			w.position = rest[n]
-		parts[n] = w
-		var meshes: Array = w.find_children("*", "MeshInstance3D", true, false)
+		var meshes: Array = m.find_children("*", "MeshInstance3D", true, false)
 		if m is MeshInstance3D:
 			meshes.append(m)
 		for mi: MeshInstance3D in meshes:
+			if n == "Head" and mi == m:
+				mi.mesh = _split_hair_mesh(mi.mesh)
 			for i in mi.mesh.get_surface_count():
 				var mat := mi.mesh.surface_get_material(i) as BaseMaterial3D
-				if mat and mat.resource_name in ["Hair", "Shirt"]:
+				if mat == null:
+					continue
+				var rn := mat.resource_name
+				if rn in ["Hair", "Must", "Shirt", "Pants"]:
 					var c := mat.duplicate() as BaseMaterial3D
-					c.albedo_color = hair if mat.resource_name == "Hair" else shirt
+					if rn != "Pants":
+						c.albedo_color = _base_shirt if rn == "Shirt" else _base_hair
 					mi.set_surface_override_material(i, c)
-					if mat.resource_name == "Hair":
-						_hair_mats.append(c)
-						_hair_surf.append([mi, i, c])
-					else:
-						_shirt_mats.append(c)
-				elif mat and mat.resource_name in ["Hat", "HatDetail"]:
+					match rn:
+						"Hair":
+							_hair_mats.append(c)
+							_hair_surf.append([mi, i, c])
+						"Must":
+							_hair_mats.append(c)
+							_must_surf.append([mi, i, c])
+						"Shirt":
+							_shirt_mats.append(c)
+						"Pants":
+							_pants_mats.append([c, c.albedo_color])
+				elif rn in ["Hat", "HatDetail"]:
 					_hat_surf.append([mi, i, null])
-	_tp_item_anchor = Node3D.new()
-	_tp_item_anchor.position = Vector3(0.0, 0.04, 0.14)
-	_tp_item_anchor.rotation_degrees = Vector3(0, 180, 0)
-	(parts["HandR"] as Node3D).add_child(_tp_item_anchor)
 	mouth_node = parts["Head"].find_child("Mouth", true, false)
 	if mouth_node:
 		mouth_rest = mouth_node.position
@@ -771,14 +835,42 @@ func _build_model(hair: Color, shirt: Color) -> void:
 	eye_r = parts["Head"].find_child("EyeR", true, false)
 	pupil_l = parts["Head"].find_child("PupilL", true, false)
 	pupil_r = parts["Head"].find_child("PupilR", true, false)
-	_blink_cd = randf_range(1.2, 4.5)
-	_saccade_cd = randf_range(0.8, 2.6)
 	src.free()
-	_base_hair = hair
-	_base_shirt = shirt
-	_look_extra = Node3D.new()
-	_look_extra.name = "LookExtra"
-	(parts["Head"] as Node3D).add_child(_look_extra)
+
+
+## Modelde bıyık kafa saçıyla aynı "Hair" yüzeyinde: ağız önündeki üçgenleri ayrı "Must" yüzeyine böler
+## (berber bıyığı değiştirince eskisi gizlenebilsin). Kaynak mesh başına önbellekli.
+static func _split_hair_mesh(src: Mesh) -> Mesh:
+	var key := src.get_instance_id()
+	if _split_cache.has(key):
+		return _split_cache[key]
+	var am := ArrayMesh.new()
+	for i in src.get_surface_count():
+		var mat := src.surface_get_material(i)
+		var arr := src.surface_get_arrays(i)
+		if mat == null or mat.resource_name != "Hair" or arr[Mesh.ARRAY_INDEX] == null:
+			am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
+			am.surface_set_material(am.get_surface_count() - 1, mat)
+			continue
+		var v: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+		var idx: PackedInt32Array = arr[Mesh.ARRAY_INDEX]
+		var scalp := PackedInt32Array()
+		var must := PackedInt32Array()
+		for t in range(0, idx.size(), 3):
+			var c := (v[idx[t]] + v[idx[t + 1]] + v[idx[t + 2]]) / 3.0
+			var tgt := must if (c.z > 0.18 and c.y < 0.0) else scalp
+			tgt.append(idx[t]); tgt.append(idx[t + 1]); tgt.append(idx[t + 2])
+		for part: Array in [[scalp, "Hair"], [must, "Must"]]:
+			if (part[0] as PackedInt32Array).is_empty():
+				continue
+			var a2 := arr.duplicate()
+			a2[Mesh.ARRAY_INDEX] = part[0]
+			am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, a2)
+			var m2 := mat.duplicate() as Material
+			m2.resource_name = str(part[1])
+			am.surface_set_material(am.get_surface_count() - 1, m2)
+	_split_cache[key] = am
+	return am
 
 
 func _unhandled_input(e: InputEvent) -> void:
@@ -817,8 +909,6 @@ func _unhandled_input(e: InputEvent) -> void:
 		_do_interact()
 	elif e.is_action_pressed("radio_next"):
 		_radio_next()
-	elif e.is_action_pressed("ring_bell"):
-		_do_ring_bell()
 	elif e.is_action_pressed("refuse_offer"):
 		_do_sell_to_customer(true)
 	elif e.is_action_pressed("throw_crate"):
@@ -1105,7 +1195,11 @@ func _tick_item_action(dt: float) -> void:
 				_trigger_item_fx_synced("smoke_exhale", _action_item, mouth_p, fwd)
 				_check_smoke_sabotage(fwd)
 				var is_puro := _action_item == "puro"
-				smoke_buff = minf(smoke_buff + (16.0 if is_puro else 12.0), 30.0)
+				smoke_buff = minf(smoke_buff + 12.0, 30.0) # puro da sigara kadar hız verir
+				if is_puro:
+					prestige_t = minf(prestige_t + 10.0, 40.0)
+					if Net.online():
+						rpc_set_prestige.rpc(prestige_t)
 				if active_slot >= 0 and active_slot < inventory.size() and str(inventory[active_slot].get("id", "")) == _action_item:
 					var sl_s := inventory[active_slot]
 					sl_s["puffs"] = int(sl_s.get("puffs", 0)) + 1
@@ -1941,6 +2035,7 @@ func _local(dt: float) -> void:
 	tea_buff = maxf(tea_buff - dt, 0.0)
 	simit_buff = maxf(simit_buff - dt, 0.0)
 	smoke_buff = maxf(smoke_buff - dt, 0.0)
+	prestige_t = maxf(prestige_t - dt, 0.0)
 	if _knock_t > 0.0:
 		_knock_t = maxf(_knock_t - dt, 0.0)
 	if _ko_phase != 0:
@@ -2524,6 +2619,19 @@ static func _invisible_mat() -> StandardMaterial3D:
 	return m
 
 
+## Ana menüdeki karakter seçimi (0 erkek, 1 kadın) görünüm dosyasına yazılır; oyuncu doğunca _load_look okur.
+static func saved_gender() -> int:
+	var cf := ConfigFile.new()
+	return int(cf.get_value("look", "gender", 0)) if cf.load(LOOK_FILE) == OK else 0
+
+
+static func save_gender(g: int) -> void:
+	var cf := ConfigFile.new()
+	cf.load(LOOK_FILE)
+	cf.set_value("look", "gender", g)
+	cf.save(LOOK_FILE)
+
+
 func _load_look() -> void:
 	var cf := ConfigFile.new()
 	if cf.load(LOOK_FILE) == OK:
@@ -2571,7 +2679,7 @@ func rpc_ask_look() -> void:
 
 
 func _look_color(kind: String, fallback: Color) -> Color:
-	var idx := int(look.get(kind, -1))
+	var idx := int(_look_preview.get(kind, look.get(kind, -1)))
 	var opts: Array = Shops.LOOKS[kind]["opts"]
 	return opts[idx] if idx >= 0 and idx < opts.size() else fallback
 
@@ -2579,24 +2687,42 @@ func _look_color(kind: String, fallback: Color) -> Color:
 func _apply_look() -> void:
 	if _look_extra == null:
 		return
+	var lk := look.duplicate()
+	lk.merge(_look_preview, true)
+	var female := int(lk["gender"]) == 1
+	if (1 if female else 0) != _model_gender:
+		_load_body(1 if female else 0)
+		_set_self_visible(_mirror_t > 0.0 or npc or not is_multiplayer_authority())
 	var hc := _look_color("hcol", _base_hair)
 	var sc := _look_color("shirt", _base_shirt)
 	for m in _hair_mats:
 		m.albedo_color = hc
 	for m in _shirt_mats:
 		m.albedo_color = sc
-	var hair := int(look["hair"])
-	var hat := int(look["hat"])
+	for e in _pants_mats:
+		(e[0] as BaseMaterial3D).albedo_color = _look_color("pants", e[1])
+	var hair := -1 if female else int(lk["hair"])
+	var hat := 1 if female else int(lk["hat"]) # kadın modelde kasket yok: şapka seçimi yalnız erkekte
+	var bare := hat == 1 # şapkasızken tepe saçı görünür
+	# Modelin kendi saçı yalnız varsayılan stilde kalır; yeni stil eskisinin üstüne binmesin
+	var hide_scalp := hair == 1 or hair == 2 or (hair >= 3 and bare) or (female and int(lk["fhair"]) > 0)
 	var inv := _invisible_mat()
 	for e in _hair_surf:
-		(e[0] as MeshInstance3D).set_surface_override_material(int(e[1]), inv if hair == 1 else e[2])
+		(e[0] as MeshInstance3D).set_surface_override_material(int(e[1]), inv if hide_scalp else e[2])
+	for e in _must_surf:
+		(e[0] as MeshInstance3D).set_surface_override_material(int(e[1]), e[2] if int(lk["must"]) == 0 else inv)
 	for e in _hat_surf:
 		(e[0] as MeshInstance3D).set_surface_override_material(int(e[1]), null if hat == 0 else inv)
 	for c in _look_extra.get_children():
 		c.queue_free()
+	for c in (parts["Body"] as Node3D).get_children():
+		if c.name == "VestExtra":
+			c.queue_free()
 	var x := Node3D.new()
 	_look_extra.add_child(x)
-	var bare := hat == 1 # şapkasızken tepe saçı görünür
+	if female:
+		_build_female_hair(x, int(lk["fhair"]), hc)
+	_build_vest(int(lk["vest"]), female)
 	match hair:
 		2: # Kıvırcık: tepe ve ense bukleleri
 			for i in 14:
@@ -2618,7 +2744,7 @@ func _apply_look() -> void:
 			if bare:
 				LP.add(x, LP.ellipsoid(0.315, 0.13, 0.335, 10, 6), Vector3(0.0, 0.2, 0.0), hc, Vector3.ZERO, 0.45)
 				LP.add(x, LP.box(Vector3(0.012, 0.01, 0.3)), Vector3(0.1, 0.33, 0.02), Color(0.86, 0.68, 0.55), Vector3(0, 0, 0.3))
-	match int(look["must"]):
+	match -1 if female else int(lk["must"]):
 		1: # İnce bıyık
 			LP.add(x, LP.box(Vector3(0.15, 0.022, 0.03)), Vector3(0, -0.07, 0.345), hc, Vector3.ZERO, 0.8)
 		2: # Pala bıyık: iki kalın, uçları aşağı kıvrık
@@ -2637,6 +2763,59 @@ func _apply_look() -> void:
 	if is_multiplayer_authority() and not npc and _mirror_t <= 0.0:
 		for mi in x.find_children("*", "MeshInstance3D", true, false):
 			(mi as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
+
+
+## Kuaför saç stilleri (kadın): 0 = modelin uzun saçı; diğerleri modelin saçı gizlenip yerine kurulur.
+func _build_female_hair(x: Node3D, style: int, hc: Color) -> void:
+	if style == 0:
+		return
+	LP.add(x, LP.ellipsoid(0.33, 0.17, 0.35, 10, 6), Vector3(0, 0.17, -0.02), hc, Vector3.ZERO, 0.75) # taranmış kubbe
+	match style:
+		1: # Topuz
+			LP.add(x, LP.sphere(0.13, 8, 6), Vector3(0, 0.3, -0.24), hc, Vector3.ZERO, 0.75)
+		2: # At kuyruğu
+			LP.add(x, LP.sphere(0.07, 6, 4), Vector3(0, 0.2, -0.33), hc, Vector3.ZERO, 0.75)
+			LP.add(x, LP.ellipsoid(0.08, 0.26, 0.08, 7, 5), Vector3(0, -0.06, -0.38), hc, Vector3(0.25, 0, 0), 0.75)
+		3: # Kısa küt: çene hizasında yanlar + ense
+			for sx: float in [-1.0, 1.0]:
+				LP.add(x, LP.ellipsoid(0.09, 0.2, 0.2, 7, 5), Vector3(sx * 0.28, -0.02, -0.03), hc, Vector3.ZERO, 0.75)
+			LP.add(x, LP.ellipsoid(0.3, 0.2, 0.12, 9, 5), Vector3(0, -0.02, -0.26), hc, Vector3.ZERO, 0.75)
+		4: # Örgü: arkadan sarkan boğumlu tek örgü
+			for i in 6:
+				LP.add(x, LP.sphere(0.065 - float(i) * 0.004, 6, 4), Vector3(0, 0.08 - float(i) * 0.1, -0.36 - float(i) * 0.015), hc, Vector3.ZERO, 0.75)
+
+
+## Terzi: gömleğin üstüne yelek (1) ya da ceket (2).
+func _build_vest(kind: int, female: bool) -> void:
+	if kind <= 0:
+		return
+	var v := Node3D.new()
+	v.name = "VestExtra"
+	(parts["Body"] as Node3D).add_child(v)
+	var w := 0.235 if female else 0.27
+	var col := Color(0.28, 0.2, 0.14) if kind == 1 else Color(0.14, 0.17, 0.26)
+	var h := 0.17 if kind == 1 else 0.2
+	var y := 0.1 if kind == 1 else 0.07
+	# Gövdeyi saran kabuk + önde gömlek renginde açık şerit (önü açık yelek/ceket)
+	LP.add(v, LP.ellipsoid(w * 1.04, h, w * 1.02, 12, 6), Vector3(0, y, 0.0), col, Vector3.ZERO, 0.85)
+	LP.add(v, LP.box(Vector3(0.075, h * 1.5, 0.02)), Vector3(0, y + 0.02, w * 1.01), _look_color("shirt", _base_shirt), Vector3(-0.15, 0, 0), 0.8)
+	if kind == 2:
+		for sx: float in [-1.0, 1.0]: # ceket yakası
+			LP.add(v, LP.box(Vector3(0.05, 0.12, 0.02)), Vector3(sx * 0.06, y + h * 0.6, w * 0.97), col.lightened(0.15), Vector3(-0.2, 0, sx * -0.4), 0.8)
+	if is_multiplayer_authority() and not npc and _mirror_t <= 0.0:
+		for mi in v.find_children("*", "MeshInstance3D", true, false):
+			(mi as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
+
+
+## Dükkan panelinde seçeneğin üstüne gelince satın almadan aynada gösterir; boş tür = önizlemeyi kapat.
+func preview_look(kind: String, idx: int) -> void:
+	_look_preview = {} if kind == "" else {kind: idx}
+	if kind != "":
+		_mirror_t = maxf(_mirror_t, 2.0)
+		_set_self_visible(true)
+		if _fp_item_anchor:
+			_fp_item_anchor.visible = false
+	_apply_look()
 
 
 ## Satın almadan sonra 3.5 sn ayna: kamera yüzün önüne geçip sana bakar.
@@ -3440,19 +3619,6 @@ func _process_interaction(dt: float) -> void:
 			if owner_id == my_id and my_st and my_st.has_radio:
 				show_hl = true
 				interact_hint = "📻 Tezgah Radyosu (%s)  •  [E] Aç/Kapat  •  [Tekerlek] Şarkı  •  [R] Eline Al" % ("ÇALIYOR" if my_st.radio_playing else "KAPALI")
-		"bell":
-			var owner_id: int = int(area.get_meta("stall_owner", -1))
-			if owner_id == my_id and my_st and my_st.has_upgrade("bell"):
-				show_hl = true
-				if my_st.bell_cd > 0.0:
-					interact_hint = "🔔 Tezgah Zili hazırlanıyor (%.0f sn)" % ceilf(my_st.bell_cd)
-				else:
-					interact_hint = "[E / F] Pirinç Zili Çal! (10 sn güçlü müşteri çekimi)"
-		"upgrade_board":
-			var owner_id: int = int(area.get_meta("stall_owner", -1))
-			if owner_id == my_id:
-				show_hl = true
-				interact_hint = "🏪 Sigara, çay, megafon ve tezgah geliştirmeleri arka sokaktaki dükkanlarda"
 		"customer":
 			var c := _find_customer(str(area.get_meta("customer_name", "")))
 			if c:
@@ -3534,6 +3700,8 @@ func _do_interact() -> void:
 				_set_hand_radio_synced(false)
 				st.set_radio_synced(true, true, r_idx, r_pos)
 				inventory[active_slot] = {}
+				if Net.online() and not multiplayer.is_server():
+					rpc_owner_set_item.rpc_id(1, "radyo", false) # host'taki envanter kopyası da güncellensin
 				active_slot = -1
 				_sync_equipped_to_peers()
 				_refresh_equipped_visual()
@@ -3543,10 +3711,6 @@ func _do_interact() -> void:
 			var st := _find_stall(owner_id)
 			if st and owner_id == my_id and st.has_radio:
 				st.set_radio_synced(true, not st.radio_playing)
-		"bell":
-			var owner_id: int = int(area.get_meta("stall_owner", -1))
-			if owner_id == my_id:
-				_do_ring_bell()
 		"shop":
 			open_shop.emit(str(area.get_meta("shop_id", "")))
 		"customer":
@@ -3613,12 +3777,6 @@ func _do_catch_thief(area: Area3D) -> void:
 		th.rpc_request_catch(my_id)
 
 
-func _do_ring_bell() -> void:
-	var st := _find_stall(_my_peer_id())
-	if st and st.has_upgrade("bell") and global_position.distance_to(st.global_position) < 4.5:
-		st.request_ring_bell()
-
-
 func _do_sell_to_customer(insist: bool) -> void:
 	var area := _ray_target()
 	if area == null:
@@ -3629,6 +3787,11 @@ func _do_sell_to_customer(insist: bool) -> void:
 		var owner_id: int = int(area.get_meta("stall_owner", -1))
 		var st := _find_stall(owner_id)
 		if st and owner_id == _my_peer_id() and st.has_radio:
+			if not can_add_inventory_item("radyo"):
+				_toast(L10n.pick("Envanter dolu — radyoyu alamazsın", "Inventory full — can't take the radio"), Color(1.0, 0.45, 0.4))
+				return
+			if Net.online() and not multiplayer.is_server():
+				rpc_owner_set_item.rpc_id(1, "radyo", true)
 			var was_on: bool = st.radio_playing and st._radio_audio != null
 			var r_idx := int(st._radio_audio.get_meta("radio_idx", 0)) if st._radio_audio else 0
 			var r_pos: float = st._radio_audio.get_playback_position() if was_on else 0.0

@@ -32,14 +32,15 @@ const CATALOG := {
 	"puro": {
 		"name": "Küba Purosu",
 		"short": "Puro",
-		"icon": "🪵",
+		"icon": "🚬",
+		"icon_tex": "res://icons/puro.png", # emoji yok: modelden render edilmiş envanter simgesi
 		"cost": 45,
 		"uses": 3, # 3 puro
 		"puffs_per_use": 8,
 		"consumable": true,
-		"left_hint": "Derin Çek & Halka Üfle (+16sn Hız)",
+		"left_hint": "Derin Çek & Halka Üfle (+12sn Hız, +10sn Prestij)",
 		"right_hint": "Kül Silk",
-		"desc": "Altın bantlı 3 puro. Prestij (+%18 müşteri ilgisi) verir; rakip tezgaha duman üflersen -%10 çürütür (Zabıta gelir!).",
+		"desc": "Altın bantlı 3 puro. Sigara gibi hız + nefes başı 10sn prestij (+%18 müşteri ilgisi, en çok 40sn) verir; rakip tezgaha duman üflersen -%10 çürütür (Zabıta gelir!).",
 	},
 	"cay": {
 		"name": "İnce Belli Çay",

@@ -4,6 +4,7 @@ extends Node
 ## Başarımlar Galerisi, Özel Nişangâh ve FPS Sayacı.
 ## main.gd tarafından başlatılır ve tüm menü / ayar etkileşimlerini temizçe yönetir.
 
+const PlayerScript := preload("res://player.gd")
 const GOLD := Color(1.0, 0.76, 0.32)
 const TERRA := Color(0.82, 0.34, 0.16)
 const TERRA_HI := Color(0.92, 0.42, 0.20)
@@ -365,6 +366,13 @@ func _build_main_page() -> void:
 	var sp0 := Control.new(); sp0.custom_minimum_size.y = 6; mv.add_child(sp0)
 	_nav_btn(mv, "▶  " + L10n.t("btn_solo"), func(): main._open_solo_page(), true)
 	_nav_btn(mv, "🌐  " + L10n.t("btn_multi"), func(): show_page("lobby"))
+	var g_btn := _btn(mv, "", func(): pass, 40)
+	var g_set := func():
+		g_btn.text = "🧍  " + L10n.pick("Karakter: ", "Character: ") + (L10n.pick("Kadın", "Female") if PlayerScript.saved_gender() == 1 else L10n.pick("Erkek", "Male"))
+	g_set.call()
+	g_btn.pressed.connect(func():
+		PlayerScript.save_gender(1 - PlayerScript.saved_gender())
+		g_set.call())
 	_nav_btn(mv, "⚙  " + L10n.t("btn_settings"), func(): open_settings(0))
 	var row2 := HBoxContainer.new()
 	row2.add_theme_constant_override("separation", 8)
@@ -1054,9 +1062,18 @@ func _build_tab_gameplay(parent: Control) -> Control:
 func _build_tab_credits(parent: Control) -> Control:
 	var vb := _make_tab_scroll(parent)
 	_sep(vb, L10n.pick("BAZAR — TÜRK SEMT PAZARI", "BAZAR — TURKISH STREET BAZAAR"))
+	_lbl(vb, L10n.pick("Geliştirici & Tasarım:", "Developers & Design:"), 14, 0.94)
+	for dev: Array in [["bagatarhansinan", "https://github.com/bagatarhansinan"], ["Obuto45", "https://github.com/Obuto45"]]:
+		var lb := LinkButton.new()
+		lb.text = "%s — %s" % dev
+		lb.uri = str(dev[1])
+		lb.add_theme_font_size_override("font_size", 14)
+		vb.add_child(lb)
 	_lbl(vb, L10n.pick(
-		"Geliştirici & Tasarım: Obuto45\nYapay Zekâ Mühendislik Ortağı: Google Antigravity\nOyun Motoru: Godot Engine 4.7 (MIT License) + Jolt Physics (MIT License)\nÇok Oyunculu Ağ: GodotSteam (MIT License) & Valve Steamworks SDK",
-		"Creator & Design: Obuto45\nAI Engineering Partner: Google Antigravity\nEngine: Godot Engine 4.7 (MIT License) + Jolt Physics (MIT License)\nNetworking: GodotSteam (MIT License) & Valve Steamworks SDK"
+		"Oyun Motoru: Godot Engine 4.7 (MIT License) + Jolt Physics (MIT License)
+Çok Oyunculu Ağ: GodotSteam (MIT License) & Valve Steamworks SDK",
+		"Engine: Godot Engine 4.7 (MIT License) + Jolt Physics (MIT License)
+Networking: GodotSteam (MIT License) & Valve Steamworks SDK"
 	), 14, 0.94)
 	_sep(vb, L10n.pick("SES & MÜZİK LİSANSLARI (ATIFLAR)", "AUDIO & MUSIC LICENSES (ATTRIBUTIONS)"))
 	_lbl(vb,

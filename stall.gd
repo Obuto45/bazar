@@ -33,11 +33,6 @@ const UPGRADES := {
 		"cost": 120,
 		"desc": "Yuva kapasitesi 16, kasa 14 adede çıkar; %40 daha hızlı dizilir.",
 	},
-	"bell": {
-		"name": "Pirinç Tezgah Zili",
-		"cost": 90,
-		"desc": "Tezgaha zil ekler: [E] veya [F] ile çal, 10 sn güçlü müşteri çek!",
-	},
 	"nazar": {
 		"name": "Nazar Boncuğu",
 		"cost": 20,
@@ -59,7 +54,7 @@ const UPGRADES := {
 		"desc": "Tentenin üstüne el yazısı \"Bereket Versin\" tabelası. Sadece süs.",
 	},
 }
-const UPGRADE_ORDER := ["megaphone", "lights", "big_crate", "bell", "nazar", "flama", "saksi", "tabela"]
+const UPGRADE_ORDER := ["megaphone", "lights", "big_crate", "nazar", "flama", "saksi", "tabela"]
 const SLOT_SPACING := 0.8
 const KEEPOUT_BACK := -1.3 # NPC yasak bölgesi: tezgah + arka alan (yerel z)
 const KEEPOUT_FRONT := 1.2
@@ -77,6 +72,7 @@ const REP_MAX := 5.0
 const PILE_W := 0.68
 const PILE_D := 0.58
 
+const SCALE_MODEL := preload("res://models/digital_scale.glb")
 var owner_id := 0
 var owner_name := ""
 var spot_idx := 0
@@ -85,7 +81,7 @@ var slots: Array[Dictionary] = []
 var expansion_level := 0 # 0: 4 yuva, 1: 6 yuva, 2: 8 yuva (tezgah fiziksel olarak genişler)
 var _built: Array = [] # _build_all'ın eklediği çocuklar (genişlemede yeniden kurulur)
 var crate_available: Dictionary = {}
-var upgrades: Dictionary = {"megaphone": false, "lights": false, "big_crate": false, "bell": false}
+var upgrades: Dictionary = {"megaphone": false, "lights": false, "big_crate": false}
 var bell_boost := 0.0
 var bell_cd := 0.0
 
@@ -104,10 +100,8 @@ var _slot_labels: Array[Label3D] = []
 var _slot_back_labels: Array[Label3D] = []
 var _slot_tag_mats: Array[StandardMaterial3D] = []
 var _sign_label: Label3D
-var _scale_beam: Node3D
+var _scale_lcd: Label3D
 var _upgrade_visuals: Dictionary = {}
-var _bell_area: Area3D
-var _bell_mesh: Node3D
 var _light_bulbs: Array[StandardMaterial3D] = []
 var _light_omni: OmniLight3D
 var _radio_reels: Array[Node3D] = []
@@ -160,7 +154,6 @@ func _build_all() -> void:
 	_build_geometry()
 	_build_slots()
 	_build_scale()
-	_build_upgrade_board()
 	_build_upgrade_attachments()
 	_build_radio_slot()
 	_built = get_children().slice(n0)
@@ -538,7 +531,7 @@ func crate_capacity() -> int:
 
 
 func has_upgrade(key: String) -> bool:
-	return bool(upgrades.get(key, false))
+	return UPGRADES.has(key) and bool(upgrades.get(key, false)) # eski kayıtlardaki kaldırılmış "bell" yok sayılır
 
 
 func _build_geometry() -> void:
@@ -606,58 +599,29 @@ func _build_geometry() -> void:
 
 
 func _build_scale() -> void:
-	var sc := Node3D.new()
+	var sc: Node3D = SCALE_MODEL.instantiate()
 	sc.position = Vector3(half_width() + 0.14, 0.575, 0.36)
+	# glTF: Blender -Y ön yüz = Godot +Z; ekran tezgahın önüne (müşteriye) bakar
 	add_child(sc)
-	LP.add(sc, LP.cyl(0.08, 0.10, 0.04, 8), Vector3(0, 0.02, 0), BRASS.darkened(0.18), Vector3.ZERO, 0.3, 0.8)
-	LP.add(sc, LP.cyl(0.015, 0.02, 0.28, 6), Vector3(0, 0.16, 0), BRASS, Vector3.ZERO, 0.28, 0.82)
-	_scale_beam = Node3D.new()
-	_scale_beam.position = Vector3(0, 0.29, 0)
-	sc.add_child(_scale_beam)
-	LP.add(_scale_beam, LP.box(Vector3(0.28, 0.018, 0.02)), Vector3.ZERO, BRASS, Vector3.ZERO, 0.25, 0.85)
-	for side: float in [-1.0, 1.0]:
-		LP.add(_scale_beam, LP.cyl(0.004, 0.004, 0.11, 4), Vector3(side * 0.12, -0.055, 0), BRASS, Vector3.ZERO, 0.3, 0.8)
-		LP.add(_scale_beam, LP.cyl(0.068, 0.045, 0.022, 8), Vector3(side * 0.12, -0.115, 0), BRASS.lightened(0.1), Vector3.ZERO, 0.25, 0.85)
+	_scale_lcd = Label3D.new()
+	_scale_lcd.text = "0.000 kg"
+	_scale_lcd.font_size = 22
+	_scale_lcd.pixel_size = 0.0009
+	_scale_lcd.outline_size = 0
+	_scale_lcd.modulate = Color(0.06, 0.12, 0.05)
+	_scale_lcd.position = Vector3(0, 0.123, 0.087) # LCD yüzeyinin hemen önü (glb ölçümü)
+	_scale_lcd.rotation.x = -0.45
+	sc.add_child(_scale_lcd)
 
 
+## Satışta terazi tartar: ekranda rastgele bir ağırlık belirir, sonra sıfırlanır.
 func tip_scale() -> void:
-	if _scale_beam == null:
+	if _scale_lcd == null:
 		return
+	_scale_lcd.text = "%.3f kg" % randf_range(0.45, 2.8)
 	var tw := create_tween()
-	tw.tween_property(_scale_beam, "rotation:z", 0.34, 0.12).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	tw.tween_property(_scale_beam, "rotation:z", -0.22, 0.18).set_trans(Tween.TRANS_SINE)
-	tw.tween_property(_scale_beam, "rotation:z", 0.10, 0.16).set_trans(Tween.TRANS_SINE)
-	tw.tween_property(_scale_beam, "rotation:z", 0.0, 0.16).set_trans(Tween.TRANS_SINE)
-
-
-func _build_upgrade_board() -> void:
-	var b := Node3D.new()
-	b.position = Vector3(-(half_width() - 0.09), 1.24, 0.05)
-	b.rotation.y = PI / 2
-	add_child(b)
-	LP.add(b, LP.box(Vector3(0.76, 0.48, 0.05)), Vector3.ZERO, Color(0.14, 0.2, 0.14))
-	LP.add(b, LP.box(Vector3(0.82, 0.54, 0.03)), Vector3(0, 0, -0.015), WOOD.darkened(0.15))
-	var lbl := Label3D.new()
-	lbl.text = "🏪 DÜKKANLAR\nARKA SOKAKTA"
-	lbl.position = Vector3(0, 0, 0.035)
-	lbl.font_size = 24
-	lbl.outline_size = 6
-	lbl.modulate = Color(1.0, 0.88, 0.35)
-	lbl.double_sided = true
-	b.add_child(lbl)
-	var area := Area3D.new()
-	area.name = "UpgradeBoardArea"
-	area.collision_layer = 4
-	area.collision_mask = 0
-	area.set_meta("kind", "upgrade_board")
-	area.set_meta("stall_owner", owner_id)
-	area.set_meta("hl_size", Vector3(0.84, 0.56, 0.16))
-	var cs := CollisionShape3D.new()
-	var sh := BoxShape3D.new()
-	sh.size = Vector3(0.86, 0.58, 0.22)
-	cs.shape = sh
-	area.add_child(cs)
-	b.add_child(area)
+	tw.tween_interval(1.6)
+	tw.tween_callback(func(): _scale_lcd.text = "0.000 kg")
 
 
 ## Tezgaha bırakılan Arabesk Radyo yuvası (sağ arka köşe, teraziden uzak).
@@ -787,32 +751,6 @@ func _build_upgrade_attachments() -> void:
 	add_child(big)
 	_upgrade_visuals["big_crate"] = big
 
-	# Pirinç zil: sol yan uzatma rafında, Slot 0 ile sıfır çakışma!
-	var bell := Node3D.new()
-	bell.position = Vector3(-(half_width() + 0.13), 0.575, 0.36)
-	_bell_mesh = Node3D.new()
-	bell.add_child(_bell_mesh)
-	LP.add(_bell_mesh, LP.cyl(0.08, 0.11, 0.03, 8), Vector3(0, 0.015, 0), Color(0.18, 0.14, 0.12))
-	LP.add(_bell_mesh, LP.ellipsoid(0.09, 0.068, 0.09, 8, 5), Vector3(0, 0.068, 0), BRASS, Vector3.ZERO, 0.2, 0.88)
-	LP.add(_bell_mesh, LP.cyl(0.025, 0.025, 0.03, 6), Vector3(0, 0.135, 0), BRASS.lightened(0.15), Vector3.ZERO, 0.2, 0.9)
-	_bell_area = Area3D.new()
-	_bell_area.name = "BellArea"
-	_bell_area.collision_layer = 0
-	_bell_area.collision_mask = 0
-	_bell_area.set_meta("kind", "bell")
-	_bell_area.set_meta("stall_owner", owner_id)
-	_bell_area.set_meta("hl_size", Vector3(0.28, 0.24, 0.28))
-	var bcs := CollisionShape3D.new()
-	var bsh := BoxShape3D.new()
-	bsh.size = Vector3(0.32, 0.28, 0.32)
-	bcs.shape = bsh
-	_bell_area.position = Vector3(0, 0.08, 0)
-	_bell_area.add_child(bcs)
-	bell.add_child(_bell_area)
-	bell.hide()
-	add_child(bell)
-	_upgrade_visuals["bell"] = bell
-
 	# --- Nalbur süsleri (yalnızca görünüş) ---
 	var nazar := Node3D.new()
 	nazar.position = Vector3(0, 2.34, 1.22)
@@ -876,8 +814,6 @@ func _show_upgrade_visual(key: String) -> void:
 		n.scale = Vector3(0.1, 0.1, 0.1)
 		var tw := create_tween()
 		tw.tween_property(n, "scale", Vector3.ONE, 0.28).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	if key == "bell" and _bell_area:
-		_bell_area.collision_layer = 4
 
 
 func _build_slots() -> void:
@@ -1698,36 +1634,6 @@ func restore_one(item_id: String) -> void:
 		rpc_place_animated.rpc(target, item_id, cnt, price, from_p, f)
 	else:
 		rpc_place_animated(target, item_id, cnt, price, from_p, f)
-
-
-func request_ring_bell() -> bool:
-	if not has_upgrade("bell") or bell_cd > 0.0:
-		return false
-	if Net.online():
-		rpc_ring_bell.rpc()
-	else:
-		rpc_ring_bell()
-	return true
-
-
-@rpc("any_peer", "call_local", "reliable")
-func rpc_ring_bell() -> void:
-	if not _from_owner_or_host():
-		return
-	if not has_upgrade("bell") or bell_cd > 0.0:
-		return
-	bell_boost = 10.0
-	bell_cd = 15.0
-	var bell_pos := to_global(Vector3(-(half_width() + 0.13), 0.76, 0.36))
-	Sfx.play_3d("bell", bell_pos, self, 0.0, 1.0, 32.0)
-	VFX.spawn_sound_ring(self, bell_pos, 5.5, Color(1.0, 0.85, 0.28))
-	VFX.spawn_floating_text(self, bell_pos + Vector3(0, 0.55, 0), "🔔 GEL VATANDAŞ GEL!", Color(1.0, 0.88, 0.3), 38)
-	if _bell_mesh:
-		var tw := create_tween()
-		tw.tween_property(_bell_mesh, "rotation:z", 0.35, 0.07)
-		tw.tween_property(_bell_mesh, "rotation:z", -0.35, 0.10)
-		tw.tween_property(_bell_mesh, "rotation:z", 0.2, 0.09)
-		tw.tween_property(_bell_mesh, "rotation:z", 0.0, 0.08)
 
 
 func apply_upgrade_synced(key: String) -> void:

@@ -34,7 +34,6 @@ const DEFAULT_KEYS := {
 	"ptt": KEY_V,
 	"mic_mute": KEY_M,
 	"refuse_offer": KEY_R,
-	"ring_bell": KEY_F,
 	"call_tea": KEY_T,
 	"price_down": KEY_Z,
 	"price_up": KEY_X,
@@ -46,7 +45,7 @@ const DEFAULT_KEYS := {
 const KEYBIND_ORDER := [
 	"fwd", "back", "left", "right", "run", "jump",
 	"interact", "throw_crate", "shout", "ptt", "mic_mute",
-	"refuse_offer", "ring_bell", "call_tea",
+	"refuse_offer", "call_tea",
 	"price_down", "price_up", "radio_next", "scoreboard", "tutorial_skip",
 ]
 
@@ -309,7 +308,6 @@ func apply_keybinds() -> void:
 	_add_joy_btn("throw_crate", JOY_BUTTON_Y)
 	_add_joy_btn("run", JOY_BUTTON_LEFT_STICK)
 	_add_joy_btn("shout", JOY_BUTTON_LEFT_SHOULDER)
-	_add_joy_btn("ring_bell", JOY_BUTTON_DPAD_UP)
 	_add_joy_btn("call_tea", JOY_BUTTON_DPAD_DOWN)
 	_add_joy_btn("price_down", JOY_BUTTON_DPAD_LEFT)
 	_add_joy_btn("price_up", JOY_BUTTON_DPAD_RIGHT)

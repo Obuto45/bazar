@@ -192,7 +192,7 @@ func _build_truck() -> void:
 
 	# Hareketli katı çarpıştırıcı (AnimatableBody3D: sürüşte oyuncuları itip geçmesini engeller)
 	_solid_body = AnimatableBody3D.new()
-	_solid_body.sync_to_physics = true
+	_solid_body.sync_to_physics = false # true iken gövde ebeveynle birlikte taşınmıyor, giriş noktasında (z=-28) kalıyordu
 	var cs := CollisionShape3D.new()
 	var sh := BoxShape3D.new()
 	sh.size = Vector3(2.20, 2.18, 5.96)

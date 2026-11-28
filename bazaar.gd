@@ -47,7 +47,7 @@ const WALL_COLS := [
 ]
 ## Sokak cepheleri sırası: önce batı (x=-16) kuzeyden güneye, sonra doğu (x=+16) kuzeyden güneye, sonra kapı arkaları.
 ## Sık uğranan dükkanlar (Tekel, Fırın, Kıraathane, Market, Nalbur) pazarın ortasına yakın. Gerçek dükkanlar: shops.gd
-## (Kasap, Eczane, Çiçekçi, Börekçi... sadece vitrin).
+## (Eczane sadece vitrin).
 const SHOP_NAMES := ["BERBER", "FIRIN", "TEKEL BAYİ", "KIRAATHANE", "KASAP", "ECZANE",
 	"TERZİ", "MARKET", "NALBUR", "TELEFONCU", "ÇİÇEKÇİ", "BÖREKÇİ",
 	"KIRTASİYE", "BÜFE", "BAKKAL", "KUAFÖR"]
@@ -899,7 +899,8 @@ func _build_mahalle_apartments(b, glass, lit, signs) -> void:
 		for bx in [-13.5, 13.5]:
 			var o2 := Vector3(0, 0, -signf(gz))
 			var fc2 := Vector3(bx, 0, gz + o2.z * 3.6)
-			var gshop: String = SHOP_NAMES[shop_idx % SHOP_NAMES.size()] if rng.randf() < 0.6 else ""
+			rng.randf() # eski rastgele boş-dükkan çekilişi; şehir düzeni kaymasın diye korunuyor
+			var gshop: String = SHOP_NAMES[shop_idx % SHOP_NAMES.size()]
 			_apartment(b, glass, lit, signs, fc2, o2, 9.4, 7.2, rng.randi_range(4, 5), rng.randi() % WALL_COLS.size(), gshop)
 			shop_idx += 1
 

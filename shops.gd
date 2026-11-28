@@ -20,6 +20,20 @@ const SHOPS := {
 		"items": [], "upgrades": [], "looks": ["hair", "hcol", "must"]},
 	"terzi": {"sign": "TERZİ", "name": "Terzi", "icon": "🧵", "open": [0.0, 0.80],
 		"items": [], "upgrades": [], "looks": ["shirt", "hat"]},
+	"bufe": {"sign": "BÜFE", "name": "Büfe", "icon": "🥤", "open": [0.0, 1.01],
+		"items": ["sigara", "bira", "cay", "simit"], "upgrades": []},
+	"bakkal": {"sign": "BAKKAL", "name": "Bakkal", "icon": "🧺", "open": [0.0, 0.90],
+		"items": ["simit", "acma", "sigara", "spray"], "upgrades": []},
+	"borekci": {"sign": "BÖREKÇİ", "name": "Börekçi", "icon": "🥐", "open": [0.0, 0.62],
+		"items": ["acma", "simit", "cay"], "upgrades": []},
+	"kirtasiye": {"sign": "KIRTASİYE", "name": "Kırtasiye", "icon": "✏️", "open": [0.0, 0.80],
+		"items": [], "upgrades": ["tabela", "flama"]},
+	"cicekci": {"sign": "ÇİÇEKÇİ", "name": "Çiçekçi", "icon": "💐", "open": [0.0, 0.85],
+		"items": [], "upgrades": ["saksi", "nazar"]},
+	"kasap": {"sign": "KASAP", "name": "Kasap", "icon": "🔪", "open": [0.0, 0.75],
+		"items": ["bicak", "sopa"], "upgrades": []},
+	"kuafor": {"sign": "KUAFÖR", "name": "Kuaför", "icon": "💇", "open": [0.0, 0.85],
+		"items": [], "upgrades": [], "looks": ["hair", "hcol", "must"]},
 }
 
 ## Berber / terzi görünüm seçenekleri: tür -> {başlık, fiyat, seçenekler}. Renk seçenekleri Color, diğerleri ad.

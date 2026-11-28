@@ -245,6 +245,8 @@ func _ready() -> void:
 		await get_tree().create_timer(1.5).timeout
 		if DisplayServer.get_name() != "headless":
 			get_viewport().get_texture().get_image().save_png(OS.get_user_data_dir() + "/mptest_%s.png" % ("host" if "host" in args else "join"))
+		if me and "host" in args:
+			_selftest_shops(me)
 		print("MPTEST_OK ", "host" if "host" in args else "join", " players=", players.get_child_count() if players else 0, " stalls=", stalls.get_child_count() if stalls else 0)
 		get_tree().quit()
 		return
@@ -1461,6 +1463,31 @@ func _on_buy_item(item_id: String) -> void:
 
 
 ## Host doğrular: dükkan açık mı, bu dükkan bunu satıyor mu.
+## mptest host: her dükkanın kapısı var mı, açık olanlardan her ürün/süs satın alınabiliyor mu.
+func _selftest_shops(me) -> void:
+	var bad := []
+	for sid in Shops.SHOPS:
+		if not bazaar_node._shop_doors.has(sid):
+			bad.append(sid + ":kapı yok")
+		if not Shops.is_open(sid, _day_prog()):
+			continue
+		for iid in Shops.SHOPS[sid]["items"]:
+			me.money = 99999
+			for i in me.inventory.size():
+				me.inventory[i] = {}
+			rpc_request_buy_item(iid, sid)
+			if int(me.money) == 99999:
+				bad.append("%s:%s" % [sid, iid])
+		for key in Shops.SHOPS[sid]["upgrades"]:
+			me.money = 99999
+			if stalls.get_node("Stall_1").has_upgrade(key):
+				continue
+			rpc_request_buy_upgrade(key, sid)
+			if int(me.money) == 99999:
+				bad.append("%s:%s" % [sid, key])
+	print("SHOPTEST ", "OK" if bad.is_empty() else "FAIL %s" % [bad])
+
+
 func _shop_sells(shop_id: String, list_key: String, what: String) -> bool:
 	if not Shops.SHOPS.has(shop_id) or not Shops.is_open(shop_id, _day_prog()):
 		return false

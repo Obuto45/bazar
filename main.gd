@@ -1798,6 +1798,7 @@ func _set_menu_bg(on: bool) -> void:
 		bz.call("set_quality", Settings.quality_high)
 	_menu_music(true)
 	menu_cam = Camera3D.new()
+	menu_cam.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF # _process içinde sürülüyor
 	menu_cam.fov = 60
 	menu_bg.add_child(menu_cam)
 	menu_cam.current = true
@@ -2091,7 +2092,7 @@ func _tick_day_and_events(dt: float) -> void:
 	_day_sync_t += dt
 	if Net.online() and _day_sync_t >= 0.5:
 		_day_sync_t = 0.0
-		rpc_sync_day_time.rpc(day_num, day_time, event_timer, _crowd_timer)
+		Net.rpc_ready(rpc_sync_day_time, [day_num, day_time, event_timer, _crowd_timer])
 
 	if day_time >= DAY_DURATION:
 		day_ended = true
@@ -2388,6 +2389,11 @@ func start_game(ids: Array, spot_map := {}, snapshot := {}) -> void:
 	SteamMgr.set_presence_game(day_num, ids.size(), Net.online())
 	if Net.online() and ids.size() >= 2:
 		SteamMgr.unlock("ACH_MULTI_OPEN")
+	if Net.online():
+		if multiplayer.is_server():
+			Net.ready_peers.clear() # yeniden kurulumda istemciler tekrar hazır bildirir
+		else:
+			Net.rpc_peer_ready.rpc_id(1)
 	if day_num <= 1:
 		show_toast("☀️ Hoş geldin! [ESC] menü", GOLD)
 	_fade_in(0.7)

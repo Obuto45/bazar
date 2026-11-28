@@ -66,7 +66,7 @@ const STRINGS := {
 	"lobby_code_lbl": {"tr": "Oda Kodu: %s", "en": "Room Code: %s"},
 	"lobby_copy_code": {"tr": "📋 Kodu Kopyala", "en": "📋 Copy Code"},
 	"lobby_code_copied": {"tr": "Oda kodu panoya kopyalandı: %s", "en": "Room code copied: %s"},
-	"lobby_join_code_ph": {"tr": "Oda Kodu (ör. A7K2)", "en": "Room Code (e.g. A7K2)"},
+	"lobby_join_code_ph": {"tr": "Kod (ör. A7K2)", "en": "Code (e.g. A7K2)"},
 	"lobby_join_code_btn": {"tr": "▶ Koda Katıl", "en": "▶ Join Code"},
 	"lobby_refresh": {"tr": "🔄 Listeyi Yenile", "en": "🔄 Refresh List"},
 	"lobby_empty_pub": {"tr": "Şu an açık Pazar lobisi bulunamadı. İlk lobiyi sen kur!", "en": "No open Bazaar lobbies found. Host the first one!"},

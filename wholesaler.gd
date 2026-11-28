@@ -409,7 +409,7 @@ func _physics_process(dt: float) -> void:
 		_sync_t += dt
 		if Net.online() and _sync_t >= 0.08:
 			_sync_t = 0.0
-			rpc_sync_truck.rpc(position, state, state_timer)
+			Net.rpc_ready(rpc_sync_truck, [position, state, state_timer])
 	else:
 		# Paketler arası dead-reckoning: hedef sabit hızla ilerler, 80 ms'lik dur-kalk sarsıntısı olmaz
 		_net_pos += _net_vel * dt

@@ -254,7 +254,7 @@ func _physics_process(dt: float) -> void:
 		_sync_t += dt
 		if Net.online() and _sync_t >= 0.1 and is_inside_tree():
 			_sync_t = 0.0
-			rpc_sync.rpc(position, _body_yaw, _spd, thief_state)
+			Net.rpc_ready(rpc_sync, [position, _body_yaw, _spd, thief_state])
 	else:
 		position = position.lerp(_net_pos, minf(dt * 12.0, 1.0))
 		_body_yaw = lerp_angle(_body_yaw, _net_yaw, minf(dt * 12.0, 1.0))

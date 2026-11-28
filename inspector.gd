@@ -215,7 +215,7 @@ func _physics_process(dt: float) -> void:
 		_sync_t += dt
 		if Net.online() and _sync_t >= 0.09:
 			_sync_t = 0.0
-			rpc_sync.rpc(position, _body_yaw, _spd, _bubble_text, mode)
+			Net.rpc_ready(rpc_sync, [position, _body_yaw, _spd, _bubble_text, mode])
 	else:
 		position = position.lerp(_net_pos, minf(dt * 12.0, 1.0))
 		_body_yaw = lerp_angle(_body_yaw, _net_yaw, minf(dt * 12.0, 1.0))

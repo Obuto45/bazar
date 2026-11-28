@@ -311,6 +311,8 @@ func _ready() -> void:
 		_load_look()
 		_set_self_visible(false)
 		cam_root = Node3D.new()
+		# Kamera _process'te render hızında sürülür; fizik interpolasyonu kapalı olmalı (yoksa uyarı + gecikme)
+		cam_root.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 		add_child(cam_root)
 		cam = Camera3D.new()
 		cam.fov = Settings.fov
@@ -1923,7 +1925,7 @@ func _local(dt: float) -> void:
 		_sync_t += dt
 		if Net.online() and _sync_t >= 0.05:
 			_sync_t = 0.0
-			sync_state.rpc(global_position, body_yaw, look_yaw, look_pitch, 0.0, false, 0.0, Vector3.ZERO)
+			Net.rpc_ready(sync_state, [global_position, body_yaw, look_yaw, look_pitch, 0.0, false, 0.0, Vector3.ZERO])
 		return
 	var inp := Vector2.ZERO
 	var captured := Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
@@ -1997,7 +1999,7 @@ func _local(dt: float) -> void:
 	_sync_t += dt
 	if Net.online() and _sync_t >= 0.05:
 		_sync_t = 0.0
-		sync_state.rpc(global_position, body_yaw, look_yaw, look_pitch, spd, air, shout_power, velocity)
+		Net.rpc_ready(sync_state, [global_position, body_yaw, look_yaw, look_pitch, spd, air, shout_power, velocity])
 
 
 ## Akıcı kamera + hissedilir darbe sarsıntısı + kullanıcı FOV/Hareket Azaltma uyumlu 1. şahıs eşya animasyonları!
@@ -3033,7 +3035,7 @@ func _process_voice_capture(dt: float) -> void:
 			pcm.encode_s16(i * 2, clampi(int(_voice_accum[i] * 32767.0), -32768, 32767))
 		_voice_accum = _voice_accum.slice(VOICE_CHUNK)
 		if Net.online():
-			voice_packet.rpc(pcm, lvl)
+			Net.rpc_ready(voice_packet, [pcm, lvl])
 
 
 @rpc("authority", "unreliable_ordered")

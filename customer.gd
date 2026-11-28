@@ -1223,9 +1223,9 @@ func _physics_process(dt: float) -> void:
 			if _sync_dirty or _full_sync_t >= 1.0:
 				_sync_dirty = false
 				_full_sync_t = 0.0
-				rpc_sync_state.rpc(position, _body_yaw, _spd, state, target_owner_id, wants, offers, mood_text, wait_timer, say_text, emote_text)
+				Net.rpc_ready(rpc_sync_state, [position, _body_yaw, _spd, state, target_owner_id, wants, offers, mood_text, wait_timer, say_text, emote_text])
 			else:
-				rpc_sync_pose.rpc(position, _body_yaw, _spd, wait_timer)
+				Net.rpc_ready(rpc_sync_pose, [position, _body_yaw, _spd, wait_timer])
 	else:
 		# Hız tabanlı öngörü + yumuşak takip (ağ gecikmesinde kayma/titreme yok)
 		var lead := _net_pos + Vector3(sin(_net_yaw), 0.0, cos(_net_yaw)) * (_net_spd * 0.06)
@@ -1786,11 +1786,17 @@ func try_sell_one_from(seller_id: int, insist := false) -> Dictionary:
 
 @rpc("any_peer", "call_local", "reliable")
 func rpc_request_sell(seller_id: int, insist: bool) -> void:
-	if Net.online() and not multiplayer.is_server():
+	if Net.online():
+		if not multiplayer.is_server():
+			return
+		seller_id = multiplayer.get_remote_sender_id() # istemcinin gönderdiği kimliğe güvenme
+		if seller_id == 0:
+			seller_id = 1
+	var p := _find_player(seller_id)
+	if p == null or p.global_position.distance_to(global_position) > 4.0:
 		return
 	var res := try_sell_one_from(seller_id, insist)
 	if not res.is_empty():
-		var p := _find_player(seller_id)
 		if p:
 			p.award_money(int(res["price"]), int(res.get("tip", 0)), bool(res.get("haggle", false)))
 

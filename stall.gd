@@ -217,6 +217,8 @@ static func register_world_obstacle(center_xz: Vector2, half_xz: Vector2) -> voi
 ## Tezgahı 6 (seviye 1) / 8 (seviye 2) yuvaya genişletir; mevcut yuva içerikleri korunur.
 @rpc("any_peer", "call_local", "reliable")
 func rpc_set_expansion(level: int) -> void:
+	if not Net.from_host():
+		return
 	level = clampi(level, 0, 2)
 	if level <= expansion_level:
 		return
@@ -414,6 +416,11 @@ func _process(dt: float) -> void:
 
 func _is_host() -> bool:
 	return not Net.online() or multiplayer.is_server()
+
+
+## RPC içinde: gönderen host ya da bu tezgâhın sahibi mi?
+func _from_owner_or_host() -> bool:
+	return Net.from_host() or multiplayer.get_remote_sender_id() == owner_id
 
 
 func _day_paused() -> bool:
@@ -699,11 +706,15 @@ func step_radio_synced(dir: int) -> String:
 
 @rpc("any_peer", "call_local", "reliable")
 func rpc_set_radio_track(idx: int) -> void:
+	if not _from_owner_or_host():
+		return
 	Sfx.radio_set(_radio_audio, idx)
 
 
 @rpc("any_peer", "call_local", "reliable")
 func rpc_set_stall_radio(placed: bool, playing: bool, idx := -1, pos := -1.0) -> void:
+	if not _from_owner_or_host():
+		return
 	has_radio = placed
 	radio_playing = placed and playing
 	if _radio_node:
@@ -1280,6 +1291,8 @@ func request_place(idx: int, item_id: String, from_world_pos := Vector3.ZERO) ->
 
 @rpc("any_peer", "call_local", "reliable")
 func rpc_place_animated(idx: int, item_id: String, count: int, price: int, from_world_pos: Vector3, fresh := 1.0) -> void:
+	if not _from_owner_or_host():
+		return
 	if idx < 0 or idx >= slots.size() or (item_id != "" and not ITEMS.has(item_id)):
 		return
 	slots[idx] = {"item": item_id, "count": clampi(count, 0, max_slot_count()), "price": clampi(price, 1, 199), "fresh": clampf(fresh, 0.0, 1.0)}
@@ -1366,6 +1379,8 @@ func consume_for_sale(item_id: String) -> int:
 
 @rpc("any_peer", "call_local", "reliable")
 func rpc_sync_slot(idx: int, item_id: String, count: int, price: int, fresh := 1.0) -> void:
+	if not _from_owner_or_host():
+		return
 	if idx < 0 or idx >= slots.size() or (item_id != "" and not ITEMS.has(item_id)):
 		return
 	var old: Dictionary = slots[idx]
@@ -1680,6 +1695,8 @@ func request_ring_bell() -> bool:
 
 @rpc("any_peer", "call_local", "reliable")
 func rpc_ring_bell() -> void:
+	if not _from_owner_or_host():
+		return
 	if not has_upgrade("bell") or bell_cd > 0.0:
 		return
 	bell_boost = 10.0

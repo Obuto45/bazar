@@ -20,6 +20,7 @@ var lobby_code := ""
 var lobby_name := ""
 var lobby_is_public := true
 var names := {} # peer_id -> görünen ad
+var ready_peers := {} # dünyasını kurmuş istemciler (host yönetir, herkese senkron)
 var _pending_code := ""
 var _pending_lobby_name := ""
 
@@ -56,6 +57,11 @@ func online() -> bool:
 	var p := multiplayer.multiplayer_peer
 	return p != null and not (p is OfflineMultiplayerPeer) \
 		and p.get_connection_status() == MultiplayerPeer.CONNECTION_CONNECTED
+
+
+## RPC içinde: gönderen host mu (ya da çevrimdışı / yerel çağrı)?
+func from_host() -> bool:
+	return not online() or multiplayer.get_remote_sender_id() in [0, 1]
 
 
 static func _gen_room_code() -> String:
@@ -282,6 +288,7 @@ func leave() -> void:
 		multiplayer.multiplayer_peer.close()
 	multiplayer.multiplayer_peer = OfflineMultiplayerPeer.new()
 	names.clear()
+	ready_peers.clear()
 	Settings.muted_peers.clear()
 	SteamMgr.set_presence_menu()
 	left.emit()
@@ -289,9 +296,11 @@ func leave() -> void:
 
 func _on_peer_left(id: int) -> void:
 	names.erase(id)
+	ready_peers.erase(id)
 	Settings.muted_peers.erase(id)
 	if multiplayer.is_server():
 		sync_names.rpc(names)
+		sync_ready.rpc(ready_peers)
 	lobby_changed.emit()
 
 
@@ -326,3 +335,27 @@ func sync_names(d: Dictionary) -> void:
 	if lobby_id != 0:
 		SteamMgr.set_presence_lobby(names.size(), MAX_PLAYERS)
 	lobby_changed.emit()
+
+
+# --- Hazır eşler (katılım yarışı) ---
+
+## İstemci: start_game/snapshot uygulandı, senk paketleri alabilirim.
+@rpc("any_peer", "reliable")
+func rpc_peer_ready() -> void:
+	if not multiplayer.is_server():
+		return
+	ready_peers[multiplayer.get_remote_sender_id()] = true
+	sync_ready.rpc(ready_peers)
+
+
+@rpc("authority", "reliable")
+func sync_ready(d: Dictionary) -> void:
+	ready_peers = d
+
+
+## Unreliable senk RPC'sini yalnızca dünyasını kurmuş eşlere (host her zaman) gönderir.
+func rpc_ready(c: Callable, args: Array) -> void:
+	var me := multiplayer.get_unique_id()
+	for id in multiplayer.get_peers():
+		if id != me and (id == 1 or ready_peers.has(id)):
+			c.bindv(args).rpc_id(id)

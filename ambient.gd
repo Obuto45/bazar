@@ -74,6 +74,8 @@ var _prev_pos := {}
 
 
 func _ready() -> void:
+	# Kedi/yürüyen/güvercinler _process'te hareket eder; fizik interpolasyonu açıkken bu titreme yapar
+	physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	_rng.seed = 2024
 	_cat_mat = LP.batch_material(0.9, 0.0, 0.0)
 	_build_cats()

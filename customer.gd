@@ -1231,6 +1231,7 @@ func _physics_process(dt: float) -> void:
 		var lead := _net_pos + Vector3(sin(_net_yaw), 0.0, cos(_net_yaw)) * (_net_spd * 0.06)
 		if position.distance_squared_to(lead) > 16.0:
 			position = _net_pos
+			reset_physics_interpolation() # ışınlanmada eski konumdan kayarak gelmesin
 		else:
 			position = position.lerp(lead, minf(dt * 12.0, 1.0))
 		_body_yaw = lerp_angle(_body_yaw, _net_yaw, minf(dt * 12.0, 1.0))

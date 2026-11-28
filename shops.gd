@@ -32,6 +32,8 @@ const SHOPS := {
 		"items": [], "upgrades": ["saksi", "nazar"]},
 	"kasap": {"sign": "KASAP", "name": "Kasap", "icon": "🔪", "open": [0.0, 0.75],
 		"items": ["bicak", "sopa"], "upgrades": []},
+	"eczane": {"sign": "ECZANE", "name": "Eczane", "icon": "💊", "open": [0.0, 1.01],
+		"items": ["spray", "cay"], "upgrades": []},
 	"kuafor": {"sign": "KUAFÖR", "name": "Kuaför", "icon": "💇", "open": [0.0, 0.85],
 		"items": [], "upgrades": [], "looks": ["hair", "hcol", "must"]},
 }

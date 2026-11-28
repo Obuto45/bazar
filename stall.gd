@@ -320,7 +320,11 @@ static func world_steer_all(from: Node, pos: Vector3, dir: Vector3, look := 1.0)
 				0.0, signf(pos.z - c.y) if absf(pos.z - c.y) > absf(pos.x - c.x) else 0.0)
 			if push.length_squared() < 0.01:
 				push = Vector3(1.0, 0.0, 0.0)
-			out = (out + push * 1.25).normalized()
+			# Engelin etrafından yan kay: düz geri itme hedef yönünü sıfırlayıp NPC'yi direk/bordür önünde kilitliyordu
+			var tan := Vector3(-push.z, 0.0, push.x)
+			if tan.dot(out) < 0.0 or (absf(tan.dot(out)) < 0.05 and tan.dot(Vector3(c.x - pos.x, 0.0, c.y - pos.z)) > 0.0):
+				tan = -tan
+			out = (out + push * 0.6 + tan * 1.25).normalized()
 	return out
 
 

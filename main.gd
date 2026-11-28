@@ -1469,6 +1469,15 @@ func _selftest_shops(me) -> void:
 	for sid in Shops.SHOPS:
 		if not bazaar_node._shop_doors.has(sid):
 			bad.append(sid + ":kapı yok")
+			continue
+		# Oyuncunun durabileceği yerden (kapının 1.6 m önü) bakınca ilk vurulan şey kapı mı?
+		var area: Area3D = bazaar_node._shop_doors[sid]["area"]
+		var eye := area.global_position + area.global_transform.basis.x.normalized() * 1.6
+		var q := PhysicsRayQueryParameters3D.create(eye, area.global_position, 1 | 4)
+		q.collide_with_areas = true
+		var hit := get_viewport().world_3d.direct_space_state.intersect_ray(q)
+		if hit.get("collider") != area:
+			bad.append(sid + ":kapıya ulaşılamıyor")
 		if not Shops.is_open(sid, _day_prog()):
 			continue
 		for iid in Shops.SHOPS[sid]["items"]:

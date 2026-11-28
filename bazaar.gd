@@ -13,8 +13,8 @@ const AmbientScript := preload("res://ambient.gd")
 const Shops := preload("res://shops.gd")
 const StallScript := preload("res://stall.gd")
 
-const HALF_X := 14.5
-const HALF_Z := 21.5
+const HALF_X := 16.0 # dükkan cephelerinin (x=±16.15) hemen önü: kapılar etkileşime açık kalsın
+const HALF_Z := 27.0 # kapı arkası dükkan cephelerinin (z=±27.4) hemen önü
 # Ana asfalt caddenin iki yanında 8 oyuncu tezgahı (ortadaki meydan Ford Transit Toptancı için açık!)
 const PLAYER_STALL_SPOTS := [
 	[Vector3(-6.3, 0, -7.8), PI / 2],
@@ -47,7 +47,7 @@ const WALL_COLS := [
 ]
 ## Sokak cepheleri sırası: önce batı (x=-16) kuzeyden güneye, sonra doğu (x=+16) kuzeyden güneye, sonra kapı arkaları.
 ## Sık uğranan dükkanlar (Tekel, Fırın, Kıraathane, Market, Nalbur) pazarın ortasına yakın. Gerçek dükkanlar: shops.gd
-## (Eczane sadece vitrin).
+
 const SHOP_NAMES := ["BERBER", "FIRIN", "TEKEL BAYİ", "KIRAATHANE", "KASAP", "ECZANE",
 	"TERZİ", "MARKET", "NALBUR", "TELEFONCU", "ÇİÇEKÇİ", "BÖREKÇİ",
 	"KIRTASİYE", "BÜFE", "BAKKAL", "KUAFÖR"]

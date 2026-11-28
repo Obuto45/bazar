@@ -49,6 +49,8 @@ var _honked_arrive := false
 var _honked_warn := false
 var _sync_t := 0.0
 var _net_pos := Vector3(0, 0, ENTER_Z)
+var _net_vel := Vector3.ZERO
+var _net_last := Vector3(0, 0, ENTER_Z)
 var _wheel_rot := 0.0
 var _blink_t := 0.0
 var _horn_cd := 0.0
@@ -409,7 +411,9 @@ func _physics_process(dt: float) -> void:
 			_sync_t = 0.0
 			rpc_sync_truck.rpc(position, state, state_timer)
 	else:
-		position = position.lerp(_net_pos, minf(dt * 12.0, 1.0))
+		# Paketler arası dead-reckoning: hedef sabit hızla ilerler, 80 ms'lik dur-kalk sarsıntısı olmaz
+		_net_pos += _net_vel * dt
+		position = position.lerp(_net_pos, minf(dt * 6.0, 1.0))
 
 	# Tekerlekleri ilerleme mesafesine göre fiziksel döndür (+Z yönü -> +X rotasyon)
 	var dz := position.z - prev_z
@@ -423,12 +427,13 @@ func _physics_process(dt: float) -> void:
 	var accel_z := (cur_spd - _prev_spd) / maxf(dt, 0.001)
 	_prev_spd = cur_spd
 	var want_pitch := clampf(-accel_z * 0.0065, -0.028, 0.032) if state != State.AWAY else 0.0
-	_pitch_k = lerpf(_pitch_k, want_pitch, minf(dt * 8.0, 1.0))
+	_pitch_k = lerpf(_pitch_k, want_pitch, minf(dt * 3.0, 1.0))
 	if _model_root:
 		_model_root.rotation.x = _pitch_k
-		if state != State.AWAY:
-			_vib_t += dt * (46.0 if state == State.PARKED else 72.0)
-			_model_root.position.y = sin(_vib_t) * (0.004 if state == State.PARKED else 0.006)
+		if state == State.PARKED:
+			# Düşük frekans: 60 Hz fizikte 46-72 rad/s örtüşüp (aliasing) titreme gibi görünüyordu
+			_vib_t += dt * 14.0
+			_model_root.position.y = sin(_vib_t) * 0.0015
 		else:
 			_model_root.position.y = 0.0
 
@@ -651,6 +656,8 @@ func rpc_state_changed(new_state: int, t: float) -> void:
 
 @rpc("authority", "unreliable_ordered")
 func rpc_sync_truck(p: Vector3, st: int, t: float) -> void:
+	_net_vel = Vector3.ZERO if st == State.PARKED or p.distance_to(_net_last) > 3.0 else (p - _net_last) / 0.08
+	_net_last = p
 	_net_pos = p
 	if state != st:
 		state = st

@@ -7,11 +7,14 @@ const VFX := preload("res://vfx.gd")
 const BEER_MODEL := preload("res://models/pazar_pilsen.glb")
 const TEA_MODEL := preload("res://models/turkish_tea.glb")
 const CIG_MODEL := preload("res://models/cigarette.glb")
+const CIGAR_MODEL := preload("res://models/cuban_cigar.glb")
 const SIMIT_MODEL := preload("res://models/simit.glb")
 const ACMA_MODEL := preload("res://models/acma.glb")
 const MEGA_MODEL := preload("res://models/megaphone.glb")
 const RADIO_MODEL := preload("res://models/arabesk_radio.glb")
 const SPRAY_MODEL := preload("res://models/spray_bottle.glb")
+const KNIFE_MODEL := preload("res://models/fruit_knife.glb")
+const BAT_MODEL := preload("res://models/baseball_bat.glb")
 
 const CATALOG := {
 	"sigara": {
@@ -59,8 +62,8 @@ const CATALOG := {
 		"puffs_per_use": 3,
 		"consumable": true,
 		"left_hint": "Isır (+18sn Hız)",
-		"right_hint": "Kokla & Çevir",
-		"desc": "Fırından taze çıtır simit (3 ısırık). Sol tıkla ısır (+18sn +%15 hız), sağ tıkla sıcak kokusunu çek!",
+		"right_hint": "Kuşa / kediye at",
+		"desc": "Fırından taze çıtır simit (3 ısırık). Sol tıkla ısır (+18sn +%15 hız), sağ tıkla kuşlara ve kediye parça at!",
 	},
 	"acma": {
 		"name": "Açma",
@@ -226,24 +229,39 @@ static func build_item_model(item_id: String, burn_ratio := 0.0, ash_ratio := 0.
 				tip_fb.add_child(_make_continuous_wisp(false, false))
 
 		"puro":
-			# Kalın kahverengi sarma Küba purosu + altın şerit + geniş kızgın kor ucu + yoğun sürekli duman!
-			var body_len := 0.145 * rem
-			LP.add(root, LP.cyl(0.0165, 0.0155, body_len, 9), Vector3(0, 0, 0.02 - body_len * 0.5), Color(0.32, 0.18, 0.09), Vector3(PI / 2, 0, 0), 0.78)
-			LP.add(root, LP.cyl(0.0172, 0.0172, 0.018, 9), Vector3(0, 0, 0.005), Color(0.95, 0.78, 0.22), Vector3(PI / 2, 0, 0), 0.25, 0.85)
-			var tip_z := 0.02 - body_len
-			var ash := LP.add(root, LP.cyl(0.0158, 0.0165, 0.018, 8), Vector3(0, 0, tip_z - 0.007), Color(0.50, 0.49, 0.50), Vector3(PI / 2, 0, 0))
-			ash.name = "AshRing"
-			var ember := LP.add(root, LP.ellipsoid(0.016, 0.016, 0.012, 7, 4), Vector3(0, 0, tip_z - 0.016), Color(1.0, 0.28, 0.04))
-			ember.name = "Ember"
-			var em := ember.material_override as StandardMaterial3D
-			em.emission_enabled = true
-			em.emission = Color(1.0, 0.26, 0.04)
-			em.emission_energy_multiplier = 3.2
-			var tip := Node3D.new()
-			tip.name = "SmokeTip"
-			tip.position = Vector3(0, 0, tip_z - 0.023)
-			root.add_child(tip)
-			tip.add_child(_make_continuous_wisp(true, false))
+			# Blender'da modellenen Maduro sarma yapraklı, kırmızı-altın bantlı Küba purosu + uzayan kül + kızgın kor!
+			var p_inst := CIGAR_MODEL.instantiate()
+			p_inst.name = "CubanCigarMesh"
+			root.add_child(p_inst)
+			var ppap := p_inst.find_child("CigPaper", true, false) as Node3D
+			if ppap:
+				ppap.scale.z = rem
+			var ptip_grp := p_inst.find_child("CigTipGroup", true, false) as Node3D
+			if ptip_grp:
+				ptip_grp.set_meta("burn_len", 0.118)
+				ptip_grp.position.z = -0.118 * rem
+				var pash_b := ptip_grp.find_child("AshBody", true, false) as Node3D
+				if pash_b:
+					pash_b.scale.z = lerpf(0.30, 2.0, clampf(ash_ratio, 0.0, 1.0))
+				var pemb := ptip_grp.find_child("Ember", true, false) as MeshInstance3D
+				if pemb and pemb.mesh and pemb.mesh.get_surface_count() > 0:
+					var base_pm := pemb.mesh.surface_get_material(0)
+					var pem := (base_pm.duplicate() as StandardMaterial3D) if (base_pm is StandardMaterial3D) else StandardMaterial3D.new()
+					pem.emission_enabled = true
+					pem.emission = Color(1.0, 0.28, 0.04)
+					pem.emission_energy_multiplier = 3.2
+					pemb.material_override = pem
+				var tip := Node3D.new()
+				tip.name = "SmokeTip"
+				tip.position = Vector3(0, 0, -0.008)
+				ptip_grp.add_child(tip)
+				tip.add_child(_make_continuous_wisp(true, false))
+			else:
+				var tip_fb2 := Node3D.new()
+				tip_fb2.name = "SmokeTip"
+				tip_fb2.position = Vector3(0, 0, -0.118 * rem)
+				root.add_child(tip_fb2)
+				tip_fb2.add_child(_make_continuous_wisp(true, false))
 
 		"cay":
 			# Blender'da modellenen ince belli cam bardak, desenli porselen tabak, 2 küp şeker, dönen kaşık + tavşan kanı çay!
@@ -341,13 +359,10 @@ static func build_item_model(item_id: String, burn_ratio := 0.0, ash_ratio := 0.
 			root.add_child(bell)
 
 		"bicak":
-			# Ahşap saplı parlak çelik Türk meyve bıçağı
-			LP.add(root, LP.box(Vector3(0.024, 0.030, 0.11)), Vector3(0, 0, 0.04), Color(0.48, 0.27, 0.14), Vector3.ZERO, 0.72)
-			LP.add(root, LP.cyl(0.004, 0.004, 0.028, 5), Vector3(0, 0, 0.02), Color(0.86, 0.74, 0.32), Vector3(0, 0, PI / 2), 0.3, 0.8)
-			LP.add(root, LP.cyl(0.004, 0.004, 0.028, 5), Vector3(0, 0, 0.06), Color(0.86, 0.74, 0.32), Vector3(0, 0, PI / 2), 0.3, 0.8)
-			# Çelik namlu + sivri uç
-			LP.add(root, LP.box(Vector3(0.005, 0.026, 0.14)), Vector3(0, 0.004, -0.085), Color(0.84, 0.88, 0.92), Vector3.ZERO, 0.18, 0.92)
-			LP.add(root, LP.prism(Vector3(0.026, 0.055, 0.005)), Vector3(0, 0.004, -0.182), Color(0.88, 0.92, 0.96), Vector3(-PI / 2, 0, PI / 2), 0.16, 0.94)
+			# Blender'da modellenen ceviz saplı, pirinç balçaklı, keskin bileyli çelik pazarcı meyve bıçağı
+			var k_inst := KNIFE_MODEL.instantiate()
+			k_inst.name = "FruitKnifeMesh"
+			root.add_child(k_inst)
 
 		"radyo":
 			# Blender'da modellenen 80'ler retro Arabesk kasetçalar boombox (çift hoparlör, kaset yuvası, ışıklı FM kadranı, teleskopik anten)!
@@ -364,13 +379,10 @@ static func build_item_model(item_id: String, burn_ratio := 0.0, ash_ratio := 0.
 				dial.material_override = dm
 
 		"sopa":
-			# Ahşap beyzbol sopası: sap +Z, kalın uç -Z (uzunluk ~0.56 m)
-			var wood := Color(0.78, 0.58, 0.32)
-			LP.add(root, LP.sphere(0.02, 6, 4), Vector3(0, 0, 0.075), wood, Vector3.ZERO, 0.7)
-			LP.add(root, LP.cyl(0.013, 0.018, 0.22, 8), Vector3(0, 0, -0.04), wood, Vector3(PI / 2, 0, 0), 0.7)
-			LP.add(root, LP.cyl(0.0145, 0.0155, 0.10, 8), Vector3(0, 0, 0.0), Color(0.12, 0.12, 0.13), Vector3(PI / 2, 0, 0), 0.9)
-			LP.add(root, LP.cyl(0.018, 0.037, 0.30, 9), Vector3(0, 0, -0.26), wood, Vector3(PI / 2, 0, 0), 0.7)
-			LP.add(root, LP.cyl(0.037, 0.034, 0.07, 9), Vector3(0, 0, -0.445), wood, Vector3(PI / 2, 0, 0), 0.7)
+			# Blender'da modellenen torna dişbudak ahşap, deri sargı saplı ve çukur uçlu beyzbol sopası
+			var bat_inst := BAT_MODEL.instantiate()
+			bat_inst.name = "BaseballBatMesh"
+			root.add_child(bat_inst)
 
 		"spray":
 			# Blender'da modellenen ince belli yarı saydam mavi Su Fısfısı + iç su + hareketli tetik + nozul!

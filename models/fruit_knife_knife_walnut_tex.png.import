@@ -2,23 +2,24 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://bugkmc0iycxj2"
-path="res://.godot/imported/ford_transit_chassis_masallah_strip.png-48895e390f4a00c99d9a6c5ecdc82b87.ctex"
+uid="uid://kr1ekakq26lw"
+path.s3tc="res://.godot/imported/fruit_knife_knife_walnut_tex.png-e8afe119ae2a18ab146fdd364150e216.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
-"md5": "2d40770e0b93d5b0ae32c7435b8ebeb4"
+"md5": "e5542847d68b2e2e8b13abb27420191f"
 }
 
 [deps]
 
-source_file="res://models/ford_transit/ford_transit_chassis_masallah_strip.png"
-dest_files=["res://.godot/imported/ford_transit_chassis_masallah_strip.png-48895e390f4a00c99d9a6c5ecdc82b87.ctex"]
+source_file="res://models/fruit_knife_knife_walnut_tex.png"
+dest_files=["res://.godot/imported/fruit_knife_knife_walnut_tex.png-e8afe119ae2a18ab146fdd364150e216.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/lossy_quality=0.7
 compress/uastc_level=0

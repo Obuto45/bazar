@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://b6267wyfk0twa"
-path="res://.godot/imported/cigarette_paper_tex.png-e68c80ce69c556abe19df4b0c1828a8b.ctex"
+path.s3tc="res://.godot/imported/cigarette_paper_tex.png-e68c80ce69c556abe19df4b0c1828a8b.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "254a662f5d66d1d0b859e43cf7c20053"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://models/cigarette_paper_tex.png"
-dest_files=["res://.godot/imported/cigarette_paper_tex.png-e68c80ce69c556abe19df4b0c1828a8b.ctex"]
+dest_files=["res://.godot/imported/cigarette_paper_tex.png-e68c80ce69c556abe19df4b0c1828a8b.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/lossy_quality=0.7
 compress/uastc_level=0

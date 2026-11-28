@@ -16,7 +16,7 @@ enum TState { SNEAK, LURK, FLEE, CAUGHT }
 
 const SNEAK_SPEED := 2.0
 const FLEE_SPEED := 5.3 # oyuncu koşusu 7.0: koşarsan yetişirsin
-const CATCH_RANGE := 3.2
+const CATCH_RANGE := 4.2
 const BOUNTY := 30
 const REP_RESTORE := 0.2
 const MAX_LIFE := 75.0
@@ -61,6 +61,7 @@ var _net_pos := Vector3.ZERO
 var _net_yaw := 0.0
 var _net_spd := 0.0
 var _sync_t := 0.0
+var _step_cd := 0.0
 
 
 func init_thief(tname: String, seed_val: int, start_p: Vector3, exit_p: Vector3, target_owner: int) -> void:
@@ -258,6 +259,13 @@ func _physics_process(dt: float) -> void:
 		position = position.lerp(_net_pos, minf(dt * 12.0, 1.0))
 		_body_yaw = lerp_angle(_body_yaw, _net_yaw, minf(dt * 12.0, 1.0))
 		_spd = lerpf(_spd, _net_spd, minf(dt * 10.0, 1.0))
+		if _stun_t > 0.0:
+			_stun_t = maxf(_stun_t - dt, 0.0)
+	if thief_state == TState.FLEE and _spd > 3.5:
+		_step_cd -= dt
+		if _step_cd <= 0.0:
+			_step_cd = 0.27
+			Sfx.play_step("asphalt", global_position, false, 0.9)
 	_animate(dt)
 
 
@@ -299,19 +307,12 @@ func _move_to(p: Vector3, speed: float, dt: float) -> float:
 		_spd = 0.0
 		return dist
 	var dir := diff / dist
-	var w := _world()
-	var truck := w.get_node_or_null("Wholesaler") as Node3D if w else null
-	if truck and truck.has_method("is_present") and truck.is_present():
-		var rx := position.x - truck.position.x
-		var rz := position.z - truck.position.z
-		if absf(rx) < 2.3 and absf(rz) < 4.5:
-			dir = (dir + Vector3(1.3 if rx >= 0.0 else -1.3, 0, 0)).normalized()
 	if thief_state == TState.FLEE:
 		# zikzaklı kaçış
 		var perp := Vector3(dir.z, 0, -dir.x)
 		dir = (dir + perp * sin(_life * 3.1) * 0.28).normalized()
-	dir = StallScript.steer_all(self, position, dir, dist - 0.2)
-	position = StallScript.keepout_all(self, position + dir * minf(speed * dt, dist))
+	dir = StallScript.world_steer_all(self, position, dir, dist - 0.2)
+	position = StallScript.world_keepout_all(self, position + dir * minf(speed * dt, dist))
 	_body_yaw = lerp_angle(_body_yaw, atan2(dir.x, dir.z), minf(dt * 10.0, 1.0))
 	_spd = speed
 	return dist
@@ -340,7 +341,7 @@ func _on_state_visual(s: int) -> void:
 func _do_steal() -> void:
 	var st := _find_stall()
 	var item := ""
-	if st:
+	if st and global_position.distance_to(st.global_position) <= 4.5:
 		if st.has_method("steal_one"):
 			item = str(st.steal_one())
 		else:
@@ -354,6 +355,20 @@ func _do_steal() -> void:
 		rpc_on_steal.rpc(item)
 	else:
 		rpc_on_steal(item)
+
+
+## Geç katılan istemciye hırsızın durumunu ve taşıdığı ürünü uygular.
+func apply_snapshot(d: Dictionary) -> void:
+	var st_v := int(d.get("state", TState.SNEAK))
+	var item_id := str(d.get("carried", ""))
+	thief_state = st_v
+	carried_item = item_id
+	if item_id != "" and _carry_root:
+		for c in _carry_root.get_children():
+			c.queue_free()
+		if Produce.ITEMS.has(item_id):
+			Produce.build_mesh(_carry_root, item_id, Vector3.ZERO, 0.11)
+	_on_state_visual(st_v)
 
 
 @rpc("authority", "call_local", "reliable")

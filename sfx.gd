@@ -8,6 +8,8 @@ const RATE := 22050
 const BUS_SFX := "SFX"
 const BUS_AMB := "Ambience"
 const BUS_MUSIC := "Music"
+const BUS_VOICE := "Voice"
+const BUS_VOICE_MEGA := "VoiceMega"
 
 ## Toptancı (manav) kamyoneti için rastgele çalınan 5 gerçek Hİ-DO havalı korna (mono 44.1 kHz OGG).
 const TRUCK_HORN_NAMES: Array[String] = [
@@ -40,6 +42,8 @@ var _clips: Dictionary = {}
 var _clip_us: Dictionary = {}
 var _pool: Array[AudioStreamPlayer] = []
 var _pool_idx := 0
+var _pool_3d: Array[AudioStreamPlayer3D] = []
+var _pool_3d_idx := 0
 var _headless := false
 var _amb_player: AudioStreamPlayer
 var _amb_on := false
@@ -71,16 +75,25 @@ func _ready() -> void:
 	_ensure_bus(BUS_SFX)
 	_ensure_bus(BUS_AMB)
 	_ensure_bus(BUS_MUSIC)
+	_ensure_bus(BUS_VOICE)
+	_ensure_bus(BUS_VOICE_MEGA)
 	var t0 := Time.get_ticks_msec()
 	_build_all_clips()
 	build_ms = Time.get_ticks_msec() - t0
 	print_verbose("Sfx: %d klip %d ms içinde üretildi" % [_clips.size(), build_ms])
-	for i in 12:
+	for i in 14:
 		var p := AudioStreamPlayer.new()
 		p.bus = BUS_SFX
 		p.max_polyphony = 3
 		add_child(p)
 		_pool.append(p)
+	for i in 22:
+		var p3 := AudioStreamPlayer3D.new()
+		p3.bus = BUS_SFX
+		p3.unit_size = 5.5
+		p3.attenuation_model = AudioStreamPlayer3D.ATTENUATION_INVERSE_DISTANCE
+		add_child(p3)
+		_pool_3d.append(p3)
 	set_process(false)
 	# Ses çıkışı olmayan (headless / sunucu) süreçte uzun döngüleri hiç üretme.
 	if not _headless:
@@ -97,6 +110,9 @@ func _exit_tree() -> void:
 		if c is AudioStreamPlayer:
 			(c as AudioStreamPlayer).stop()
 			(c as AudioStreamPlayer).stream = null
+		elif c is AudioStreamPlayer3D:
+			(c as AudioStreamPlayer3D).stop()
+			(c as AudioStreamPlayer3D).stream = null
 
 
 ## Arka planda (öncelik sırasıyla) üretilen klipler: [ad, üretici].
@@ -199,9 +215,10 @@ func get_truck_horn_stream(idx: int) -> AudioStream:
 ## Genel efekt kısma (~-6 dB) + klip başına ek kısma ve en kısa tekrar aralığı (sn).
 const SFX_TRIM_DB := -6.0
 const CLIP_TRIM_DB := {"pigeon_flap": -8.0, "tea_sip": -3.0, "tea_stir": -5.0, "bite_crunch": -3.0, "tea": -3.0, "amb_bird1": -6.0, "amb_bird2": -6.0, "amb_bird3": -6.0}
-const CLIP_MIN_GAP := {"pigeon_flap": 1.2, "tea_sip": 0.5, "tea_stir": 0.6, "bite_crunch": 0.25, "tea": 0.6, "coin": 0.06, "step": 0.1, "ui_click": 0.04, "price_up": 0.04, "price_down": 0.04}
+const CLIP_MIN_GAP := {"pigeon_flap": 1.2, "tea_sip": 0.5, "tea_stir": 0.6, "bite_crunch": 0.25, "tea": 0.6, "coin": 0.03, "step": 0.06, "squelch": 0.14, "ui_click": 0.04, "price_up": 0.04, "price_down": 0.04}
 const DEFAULT_MIN_GAP := 0.05
 var _last_play: Dictionary = {}
+var _last_play_3d: Dictionary = {} # clip_name -> [time, Vector3]
 
 
 ## true: bu klip çok yakın zamanda çalındı, atla.
@@ -214,8 +231,23 @@ func _throttled(clip_name: String) -> bool:
 	return false
 
 
+## 3D ses kısma: aynı konumda spam engellenir, farklı kaynaklar (örn. 2 oyuncunun adımı) birbirini susturmaz.
+func _throttled_3d(clip_name: String, world_pos: Vector3) -> bool:
+	var now := Time.get_ticks_msec() * 0.001
+	var gap: float = CLIP_MIN_GAP.get(clip_name, DEFAULT_MIN_GAP)
+	if _last_play_3d.has(clip_name):
+		var prev: Array = _last_play_3d[clip_name]
+		var dt := now - float(prev[0])
+		if dt < 0.02:
+			return true
+		if dt < gap and (prev[1] as Vector3).distance_squared_to(world_pos) < 4.0:
+			return true
+	_last_play_3d[clip_name] = [now, world_pos]
+	return false
+
+
 func play(clip_name: String, vol_db := -4.0, pitch := 1.0, pitch_jitter := 0.06) -> void:
-	if DisplayServer.get_name() == "headless" or not _clips.has(clip_name) or _pool.is_empty():
+	if _headless or not _clips.has(clip_name) or _pool.is_empty():
 		return
 	if _throttled(clip_name):
 		return
@@ -228,27 +260,56 @@ func play(clip_name: String, vol_db := -4.0, pitch := 1.0, pitch_jitter := 0.06)
 	p.play()
 
 
-func play_3d(clip_name: String, world_pos: Vector3, parent: Node = null, vol_db := -2.0, pitch := 1.0, max_dist := 26.0) -> void:
-	if DisplayServer.get_name() == "headless" or not _clips.has(clip_name):
+func play_3d(clip_name: String, world_pos: Vector3, _parent: Node = null, vol_db := -2.0, pitch := 1.0, max_dist := 26.0) -> void:
+	if _headless or not _clips.has(clip_name):
 		return
-	var host := parent if parent else get_tree().current_scene
-	if host == null or not host.is_inside_tree():
+	if _pool_3d.is_empty():
 		play(clip_name, vol_db, pitch)
 		return
-	if _throttled(clip_name):
+	if _throttled_3d(clip_name, world_pos):
 		return
-	var p := AudioStreamPlayer3D.new()
+	var p: AudioStreamPlayer3D = null
+	for _k in _pool_3d.size():
+		var cand := _pool_3d[_pool_3d_idx]
+		_pool_3d_idx = (_pool_3d_idx + 1) % _pool_3d.size()
+		if not cand.playing:
+			p = cand
+			break
+	if p == null:
+		p = _pool_3d[_pool_3d_idx]
+		_pool_3d_idx = (_pool_3d_idx + 1) % _pool_3d.size()
+	p.stop()
 	p.bus = BUS_SFX
 	p.stream = _clips[clip_name]
 	p.volume_db = vol_db + SFX_TRIM_DB + float(CLIP_TRIM_DB.get(clip_name, 0.0))
 	p.pitch_scale = maxf(0.25, pitch + randf_range(-0.06, 0.06))
-	p.unit_size = 5.5
 	p.max_distance = max_dist
-	p.attenuation_model = AudioStreamPlayer3D.ATTENUATION_INVERSE_DISTANCE
-	host.add_child(p)
 	p.global_position = world_pos
-	p.finished.connect(p.queue_free)
 	p.play()
+
+
+## Yüzeye göre ayak sesi (asfalt / kaldırım taşı / ahşap / su birikintisi).
+func play_step(surface: String, world_pos: Vector3, is_local := true, run_k := 0.0) -> void:
+	if _headless:
+		return
+	var clip := "squelch" if surface == "puddle" and _clips.has("squelch") else "step"
+	var pitch := 1.0
+	var db := lerpf(-13.5, -9.0, clampf(run_k, 0.0, 1.0))
+	match surface:
+		"puddle":
+			pitch = lerpf(0.92, 1.16, run_k)
+			db += 3.0
+		"paver":
+			pitch = lerpf(1.06, 1.24, run_k)
+		"wood":
+			pitch = lerpf(0.76, 0.90, run_k)
+			db += 1.0
+		_:
+			pitch = lerpf(0.90, 1.12, run_k)
+	if is_local:
+		play(clip, db, pitch, 0.07)
+	else:
+		play_3d(clip, world_pos, null, db + 1.5, pitch, 18.0)
 
 
 ## Pazar ambiyansı: kalabalık uğultusu döngüsü + rastgele uzak olaylar (satıcı bağırışı, kuş, trafik, çay bardağı).

@@ -11,6 +11,7 @@ const WholesalerScript := preload("res://wholesaler.gd")
 const Produce := preload("res://produce.gd")
 const Items := preload("res://items.gd")
 const Shops := preload("res://shops.gd")
+const MenuUIScript := preload("res://menu_ui.gd")
 
 const DAY_DURATION := 300.0
 const GOLD := Color(1.0, 0.74, 0.3)
@@ -46,11 +47,11 @@ const MENU_TIPS := [
 ]
 
 const CONTROLS_TEXT := """WASD  yürü   •   Shift  koş   •   Boşluk  zıpla
-Fare  bak   •   1–6  envanter   •   0  el boş
+Fare  bak   •   1–8  envanter   •   0  el boş
 E  kasa al / sat / yakala / korna
 Sol Tık  ürün diz (basılı tut) / eşya kullan
 Q  kasayı fırlat   •   Tekerlek / Z-X  fiyat
-B / Mikrofon  bağır   •   R  pazarlığa "olmaz"
+B / Mikrofon  bağır   •   V  bas-konuş   •   R  pazarlığa "olmaz"
 F  tezgah zili   •   T  çaycıyı çağır   •   Dükkan kapısına bak + E  alışveriş
 Tab  skor tablosu   •   M  mikrofon aç/kapa
 H  rehber adımını geç   •   ESC  menü"""
@@ -65,6 +66,7 @@ const MARKET_EVENTS := [
 	{"item": "sogan", "title": "🧅 SOĞAN KRİZİ! Soğan fiyatları fırladı!"},
 ]
 
+var menu_ui: Node
 var ui: Control
 var pages := {}
 var page := ""
@@ -86,7 +88,7 @@ var money_lbl: Label
 var lid_top: ColorRect
 var lid_bot: ColorRect
 var money_pop: Label
-var crosshair: ColorRect
+var crosshair: Control
 var interact_lbl: Label
 var ingame_box: VBoxContainer
 
@@ -206,16 +208,21 @@ var summary_panel: PanelContainer
 
 func _ready() -> void:
 	_setup_input()
+	SteamMgr.cloud_restore_if_missing("career.json", CAREER_PATH)
+	SteamMgr.cloud_restore_if_missing("gorunum.cfg", PlayerScript.LOOK_FILE)
+	career = _load_career()
 	_build_ui()
-	Net.status.connect(func(m): info.text = m)
+	Net.status.connect(func(m):
+		if info: info.text = m)
 	Net.lobby_changed.connect(_refresh)
 	Net.left.connect(_back_to_menu)
 	Net.invited.connect(_on_invited)
-	Updater.status.connect(func(m): info.text = m)
+	Updater.status.connect(func(m):
+		if info: info.text = m)
 	multiplayer.peer_connected.connect(_on_peer_joined)
 	multiplayer.peer_disconnected.connect(_on_peer_left)
 	Settings.quality_changed.connect(_apply_quality)
-	career = _load_career()
+	Settings.graphics_changed.connect(_apply_graphics_settings)
 	_set_menu_bg(true)
 	_show_page("main")
 	_refresh()
@@ -281,22 +288,109 @@ func _ready() -> void:
 			get_viewport().get_texture().get_image().save_png(OS.get_user_data_dir() + "/selftest_sunset.png")
 		print("SELFTEST_OK stalls=", stalls.get_child_count() if stalls else 0, " customers=", customers.get_child_count() if customers else 0)
 		get_tree().quit()
+		return
+	if "--showcase" in args:
+		var out_dir := OS.get_user_data_dir()
+		await get_tree().create_timer(1.1).timeout
+		# 1. Yeni Ana Menü + Profil Kartı + TR/EN
+		get_viewport().get_texture().get_image().save_png(out_dir + "/v090_main_menu.png")
+		# 2. 4 Sekmeli Çoklu Oyuncu / Açık Odalar + Oda Kodu
+		_show_page("lobby")
+		if menu_ui:
+			menu_ui._select_lobby_subtab(1)
+		await get_tree().create_timer(0.45).timeout
+		get_viewport().get_texture().get_image().save_png(out_dir + "/v090_lobby_browser.png")
+		# 3. 5 Sekmeli Detaylı Ayarlar — Görüntü & Grafik
+		_show_page("main")
+		if menu_ui:
+			menu_ui.open_settings(0)
+		await get_tree().create_timer(0.4).timeout
+		get_viewport().get_texture().get_image().save_png(out_dir + "/v090_settings_display.png")
+		# 4. Ayarlar — Ses, 5 Kanal & Mikrofon Testi
+		if menu_ui:
+			menu_ui._select_settings_tab(1)
+		await get_tree().create_timer(0.35).timeout
+		get_viewport().get_texture().get_image().save_png(out_dir + "/v090_settings_audio.png")
+		# 5. Ayarlar — Kontroller, Tuş Atama & Gamepad
+		if menu_ui:
+			menu_ui._select_settings_tab(2)
+		await get_tree().create_timer(0.35).timeout
+		get_viewport().get_texture().get_image().save_png(out_dir + "/v090_settings_controls.png")
+		# 6. Başarımlar Galerisi
+		if menu_ui:
+			menu_ui.close_settings()
+			menu_ui.open_achievements()
+		await get_tree().create_timer(0.35).timeout
+		get_viewport().get_texture().get_image().save_png(out_dir + "/v090_achievements.png")
+		if menu_ui:
+			menu_ui.close_all_modals()
+		# Oyun içi sahneler (Solo başlat)
+		_start_solo()
+		await get_tree().create_timer(1.1).timeout
+		var st1 := stalls.get_node_or_null("Stall_1")
+		if st1:
+			st1.rpc_set_expansion(2)
+			for uk in StallScript.UPGRADE_ORDER:
+				st1.apply_upgrade_synced(uk)
+			st1.rpc_sync_slot(0, "domates", 10, 12)
+			st1.rpc_sync_slot(1, "karpuz", 6, 26)
+			st1.rpc_sync_slot(2, "muz", 8, 19)
+			st1.rpc_sync_slot(3, "cilek", 9, 22)
+			st1.rpc_sync_slot(4, "portakal", 8, 14)
+			st1.rpc_sync_slot(5, "salatalik", 8, 10)
+			st1.rpc_sync_slot(6, "patlican", 8, 17)
+			st1.rpc_sync_slot(7, "limon", 8, 15)
+			st1.rpc_set_stall_radio(true, true)
+		var me1 := players.get_node_or_null("1")
+		day_time = DAY_DURATION * 0.40
+		if bazaar_node:
+			bazaar_node.set_day_progress(0.40)
+			bazaar_node.set_weather("clear", true)
+		# 7. Tam Geliştirilmiş Lv2 Tezgah (sıfır çakışma + PBR Megafon Hoparlör + Saksı/Zil/Terazi + Sarkan Brandalar)
+		if me1:
+			me1.select_slot(-1)
+			me1.global_position = Vector3(-1.3, 0.05, -4.4)
+			me1.look_yaw = 1.02
+			me1.look_pitch = -0.05
+		await get_tree().create_timer(2.3).timeout
+		get_viewport().get_texture().get_image().save_png(out_dir + "/v090_stall_upgrades.png")
+		# 8. Yeni Blender PBR Küba Purosu (1P)
+		if me1:
+			me1.global_position = Vector3(-2.6, 0.05, -7.0)
+			me1.look_yaw = -0.35
+			me1.look_pitch = -0.06
+			me1.rpc_add_inventory_item("puro")
+		await get_tree().create_timer(0.5).timeout
+		get_viewport().get_texture().get_image().save_png(out_dir + "/v090_pbr_cigar.png")
+		# 9. Yeni Blender PBR Türk Meyve Bıçağı (1P)
+		if me1:
+			me1.rpc_add_inventory_item("bicak")
+		await get_tree().create_timer(0.5).timeout
+		get_viewport().get_texture().get_image().save_png(out_dir + "/v090_pbr_knife.png")
+		# 10. Yeni Blender PBR Beyzbol Sopası (1P)
+		if me1:
+			me1.rpc_add_inventory_item("sopa")
+		await get_tree().create_timer(0.5).timeout
+		get_viewport().get_texture().get_image().save_png(out_dir + "/v090_pbr_bat.png")
+		# 11. Yağmurlu Akşam Pazarı — Opak SSR Su Birikintileri + Sokak & Tezgah Lambaları
+		if me1:
+			me1.select_slot(-1)
+			me1.global_position = Vector3(-0.3, 0.05, -1.6)
+			me1.look_yaw = 0.32
+			me1.look_pitch = -0.22
+		day_time = DAY_DURATION * 0.84
+		if bazaar_node:
+			bazaar_node.set_day_progress(0.84)
+			bazaar_node.set_weather("rain", true)
+		await get_tree().create_timer(0.75).timeout
+		get_viewport().get_texture().get_image().save_png(out_dir + "/v090_rain_ssr_evening.png")
+		print("SHOWCASE_OK dir=", out_dir)
+		get_tree().quit()
+		return
 
 
 func _setup_input() -> void:
-	var keys := {
-		"fwd": KEY_W, "back": KEY_S, "left": KEY_A, "right": KEY_D,
-		"jump": KEY_SPACE, "run": KEY_SHIFT, "mic_mute": KEY_M,
-		"interact": KEY_E, "throw_crate": KEY_Q, "price_down": KEY_Z, "price_up": KEY_X, "shout": KEY_B,
-		"refuse_offer": KEY_R, "ring_bell": KEY_F, "scoreboard": KEY_TAB, "call_tea": KEY_T,
-		"tutorial_skip": KEY_H,
-	}
-	for a in keys:
-		if not InputMap.has_action(a):
-			InputMap.add_action(a)
-		var ev := InputEventKey.new()
-		ev.physical_keycode = keys[a]
-		InputMap.action_add_event(a, ev)
+	Settings.apply_keybinds()
 
 
 # ---------- Arayüz ----------
@@ -491,111 +585,7 @@ func _build_ui() -> void:
 	speed_lines.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	layer.add_child(speed_lines)
 
-	ui = Control.new()
-	ui.set_anchors_preset(Control.PRESET_FULL_RECT)
-	ui.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	ui.theme = theme
-	layer.add_child(ui)
-	var shade := TextureRect.new()
-	var grad := Gradient.new()
-	grad.set_color(0, Color(0.06, 0.03, 0.02, 0.92))
-	grad.set_color(1, Color(0.06, 0.03, 0.02, 0.0))
-	grad.add_point(0.45, Color(0.06, 0.03, 0.02, 0.55))
-	var gt := GradientTexture2D.new()
-	gt.gradient = grad
-	shade.texture = gt
-	shade.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	shade.stretch_mode = TextureRect.STRETCH_SCALE
-	shade.set_anchors_preset(Control.PRESET_FULL_RECT)
-	shade.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	ui.add_child(shade)
-
-	# Ana menü: TEK OYNA + ÇOKLU OYNA (Lobi)
-	var mv := _page("main")
-	var logo := _logo(mv, "BAZAR", 116)
-	logo.pivot_offset = Vector2(150, 70)
-	var ltw := logo.create_tween().set_loops()
-	ltw.tween_property(logo, "rotation", 0.018, 2.2).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
-	ltw.tween_property(logo, "rotation", -0.018, 2.2).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
-	var sub := _lbl(mv, "BÜYÜK PAZAR GÜNCELLEMESİ", 16, 0.95)
-	sub.add_theme_color_override("font_color", Color(1.0, 0.55, 0.3))
-	sub.add_theme_font_override("font", _font(900))
-	_lbl(mv, "Gerçek Türk semt pazarı: bağır, teyzelerle pazarlık yap, kapkaççıyı yakala, kazan!", 18, 0.85)
-	_gap(mv, 18)
-	_big(mv, "TEK OYNA  (Kariyer)", _open_solo_page)
-	_big(mv, "ÇOKLU OYNA  (Lobi)", _show_page.bind("lobby"))
-	_big(mv, "AYARLAR & TUŞLAR", _open_pause)
-	_big(mv, "ÇIKIŞ", get_tree().quit)
-	_gap(mv, 18)
-	var st := _lbl(mv, ("●  Steam: " + Net.my_name()) if Net.steam_ok else "●  Steam bağlı değil (Tek Oyna veya Yerel Host ile oynayabilirsin)", 15, 0.82)
-	st.add_theme_color_override("font_color", Color(0.55, 1.0, 0.55) if Net.steam_ok else Color(1.0, 0.72, 0.45))
-	tip_lbl = _lbl(mv, MENU_TIPS[0], 15, 0.75)
-	tip_lbl.add_theme_color_override("font_color", Color(1.0, 0.86, 0.6))
-
-	# Tek Oyna: Kariyer sayfası (Devam Et / Yeni Pazar)
-	var sv := _page("solo")
-	_logo(sv, "TEK OYNA", 68)
-	_lbl(sv, "Kendi tezgahını büyüt: her gün sonunda kariyerin kaydedilir.", 17, 0.78)
-	_gap(sv, 8)
-	var sp := PanelContainer.new()
-	sv.add_child(sp)
-	var sbox := VBoxContainer.new()
-	sbox.add_theme_constant_override("separation", 10)
-	sp.add_child(sbox)
-	solo_info = _lbl(sbox, "", 17, 1.0)
-	solo_info.autowrap_mode = TextServer.AUTOWRAP_OFF
-	solo_continue_btn = _btn(sbox, "▶  Devam Et", _continue_career, 52)
-	solo_continue_btn.add_theme_font_size_override("font_size", 22)
-	solo_new_btn = _btn(sbox, "✚  Yeni Pazar", _new_career, 44)
-	_gap(sv, 4)
-	_btn(sv, "◀  Geri", _show_page.bind("main"))
-
-	# Lobi
-	var lv := _page("lobby")
-	_logo(lv, "LOBİ", 68)
-	_lbl(lv, "Lobi kur, arkadaşlarını çağır, pazarı aç.", 17, 0.75)
-	_gap(lv, 8)
-	var panel := PanelContainer.new()
-	lv.add_child(panel)
-	var v := VBoxContainer.new()
-	v.add_theme_constant_override("separation", 8)
-	panel.add_child(v)
-	host_btn = _btn(v, "Steam Lobisi Kur", Net.host_steam)
-	_btn(v, "Arkadaşlar  (davet et / lobisine katıl)", _show_friends)
-	var scroll := ScrollContainer.new()
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	friends_box = VBoxContainer.new()
-	friends_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.add_child(friends_box)
-	v.add_child(scroll)
-	members = _lbl(v, "", 16)
-	start_btn = _btn(v, "▶  Pazarı Aç", _on_start, 48)
-	start_btn.add_theme_font_size_override("font_size", 21)
-	_btn(v, "▶  Tek Oyna (Kariyer)", _open_solo_page, 40)
-	_btn(v, "Lobiden Çık", Net.leave, 38)
-	var test := HBoxContainer.new()
-	test.add_theme_constant_override("separation", 8)
-	v.add_child(test)
-	var tl := _lbl(test, "Tek PC testi:", 14, 0.6)
-	tl.autowrap_mode = TextServer.AUTOWRAP_OFF
-	for b in [_btn(test, "Yerel Host", Net.host_local, 34), _btn(test, "Yerel Katıl", Net.join_local, 34)]:
-		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_gap(lv, 4)
-	_btn(lv, "◀  Geri", _show_page.bind("main"))
-
-	info = _lbl(ui, "", 15, 0.85)
-	info.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
-	info.offset_left = 590; info.offset_right = -340; # menü panelinin sağında; Geri butonuyla çakışmasın info.offset_top = -60; info.offset_bottom = -24
-	var ver := _lbl(ui, "sürüm " + Updater.version() + "  •  Büyük Pazar", 14, 0.55)
-	ver.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_RIGHT)
-	ver.offset_left = -320; ver.offset_right = -24; ver.offset_top = -50; ver.offset_bottom = -24
-	ver.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	invite_box = VBoxContainer.new()
-	invite_box.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	invite_box.offset_left = -380; invite_box.offset_right = -30; invite_box.offset_top = 30
-	ui.add_child(invite_box)
-
-	# Bağlamsal kısa ipucu çizgisi (tam tuş listesi ESC menüsünde)
+	# Bağlamsal kısa ipucu çizgisi
 	hint = _lbl(layer, "", 12, 0.9)
 	hint.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
 	hint.offset_left = 12; hint.offset_right = -12; hint.offset_top = -22; hint.offset_bottom = -4
@@ -611,7 +601,13 @@ func _build_ui() -> void:
 	_build_shop_panel(layer, theme)
 	_build_scoreboard(layer, theme)
 	_build_summary(layer, theme)
-	_build_pause(layer, theme)
+
+	# Yeni modüler Ana Menü, Açık Lobi Tarayıcısı, Pause Menüsü ve 5 Sekmeli Detaylı Ayarlar
+	menu_ui = MenuUIScript.new()
+	menu_ui.name = "MenuUI"
+	add_child(menu_ui)
+	menu_ui.setup(self, layer, theme)
+	_sync_menu_refs()
 
 	# Sahne geçişleri için tam ekran karartma (en üstte)
 	fade_rect = ColorRect.new()
@@ -622,13 +618,28 @@ func _build_ui() -> void:
 	layer.add_child(fade_rect)
 
 
+func _sync_menu_refs() -> void:
+	if menu_ui == null:
+		return
+	ui = menu_ui.menu_root
+	pages = menu_ui.pages
+	info = menu_ui.info_lbl
+	invite_box = menu_ui.invite_box
+	pause_wrap = menu_ui.pause_wrap
+	solo_info = menu_ui.solo_info
+	solo_continue_btn = menu_ui.solo_continue_btn
+	solo_new_btn = menu_ui.solo_new_btn
+	tip_lbl = menu_ui.tip_lbl
+	crosshair = menu_ui.crosshair_ctrl
+
+
 ## Alt orta 8 yuvalı kişisel envanter çubuğu (1-8; meyve kasaları buraya alınmaz!).
 func _build_hotbar(layer: CanvasLayer, theme: Theme) -> void:
 	hotbar_wrap = HBoxContainer.new()
 	hotbar_wrap.theme = theme
 	hotbar_wrap.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
 	hotbar_wrap.offset_left = -230; hotbar_wrap.offset_right = 230
-	hotbar_wrap.offset_top = -66; hotbar_wrap.offset_bottom = -14
+	hotbar_wrap.offset_top = -82; hotbar_wrap.offset_bottom = -30
 	hotbar_wrap.alignment = BoxContainer.ALIGNMENT_CENTER
 	hotbar_wrap.add_theme_constant_override("separation", 4)
 	hotbar_wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -658,7 +669,7 @@ func _build_hotbar(layer: CanvasLayer, theme: Theme) -> void:
 	item_hint_lbl = _lbl(layer, "", 11, 0.95)
 	item_hint_lbl.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
 	item_hint_lbl.offset_left = -240; item_hint_lbl.offset_right = 240
-	item_hint_lbl.offset_top = -86; item_hint_lbl.offset_bottom = -70
+	item_hint_lbl.offset_top = -102; item_hint_lbl.offset_bottom = -86
 	item_hint_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	item_hint_lbl.autowrap_mode = TextServer.AUTOWRAP_OFF
 	item_hint_lbl.add_theme_color_override("font_color", Color(1.0, 0.93, 0.68))
@@ -875,19 +886,10 @@ func _build_market_hud(layer: CanvasLayer, theme: Theme) -> void:
 	money_pop.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	money_pop.hide()
 
-	crosshair = ColorRect.new()
-	crosshair.color = Color(1.0, 0.96, 0.88, 0.85)
-	crosshair.set_anchors_preset(Control.PRESET_CENTER)
-	crosshair.offset_left = -3; crosshair.offset_right = 3
-	crosshair.offset_top = -3; crosshair.offset_bottom = 3
-	crosshair.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	layer.add_child(crosshair)
-	crosshair.hide()
-
 	interact_lbl = _lbl(layer, "", 14, 0.96)
 	interact_lbl.set_anchors_preset(Control.PRESET_CENTER)
 	interact_lbl.offset_left = -380; interact_lbl.offset_right = 380
-	interact_lbl.offset_top = 20; interact_lbl.offset_bottom = 46
+	interact_lbl.offset_top = 24; interact_lbl.offset_bottom = 50
 	interact_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	interact_lbl.add_theme_color_override("font_color", Color(1.0, 0.95, 0.78))
 	interact_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -913,8 +915,8 @@ func _build_meta_hud(layer: CanvasLayer, theme: Theme) -> void:
 	tb.border_width_left = 4
 	tut_panel.add_theme_stylebox_override("panel", tb)
 	tut_panel.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
-	tut_panel.offset_left = -170; tut_panel.offset_right = 170
-	tut_panel.offset_top = -92; tut_panel.offset_bottom = -92
+	tut_panel.offset_left = -190; tut_panel.offset_right = 190
+	tut_panel.offset_top = -126; tut_panel.offset_bottom = -94
 	tut_panel.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	tut_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	tut_panel.pivot_offset = Vector2(170, 20)
@@ -1122,70 +1124,6 @@ func _build_summary(layer: CanvasLayer, theme: Theme) -> void:
 	summary_wrap.hide()
 
 
-func _build_pause(layer: CanvasLayer, theme: Theme) -> void:
-	pause_wrap = ColorRect.new()
-	pause_wrap.color = Color(0, 0, 0, 0.55)
-	pause_wrap.set_anchors_preset(Control.PRESET_FULL_RECT)
-	pause_wrap.theme = theme
-	layer.add_child(pause_wrap)
-	var c := CenterContainer.new()
-	c.set_anchors_preset(Control.PRESET_FULL_RECT)
-	pause_wrap.add_child(c)
-	var panel := PanelContainer.new()
-	panel.custom_minimum_size.x = 860
-	c.add_child(panel)
-	var root_v := VBoxContainer.new()
-	root_v.add_theme_constant_override("separation", 10)
-	panel.add_child(root_v)
-	_logo(root_v, "AYARLAR & TUŞLAR", 38).horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	var cols := HBoxContainer.new()
-	cols.add_theme_constant_override("separation", 26)
-	root_v.add_child(cols)
-	var v := VBoxContainer.new()
-	v.add_theme_constant_override("separation", 10)
-	v.custom_minimum_size.x = 360
-	cols.add_child(v)
-	var kv := VBoxContainer.new()
-	kv.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	kv.add_theme_constant_override("separation", 6)
-	cols.add_child(kv)
-	var kh := _lbl(kv, "⌨  TUŞLAR", 17, 1.0)
-	kh.add_theme_color_override("font_color", GOLD)
-	kh.add_theme_font_override("font", _font(900))
-	var keys_l := _lbl(kv, CONTROLS_TEXT, 15, 0.92)
-	keys_l.add_theme_constant_override("line_spacing", 5)
-	var goal := _lbl(kv, "Amaç: Tezgahını doldur, adil fiyat koy, bağırarak müşteri çek ve Günün Esnafı ol!", 14, 0.75)
-	goal.add_theme_color_override("font_color", Color(1.0, 0.86, 0.6))
-	vol_lbl = _lbl(v, "", 17)
-	var vol := HSlider.new()
-	vol.min_value = 0; vol.max_value = 1; vol.step = 0.05
-	vol.value = Settings.volume
-	vol.value_changed.connect(_on_volume)
-	v.add_child(vol)
-	_on_volume(Settings.volume)
-	_lbl(v, "Ekran", 17)
-	var mode := OptionButton.new()
-	for m in Settings.MODES:
-		mode.add_item(m)
-	mode.selected = Settings.mode
-	mode.item_selected.connect(func(i): Settings.mode = i; Settings.apply_display(); Settings.save())
-	v.add_child(mode)
-	quality_chk = CheckButton.new()
-	quality_chk.text = "Yüksek Grafik (gölge, ışıma, sis)"
-	quality_chk.button_pressed = Settings.quality_high
-	quality_chk.toggled.connect(func(on): Sfx.play("ui_click", -8.0); Settings.set_quality(on))
-	v.add_child(quality_chk)
-	tut_btn = _btn(v, "🎓 Rehberi Baştan Göster", _restart_tutorial, 38)
-	_gap(v, 4)
-	ingame_box = VBoxContainer.new()
-	ingame_box.add_theme_constant_override("separation", 8)
-	v.add_child(ingame_box)
-	_btn(ingame_box, "Ana Menüye / Lobiye Dön", Net.leave, 38)
-	_btn(ingame_box, "Oyunu Kapat", get_tree().quit, 38)
-	_btn(root_v, "Kapat  [ESC]", _close_pause, 46)
-	pause_wrap.hide()
-
-
 func show_toast(msg: String, color := Color(1.0, 0.94, 0.78)) -> void:
 	if toast_box == null:
 		return
@@ -1223,6 +1161,8 @@ func _on_money_earned(amount: int, total: int, tip: int) -> void:
 	_animate_money_pop()
 	_refresh_shop_panel()
 	_track_income(sale, tip)
+	if sale > 0:
+		SteamMgr.unlock("ACH_FIRST_SALE")
 
 
 func _on_money_spent(amount: int, total: int, reason: String) -> void:
@@ -1234,6 +1174,7 @@ func _on_money_spent(amount: int, total: int, reason: String) -> void:
 	if "Ceza" in reason:
 		show_toast("🚨 Ceza", Color(1.0, 0.38, 0.34))
 		qstats["fined"] = true
+		SteamMgr.unlock("ACH_ZABITA_FINE")
 	_refresh_shop_panel()
 
 
@@ -1256,7 +1197,7 @@ func _day_prog() -> float:
 
 ## Oyuncu bir dükkanın kapısında [E]'ye bastı: açıksa o dükkanın paneli açılır.
 func open_shop(shop_id: String) -> void:
-	if world == null or day_ended or pause_wrap.visible or not Shops.SHOPS.has(shop_id):
+	if world == null or day_ended or _is_pause_or_modal_open() or not Shops.SHOPS.has(shop_id):
 		return
 	if shop_wrap.visible:
 		_close_shop()
@@ -1291,7 +1232,7 @@ func open_shop(shop_id: String) -> void:
 func _close_shop() -> void:
 	shop_wrap.hide()
 	current_shop = ""
-	if world and not pause_wrap.visible and not day_ended:
+	if world and not _is_pause_or_modal_open() and not day_ended:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 
@@ -1480,6 +1421,8 @@ func rpc_request_buy_expansion(shop_id := "") -> void:
 		st.rpc("rpc_set_expansion", lv + 1)
 	else:
 		st.call("rpc_set_expansion", lv + 1)
+	if lv + 1 >= EXPAND_COSTS.size() and pid == _my_id():
+		SteamMgr.unlock("ACH_FULL_EXPAND")
 	_broadcast_toast("📏 %s: %d/%d" % [Net.display_name(pid), lv + 1, EXPAND_COSTS.size()], Color(0.58, 1.0, 0.65))
 
 
@@ -1778,65 +1721,29 @@ func _refresh_scoreboard_rows(target_box: VBoxContainer, show_crown: bool) -> vo
 		cell.call("%d TL" % r["fines"], sz, BAD if int(r["fines"]) > 0 else col, true)
 
 
-func _on_volume(x: float) -> void:
-	Settings.volume = x
-	Settings.apply_audio()
-	vol_lbl.text = "Ses: %d%%" % roundi(x * 100)
+func _is_pause_or_modal_open() -> bool:
+	return menu_ui != null and menu_ui.is_any_modal_open()
 
 
 func _open_pause() -> void:
-	shop_wrap.hide()
-	ingame_box.visible = world != null
-	tut_btn.visible = world != null
-	var back_b := ingame_box.get_child(0) as Button
-	if back_b:
-		back_b.text = "Ana Menüye Dön (bugün kaydedilmez)" if _career_active else "Ana Menüye / Lobiye Dön"
-	quality_chk.set_pressed_no_signal(Settings.quality_high)
-	pause_wrap.show()
-	_pop_in(pause_wrap)
-	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	if menu_ui:
+		menu_ui.open_pause()
 
 
 func _close_pause() -> void:
-	pause_wrap.hide()
-	Settings.save()
-	if world and not day_ended:
-		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	if menu_ui:
+		menu_ui.close_all_modals()
 
 
 func _show_page(n: String) -> void:
 	page = n
-	for k in pages:
-		pages[k].visible = k == n
-	var col: Control = pages[n].get_child(0)
-	col.modulate.a = 0.0
-	var tw := create_tween().set_parallel().set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
-	tw.tween_property(col, "modulate:a", 1.0, 0.35)
-	tw.tween_property(col, "position:x", col.position.x, 0.4).from(col.position.x - 50)
-
-
-func _show_friends() -> void:
-	for c in friends_box.get_children():
-		c.queue_free()
-	var list := Net.online_friends()
-	var n := 0
-	for f in list:
-		if f[2] != 0 and f[2] != Net.lobby_id:
-			_btn(friends_box, "▶ Lobisine katıl: " + f[1], Net.join_lobby.bind(f[2]), 36)
-			n += 1
-		if Net.lobby_id != 0:
-			_btn(friends_box, "✉ Davet et: " + f[1], Net.invite_friend.bind(f[0], f[1]), 36)
-			n += 1
-	if not Net.steam_ok:
-		info.text = "Steam bağlı değil."
-	elif list.is_empty():
-		info.text = "Çevrimiçi Steam arkadaşı yok."
-	elif Net.lobby_id == 0:
-		info.text = "Davet için önce 'Steam Lobisi Kur'a bas."
-	(friends_box.get_parent() as Control).custom_minimum_size.y = mini(n, 5) * 41
+	if menu_ui:
+		menu_ui.show_page(n)
 
 
 func _on_invited(from_name: String, lobby: int) -> void:
+	if invite_box == null:
+		return
 	for c in invite_box.get_children():
 		c.queue_free()
 	var panel := PanelContainer.new()
@@ -1855,13 +1762,8 @@ func _on_invited(from_name: String, lobby: int) -> void:
 
 
 func _refresh() -> void:
-	var lines := PackedStringArray()
-	for id in Net.names:
-		lines.append(("★ " if id == 1 else "• ") + str(Net.names[id]))
-	members.text = ("Lobidekiler:\n" + "\n".join(lines)) if Net.online() else "Henüz lobide değilsin."
-	start_btn.disabled = not (Net.online() and multiplayer.is_server())
-	start_btn.text = "▶  Pazarı Aç" if not Net.online() or multiplayer.is_server() else "Host pazarı açacak..."
-	host_btn.disabled = Net.lobby_id != 0
+	if menu_ui:
+		menu_ui.refresh_lobby()
 	if players:
 		for p in players.get_children():
 			var pid := p.name.to_int()
@@ -1890,7 +1792,9 @@ func _set_menu_bg(on: bool) -> void:
 	var bz := BazaarScript.new()
 	menu_bg.add_child(bz)
 	bz.set_day_progress(0.40)
-	if bz.has_method("set_quality"):
+	if bz.has_method("apply_graphics_settings"):
+		bz.call("apply_graphics_settings")
+	elif bz.has_method("set_quality"):
 		bz.call("set_quality", Settings.quality_high)
 	_menu_music(true)
 	menu_cam = Camera3D.new()
@@ -1943,6 +1847,7 @@ func _process(dt: float) -> void:
 func _update_hud_frame(dt: float) -> void:
 	var my_id := multiplayer.get_unique_id() if Net.online() else 1
 	var me := players.get_node_or_null(str(my_id))
+	var modal_open := _is_pause_or_modal_open()
 	if me and voice_hud.visible:
 		var lvl: float = me.talk_smooth
 		var muted: bool = me.mic_muted
@@ -1953,18 +1858,15 @@ func _update_hud_frame(dt: float) -> void:
 		voice_bar.size.x = 0.0 if muted else 32.0 * lvl
 		voice_bar.color = Color(0.95, 0.3, 0.25) if muted else (Color(1.0, 0.72, 0.2) if eff_sh > 0.7 else Color(0.4, 0.95, 0.5))
 		voice_lbl.text = "🔇" if muted else ("📢" if (eff_sh > 0.85 and me.is_holding_item("megafon")) else ("🗣️" if eff_sh > 0.45 else ("🎙️" if lvl > 0.06 else "🎤")))
-		var hide_interact := pause_wrap.visible or shop_wrap.visible or day_ended
+		var hide_interact := modal_open or shop_wrap.visible or day_ended
 		interact_lbl.text = me.interact_hint
 		interact_lbl.visible = me.interact_hint != "" and not hide_interact
-		speed_lines.intensity = 0.0 if hide_interact else float(me.sprint_k)
-		if me.has_target and not hide_interact:
-			crosshair.color = Color(1.0, 0.85, 0.25, 0.98)
-			crosshair.offset_left = -4; crosshair.offset_right = 4
-			crosshair.offset_top = -4; crosshair.offset_bottom = 4
-		else:
-			crosshair.color = Color(1.0, 0.96, 0.88, 0.82)
-			crosshair.offset_left = -3; crosshair.offset_right = 3
-			crosshair.offset_top = -3; crosshair.offset_bottom = 3
+		var motion_k := 0.22 if Settings.reduce_motion else 1.0
+		speed_lines.intensity = 0.0 if hide_interact else float(me.sprint_k) * motion_k
+		if menu_ui:
+			menu_ui.update_crosshair(not hide_interact, me.has_target)
+		if hint:
+			hint.visible = Settings.show_hints and not hide_interact
 
 	var prog := clampf(day_time / DAY_DURATION, 0.0, 1.0)
 	var mins := int(480.0 + prog * 810.0)
@@ -1999,7 +1901,7 @@ func _update_hud_frame(dt: float) -> void:
 	else:
 		truck_banner.hide()
 
-	var show_sb := Input.is_action_pressed("scoreboard") and not pause_wrap.visible and not shop_wrap.visible and not day_ended
+	var show_sb := Input.is_action_pressed("scoreboard") and not modal_open and not shop_wrap.visible and not day_ended
 	scoreboard_wrap.visible = show_sb
 	if show_sb:
 		_refresh_scoreboard_rows(scoreboard_list, false)
@@ -2027,17 +1929,18 @@ func _unhandled_input(e: InputEvent) -> void:
 	if e.is_action_pressed("ui_cancel"):
 		if shop_wrap.visible:
 			_close_shop()
-		elif pause_wrap.visible:
-			_close_pause()
+		elif menu_ui and menu_ui.handle_cancel():
+			return
 		elif world and not day_ended:
 			_open_pause()
 		elif page == "lobby" or page == "solo":
 			_show_page("main")
 		return
-	if e.is_action_pressed("tutorial_skip") and world and tut_step >= 0 and not pause_wrap.visible and not shop_wrap.visible:
+	var modal_open := _is_pause_or_modal_open()
+	if e.is_action_pressed("tutorial_skip") and world and tut_step >= 0 and not modal_open and not shop_wrap.visible:
 		_tut_advance(true)
 		return
-	if world and not pause_wrap.visible and not shop_wrap.visible and not day_ended and e is InputEventMouseButton and e.pressed:
+	if world and not modal_open and not shop_wrap.visible and not day_ended and e is InputEventMouseButton and e.pressed:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 
@@ -2237,10 +2140,27 @@ func rpc_day_ended(finished_day: int) -> void:
 	day_num = finished_day
 	shop_wrap.hide()
 	scoreboard_wrap.hide()
-	pause_wrap.hide()
+	if menu_ui:
+		menu_ui.close_all_modals()
+		menu_ui.update_crosshair(false, false)
 	Sfx.play("day_end", -2.0)
 	_evaluate_end_fines()
 	_save_career_day_end()
+	# Başarımlar
+	var me := _my_player()
+	SteamMgr.unlock("ACH_DAY_COMPLETE")
+	if me:
+		var prof := int(me.net_profit())
+		if prof >= 300:
+			SteamMgr.unlock("ACH_PROFIT_300")
+		if prof >= 700:
+			SteamMgr.unlock("ACH_PROFIT_700")
+		if not bool(qstats.get("fined", false)) and int(me.daily_fines) == 0:
+			SteamMgr.unlock("ACH_CLEAN_DAY")
+	if weather == "rain":
+		SteamMgr.unlock("ACH_RAIN_DAY")
+	if _my_reputation() >= 4.5:
+		SteamMgr.unlock("ACH_MAX_REP")
 	summary_title.text = "🏆 GÜN %d SONU — GÜNÜN ESNAFI" % day_num
 	_refresh_scoreboard_rows(summary_list, true)
 	_build_summary_side()
@@ -2281,6 +2201,8 @@ func rpc_start_next_day(new_day: int) -> void:
 	_clear_thieves()
 	if world and world.has_node("Zabita"):
 		world.get_node("Zabita").queue_free()
+	if wholesaler_node and wholesaler_node.has_method("reset_for_new_day"):
+		wholesaler_node.reset_for_new_day()
 	_reset_local_day_stats()
 	if (not Net.online()) or multiplayer.is_server():
 		if players:
@@ -2290,9 +2212,14 @@ func rpc_start_next_day(new_day: int) -> void:
 		_begin_day_host()
 	if bazaar_node:
 		bazaar_node.set_day_progress(0.0)
+	if day_num >= 3:
+		SteamMgr.unlock("ACH_DAY_3")
+	SteamMgr.set_presence_game(day_num, Net.names.size() if Net.online() else 1, Net.online())
 	Sfx.play("event", -4.0)
 	show_toast("☀️ Gün %d" % day_num, GOLD)
 	_fade_in(0.5)
+	if menu_ui:
+		menu_ui.update_crosshair(true, false)
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 
@@ -2418,7 +2345,7 @@ func start_game(ids: Array, spot_map := {}, snapshot := {}) -> void:
 	world.set_meta("difficulty", 0.0)
 	_thief_seq = 0
 	_reset_local_day_stats()
-	_apply_quality(Settings.quality_high)
+	_apply_graphics_settings()
 	_menu_music(false)
 
 	for id in ids:
@@ -2444,7 +2371,9 @@ func start_game(ids: Array, spot_map := {}, snapshot := {}) -> void:
 	summary_wrap.hide()
 	shop_wrap.hide()
 	scoreboard_wrap.hide()
-	hint.show()
+	if menu_ui:
+		menu_ui.close_all_modals()
+	hint.visible = Settings.show_hints
 	hotbar_wrap.show()
 	voice_hud.show()
 	day_hud.show()
@@ -2452,11 +2381,15 @@ func start_game(ids: Array, spot_map := {}, snapshot := {}) -> void:
 	var me := players.get_node_or_null(str(my_id))
 	money_lbl.text = "%d TL" % (int(me.money) if me else PlayerScript.STARTING_MONEY)
 	money_hud.show()
-	crosshair.show()
+	if menu_ui:
+		menu_ui.update_crosshair(true, false)
 	_refresh_hotbar()
 	Sfx.set_ambience(true)
+	SteamMgr.set_presence_game(day_num, ids.size(), Net.online())
+	if Net.online() and ids.size() >= 2:
+		SteamMgr.unlock("ACH_MULTI_OPEN")
 	if day_num <= 1:
-		show_toast("☀️ Hoş geldin! [ESC] tuşlar", GOLD)
+		show_toast("☀️ Hoş geldin! [ESC] menü", GOLD)
 	_fade_in(0.7)
 	_tut_start_if_needed()
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
@@ -2618,8 +2551,12 @@ func _apply_world_snapshot(snap: Dictionary) -> void:
 	if ts is Array:
 		for td in ts:
 			if td is Dictionary:
-				rpc_spawn_thief(str(td.get("name", "")), int(td.get("seed", 1)), td.get("pos", Vector3.ZERO),
+				var tn := str(td.get("name", ""))
+				rpc_spawn_thief(tn, int(td.get("seed", 1)), td.get("pos", Vector3.ZERO),
 					td.get("exit", Vector3(0, 0, 21.2)), int(td.get("target", 0)), false)
+				var tnode := thieves.get_node_or_null(tn) if thieves else null
+				if tnode and tnode.has_method("apply_snapshot"):
+					tnode.call("apply_snapshot", td)
 	if day_ended:
 		rpc_day_ended(day_num)
 
@@ -2701,7 +2638,9 @@ func _back_to_menu() -> void:
 		t.queue_free()
 	_fade_in(0.5)
 	speed_lines.intensity = 0.0
-	pause_wrap.hide()
+	if menu_ui:
+		menu_ui.close_all_modals()
+		menu_ui.update_crosshair(false, false)
 	shop_wrap.hide()
 	scoreboard_wrap.hide()
 	summary_wrap.hide()
@@ -2717,13 +2656,15 @@ func _back_to_menu() -> void:
 	truck_banner.hide()
 	money_hud.hide()
 	money_pop.hide()
-	crosshair.hide()
 	interact_lbl.hide()
 	ui.show()
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	if menu_bg == null:
 		_set_menu_bg(true)
+	SteamMgr.set_presence_menu()
 	_show_page("lobby" if Net.online() else "main")
+	if menu_ui:
+		menu_ui.refresh_profile_card()
 	_refresh()
 
 
@@ -2743,7 +2684,7 @@ const TUT_STEPS := [
 
 func _is_test_run() -> bool:
 	var args := OS.get_cmdline_user_args()
-	return "--selftest" in args or "--mptest" in args
+	return "--selftest" in args or "--mptest" in args or "--showcase" in args
 
 
 func _is_host() -> bool:
@@ -2798,8 +2739,15 @@ func _fade_in(t: float) -> void:
 
 func _apply_quality(high: bool) -> void:
 	for bz in [bazaar_node, menu_bg.get_child(0) if menu_bg and menu_bg.get_child_count() > 0 else null]:
-		if bz and is_instance_valid(bz) and bz.has_method("set_quality"):
-			bz.call("set_quality", high)
+		if bz and is_instance_valid(bz):
+			if bz.has_method("apply_graphics_settings"):
+				bz.call("apply_graphics_settings")
+			elif bz.has_method("set_quality"):
+				bz.call("set_quality", high)
+
+
+func _apply_graphics_settings() -> void:
+	_apply_quality(Settings.quality_high)
 
 
 func _menu_music(on: bool) -> void:
@@ -2995,8 +2943,12 @@ func _export_thieves() -> Array:
 		if t.is_queued_for_deletion():
 			continue
 		var info: Dictionary = t.get_meta("spawn_info", {})
-		out.append({"name": str(t.name), "seed": int(info.get("seed", 1)), "pos": (t as Node3D).global_position,
-			"exit": info.get("exit", Vector3(0, 0, 21.2)), "target": int(info.get("target", 0))})
+		out.append({
+			"name": str(t.name), "seed": int(info.get("seed", 1)), "pos": (t as Node3D).global_position,
+			"exit": info.get("exit", Vector3(0, 0, 21.2)), "target": int(info.get("target", 0)),
+			"state": int(t.get("thief_state")) if "thief_state" in t else 0,
+			"carried": str(t.get("carried_item")) if "carried_item" in t else "",
+		})
 	return out
 
 
@@ -3029,6 +2981,7 @@ func on_thief_caught_by(catcher_id: int) -> void:
 	if catcher_id != my_id:
 		return
 	qstats["catches"] = int(qstats.get("catches", 0)) + 1
+	SteamMgr.unlock("ACH_THIEF_CATCH")
 	show_toast("🕵️ Yakaladın!", GOOD)
 
 
@@ -3095,7 +3048,7 @@ func _update_meta_hud(dt: float, me: Node) -> void:
 			_tut_cd = 0.15
 			_tut_check(me, st)
 	# Seçili eşya aksiyon ipucu + aktif Çay / Simit / Keyif güçlendirme rozetleri
-	var hide_ui := pause_wrap.visible or shop_wrap.visible or day_ended
+	var hide_ui := _is_pause_or_modal_open() or shop_wrap.visible or day_ended
 	if item_hint_lbl:
 		var eq_id: String = str(me.equipped_item_id()) if me.has_method("equipped_item_id") else ""
 		if eq_id != "" and Items.CATALOG.has(eq_id) and not hide_ui:
@@ -3164,7 +3117,7 @@ func _context_hint(me: Node, st: Node) -> String:
 func _tut_start_if_needed() -> void:
 	tut_step = -1
 	tut_panel.hide()
-	if Settings.tutorial_done or "--selftest" in OS.get_cmdline_user_args():
+	if Settings.tutorial_done or _is_test_run():
 		return
 	tut_step = 0
 	_tut_enter()
@@ -3288,7 +3241,7 @@ func _tut_check(me: Node, st: Node) -> void:
 func _fresh_career() -> Dictionary:
 	return {
 		"version": CAREER_VERSION, "day_num": 0, "money": PlayerScript.STARTING_MONEY,
-		"inventory": [], "upgrades": [], "has_radio": false, "reputation": 2.5,
+		"inventory": [], "upgrades": [], "expansion_level": 0, "has_radio": false, "reputation": 2.5,
 		"best_day_profit": 0, "total_earned": 0, "tutorial_done": Settings.tutorial_done,
 		"best_day_sold": 0, "thieves_caught": 0,
 	}
@@ -3345,6 +3298,10 @@ static func validate_career(d) -> Dictionary:
 		if not (u in ups):
 			ups.append(u)
 	out["upgrades"] = ups
+	var exp_lv = d.get("expansion_level", 0)
+	if not _is_num(exp_lv):
+		return {}
+	out["expansion_level"] = clampi(int(exp_lv), 0, 2)
 	for k in ["has_radio", "tutorial_done"]:
 		var b = d.get(k, false)
 		if typeof(b) != TYPE_BOOL:
@@ -3421,7 +3378,11 @@ func _apply_career(c: Dictionary) -> void:
 		for u in c.get("upgrades", []):
 			ups[u] = true
 		var rep := float(c.get("reputation", 2.5))
-		st.apply_snapshot({"upgrades": ups, "has_radio": bool(c.get("has_radio", false)), "radio_playing": false, "reputation": rep})
+		st.apply_snapshot({
+			"expansion_level": int(c.get("expansion_level", 0)),
+			"upgrades": ups, "has_radio": bool(c.get("has_radio", false)),
+			"radio_playing": false, "reputation": rep,
+		})
 		if st.has_method("set_reputation"):
 			st.call("set_reputation", rep)
 		elif "reputation" in st:
@@ -3456,6 +3417,7 @@ func _save_career_day_end() -> void:
 		if st.has_upgrade(k):
 			ups.append(k)
 	c["upgrades"] = ups
+	c["expansion_level"] = _expansion_level(st)
 	c["has_radio"] = bool(st.has_radio)
 	var rep := _my_reputation()
 	c["reputation"] = clampf(rep, 0.0, 5.0) if rep >= 0.0 else float(c.get("reputation", 2.5))
@@ -3474,6 +3436,7 @@ func _save_career_day_end() -> void:
 	c["tutorial_done"] = Settings.tutorial_done
 	if write_career_file(CAREER_PATH, c):
 		career = c
+		SteamMgr.cloud_save_file("career.json", CAREER_PATH)
 	else:
 		push_warning("Kariyer kaydedilemedi: " + CAREER_PATH)
 
@@ -3484,16 +3447,16 @@ func _open_solo_page() -> void:
 	career = _load_career()
 	_new_confirm = false
 	if career.is_empty():
-		solo_info.text = "Henüz kayıtlı pazarın yok.\nİlk gününe başla: tezgahını kur, bağır, müşterini çek!"
+		solo_info.text = L10n.t("solo_no_save")
 		solo_continue_btn.hide()
-		solo_new_btn.text = "▶  Yeni Pazar Kur"
+		solo_new_btn.text = L10n.t("solo_start_new")
 	else:
-		solo_info.text = "📒 KAYITLI PAZARIN\nGün %d tamamlandı   •   💰 %d TL\n🏅 En iyi gün kârı %d TL   •   Toplam ciro %d TL\n⭐ İtibar %.1f   •   🕵️ %d kapkaççı" % [
+		solo_info.text = L10n.t("solo_save_info", [
 			int(career["day_num"]), int(career["money"]), int(career["best_day_profit"]), int(career["total_earned"]),
-			float(career["reputation"]), int(career["thieves_caught"])]
+			float(career["reputation"]), int(career["thieves_caught"])])
 		solo_continue_btn.show()
-		solo_continue_btn.text = "▶  Devam Et  (Gün %d)" % (int(career["day_num"]) + 1)
-		solo_new_btn.text = "✚  Yeni Pazar"
+		solo_continue_btn.text = L10n.t("solo_continue", [int(career["day_num"]) + 1])
+		solo_new_btn.text = L10n.t("solo_new")
 	_show_page("solo")
 
 
@@ -3507,7 +3470,7 @@ func _continue_career() -> void:
 func _new_career() -> void:
 	if not career.is_empty() and not _new_confirm:
 		_new_confirm = true
-		solo_new_btn.text = "⚠  Emin misin? Tekrar bas (eski kayıt silinir)"
+		solo_new_btn.text = L10n.t("solo_new_confirm")
 		return
 	_pending_career = {}
 	_start_solo()

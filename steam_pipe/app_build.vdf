@@ -1,0 +1,13 @@
+"AppBuild"
+{
+	"AppID" "REPLACE_WITH_YOUR_STEAM_APP_ID"
+	"Desc" "Bazar v0.9.0 Windows Release"
+	"BuildOutput" "../build/steam_output"
+	"ContentRoot" "../build/steam"
+	"SetLive" "beta"
+
+	"Depots"
+	{
+		"REPLACE_WITH_YOUR_WINDOWS_DEPOT_ID" "depot_build_windows.vdf"
+	}
+}

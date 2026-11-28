@@ -16,7 +16,7 @@ const FINE_DRUNK := 25
 const FINE_ASSAULT := 50
 const CLEAN_REWARD := 10
 const WALK_SPEED := 2.75
-const CHASE_SPEED := 5.9
+const CHASE_SPEED := 6.8
 const THIEF_SIGHT := 16.0
 const TICKET_WRITE_SEC := 1.45
 const TICKET_TOTAL_SEC := 2.40
@@ -62,6 +62,7 @@ var _whistle_t := 0.0
 var _whistle: Node3D
 var _pen: Node3D
 var _clipboard: Node3D
+var _step_cd := 0.0
 
 var rig: Node3D
 var head: Node3D
@@ -214,13 +215,18 @@ func _physics_process(dt: float) -> void:
 		_sync_t += dt
 		if Net.online() and _sync_t >= 0.09:
 			_sync_t = 0.0
-			rpc_sync.rpc(position, _body_yaw, _spd, _bubble_text)
+			rpc_sync.rpc(position, _body_yaw, _spd, _bubble_text, mode)
 	else:
 		position = position.lerp(_net_pos, minf(dt * 12.0, 1.0))
 		_body_yaw = lerp_angle(_body_yaw, _net_yaw, minf(dt * 12.0, 1.0))
 		_spd = lerpf(_spd, _net_spd, minf(dt * 10.0, 1.0))
 		if mode == Mode.TICKET:
 			_ticket_t += dt
+	if _spd > 3.6:
+		_step_cd -= dt
+		if _step_cd <= 0.0:
+			_step_cd = 0.28
+			Sfx.play_step("asphalt", global_position, false, 0.85)
 	rig.rotation.y = _body_yaw
 	head.rotation.y = lerp_angle(head.rotation.y, _body_yaw, minf(dt * 10.0, 1.0))
 	_animate_walk(dt)
@@ -316,7 +322,8 @@ func _tick_chase_thief(dt: float) -> void:
 		_announce("👮 KAPKAÇÇI YAKALANDI! %s" % ("Mal sahibine döndü!" if had else ""), th.global_position - Vector3(0, 0.6, 0), true)
 		return
 	var dir := diff / maxf(dist, 0.001)
-	position = StallScript.keepout_all(self, position + dir * minf(CHASE_SPEED * dt, dist))
+	dir = StallScript.world_steer_all(self, position, dir, dist - 0.2)
+	position = StallScript.world_keepout_all(self, position + dir * minf(CHASE_SPEED * dt, dist))
 	_body_yaw = lerp_angle(_body_yaw, atan2(dir.x, dir.z), minf(dt * 10.0, 1.0))
 	_spd = CHASE_SPEED
 
@@ -329,7 +336,9 @@ func _tick_chase(dt: float) -> void:
 	if target == null or _chase_timeout <= 0.0:
 		mode = Mode.PATROL
 		chase_peer_id = 0
-		_bubble_text = "👮 Denetim devam ediyor..."
+		_set_bubble("👮 Denetim devam ediyor...")
+		if bubble:
+			bubble.modulate = Color(0.58, 0.85, 1.0)
 		return
 	var diff := Vector3(target.global_position.x - position.x, 0.0, target.global_position.z - position.z)
 	var dist := diff.length()
@@ -343,9 +352,11 @@ func _tick_chase(dt: float) -> void:
 			rpc_start_ticket(target.global_position, chase_weapon, chase_fine, chase_reason)
 		return
 	var dir := diff / dist
-	position = StallScript.keepout_all(self, position + dir * minf(CHASE_SPEED * dt, dist))
+	var run_spd := CHASE_SPEED + (0.55 if dist > 8.0 else 0.0)
+	dir = StallScript.world_steer_all(self, position, dir, dist - 0.2)
+	position = StallScript.world_keepout_all(self, position + dir * minf(run_spd * dt, dist))
 	_body_yaw = lerp_angle(_body_yaw, atan2(dir.x, dir.z), minf(dt * 10.0, 1.0))
-	_spd = CHASE_SPEED
+	_spd = run_spd
 
 
 @rpc("authority", "call_local", "reliable")
@@ -377,11 +388,19 @@ func _tick_ticket(dt: float) -> void:
 		var dist := diff.length()
 		if dist > 0.1:
 			_body_yaw = lerp_angle(_body_yaw, atan2(diff.x, diff.z), minf(dt * 10.0, 1.0))
+		# Suçlu tutanak bitmeden uzağa kaçarsa tekrar kovalamacaya geç (uzaktan telepatik ceza kesme!)
+		if not _ticket_delivered and dist > 4.6:
+			mode = Mode.CHASE
+			_ticket_t = 0.0
+			_set_bubble("🚨 KAÇMA! DUR!")
+			if bubble:
+				bubble.modulate = Color(1.0, 0.35, 0.28)
+			return
 		# Suçlu yazarken hafifçe uzaklaşırsa zabıta adım atıp takip eder
-		if dist > 2.8 and dist < 9.0:
-			var dir := diff / dist
-			position = StallScript.keepout_all(self, position + dir * minf(WALK_SPEED * 1.15 * dt, dist - 2.2))
-			_spd = WALK_SPEED * 1.15
+		if dist > 2.6 and dist <= 4.6:
+			var dir := StallScript.world_steer_all(self, position, diff / dist, dist - 0.2)
+			position = StallScript.world_keepout_all(self, position + dir * minf(WALK_SPEED * 1.25 * dt, dist - 2.1))
+			_spd = WALK_SPEED * 1.25
 		else:
 			_spd = 0.0
 	else:
@@ -458,15 +477,8 @@ func _tick_patrol(dt: float) -> void:
 		queue_free()
 		return
 	var dir := diff / dist
-	var world := get_parent()
-	var truck := world.get_node_or_null("Wholesaler") as Node3D if world else null
-	if truck and truck.is_present():
-		var rx := position.x - truck.position.x
-		var rz := position.z - truck.position.z
-		if absf(rx) < 2.3 and absf(rz) < 4.5:
-			dir = (dir + Vector3(1.2 if rx >= 0.0 else -1.2, 0, 0)).normalized()
-	dir = StallScript.steer_all(self, position, dir, dist - 0.2)
-	position = StallScript.keepout_all(self, position + dir * minf(WALK_SPEED * dt, dist))
+	dir = StallScript.world_steer_all(self, position, dir, dist - 0.2)
+	position = StallScript.world_keepout_all(self, position + dir * minf(WALK_SPEED * dt, dist))
 	_body_yaw = lerp_angle(_body_yaw, atan2(dir.x, dir.z), minf(dt * 8.0, 1.0))
 	_spd = WALK_SPEED
 	_inspect_nearby_stalls()
@@ -549,19 +561,26 @@ func rpc_verdict(msg: String, stall_pos: Vector3, good: bool) -> void:
 		_patrol_ticket_t = 1.45
 		Sfx.play_3d("ticket_write", global_position + Vector3(0, 1.3, 0), self, -2.0, 1.05, 26.0)
 		Sfx.play_3d("whistle", global_position + Vector3(0, 1.4, 0), self, 0.0, 1.08, 38.0)
-		var world := get_parent()
-		if world:
-			var from_p := global_position + Vector3(0, 1.05, 0) + Vector3(sin(_body_yaw), 0.0, cos(_body_yaw)) * 0.42
-			VFX.spawn_ticket_slip(world, from_p, stall_pos + Vector3(0, 1.1, 0))
+		var tw_slip := create_tween()
+		tw_slip.tween_interval(0.75)
+		tw_slip.tween_callback(func():
+			var w := get_parent()
+			if w and is_inside_tree():
+				var from_p := global_position + Vector3(0, 1.05, 0) + Vector3(sin(_body_yaw), 0.0, cos(_body_yaw)) * 0.42
+				VFX.spawn_ticket_slip(w, from_p, stall_pos + Vector3(0, 1.1, 0)))
 		VFX.burst_mood(self, fx_pos, false)
 		VFX.spawn_floating_text(self, fx_pos, msg, Color(1.0, 0.32, 0.26), 44)
 
 
 @rpc("authority", "unreliable_ordered")
-func rpc_sync(p: Vector3, yaw: float, s: float, txt: String) -> void:
+func rpc_sync(p: Vector3, yaw: float, s: float, txt: String, m := -1) -> void:
 	_net_pos = p
 	_net_yaw = yaw
 	_net_spd = s
+	if m >= 0 and m != mode:
+		mode = m
+		if bubble:
+			bubble.modulate = Color(1.0, 0.35, 0.28) if mode in [Mode.CHASE, Mode.CHASE_THIEF] else (Color(1.0, 0.78, 0.25) if mode == Mode.TICKET else Color(0.58, 0.85, 1.0))
 	if _bubble_text != txt:
 		_bubble_text = txt
 		if bubble:

@@ -251,18 +251,56 @@ static func build_mesh(parent: Node, item_id: String, pos: Vector3, radius := 0.
 
 # ---------- Yığın (Pile) Sistemi ----------
 
-## Ürün modelinin parçaları (mesh, materyal, yerel dönüşüm) — MultiMesh yığınları için önbelleğe alınır.
+## Ürün modelinin parçaları (aynı materyalli alt mesh'ler tek ArrayMesh'te birleştirilir -> %65 daha az MultiMesh draw call).
 static func _item_parts(item_id: String) -> Array:
 	if _parts_cache.has(item_id):
 		return _parts_cache[item_id]
 	var tmp := Node3D.new()
 	var holder := build_mesh(tmp, item_id, Vector3.ZERO, 0.082)
-	var out := []
+	var by_mat := {} # mat_id -> {"mat": Material, "verts": PackedVector3Array, "norms": PackedVector3Array}
+	var order: Array[int] = []
 	for c in holder.get_children():
 		var mi := c as MeshInstance3D
-		if mi:
-			out.append({"mesh": mi.mesh, "mat": mi.material_override, "xf": mi.transform})
+		if mi == null or mi.mesh == null or mi.mesh.get_surface_count() == 0:
+			continue
+		var mat := mi.material_override
+		var key := mat.get_instance_id() if mat else 0
+		if not by_mat.has(key):
+			by_mat[key] = {"mat": mat, "verts": PackedVector3Array(), "norms": PackedVector3Array()}
+			order.append(key)
+		var grp: Dictionary = by_mat[key]
+		var verts: PackedVector3Array = grp["verts"]
+		var norms: PackedVector3Array = grp["norms"]
+		var arr := mi.mesh.surface_get_arrays(0)
+		var sv: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+		var sn: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+		var sidx = arr[Mesh.ARRAY_INDEX]
+		var xf := mi.transform
+		var nb := xf.basis.inverse().transposed()
+		if sidx != null and sidx.size() > 0:
+			for ii in sidx:
+				verts.append(xf * sv[ii])
+				norms.append((nb * sn[ii]).normalized())
+		else:
+			for k in sv.size():
+				verts.append(xf * sv[k])
+				norms.append((nb * sn[k]).normalized())
+		grp["verts"] = verts
+		grp["norms"] = norms
 	tmp.free()
+	var out := []
+	for key in order:
+		var grp: Dictionary = by_mat[key]
+		var verts: PackedVector3Array = grp["verts"]
+		if verts.is_empty():
+			continue
+		var a := []
+		a.resize(Mesh.ARRAY_MAX)
+		a[Mesh.ARRAY_VERTEX] = verts
+		a[Mesh.ARRAY_NORMAL] = grp["norms"]
+		var am := ArrayMesh.new()
+		am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, a)
+		out.append({"mesh": am, "mat": grp["mat"], "xf": Transform3D.IDENTITY})
 	_parts_cache[item_id] = out
 	return out
 

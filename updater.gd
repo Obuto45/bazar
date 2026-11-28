@@ -30,7 +30,8 @@ static func is_newer(a: String, b: String) -> bool:
 
 
 func _ready() -> void:
-	if not OS.has_feature("template") or OS.get_name() != "Windows":
+	# Steam dağıtımında (custom_features="steam") harici oto-güncelleyici Valve kuralları gereği kapalıdır.
+	if OS.has_feature("steam") or not OS.has_feature("template") or OS.get_name() != "Windows":
 		return
 	_cleanup_old()
 	var req := HTTPRequest.new()

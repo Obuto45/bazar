@@ -277,6 +277,93 @@ static func mat_tex(c: Color, tex: Texture2D, rough := 0.9, uv_scale := Vector3.
 	return s
 
 
+## Prosedürel albedo dokusunun parlaklığından dikişsiz Sobel normal haritası üretir (önbellekli).
+static func tex_normal_from(key: String, src: ImageTexture, strength := 1.8) -> ImageTexture:
+	var nkey := key + "_nrm"
+	if _tex_cache.has(nkey):
+		return _tex_cache[nkey]
+	var img := src.get_image()
+	if img == null:
+		return src
+	var w := img.get_width()
+	var h := img.get_height()
+	var lum := PackedFloat32Array()
+	lum.resize(w * h)
+	for y in h:
+		for x in w:
+			var px := img.get_pixel(x, y)
+			lum[y * w + x] = px.r * 0.299 + px.g * 0.587 + px.b * 0.114
+	var out := Image.create(w, h, false, Image.FORMAT_RGBA8)
+	for y in h:
+		var ym := posmod(y - 1, h)
+		var yp := posmod(y + 1, h)
+		for x in w:
+			var xm := posmod(x - 1, w)
+			var xp := posmod(x + 1, w)
+			var tl := lum[ym * w + xm]; var tc := lum[ym * w + x]; var tr := lum[ym * w + xp]
+			var ml := lum[y * w + xm]; var mr := lum[y * w + xp]
+			var bl := lum[yp * w + xm]; var bc := lum[yp * w + x]; var br := lum[yp * w + xp]
+			var dx := ((tr + 2.0 * mr + br) - (tl + 2.0 * ml + bl)) * strength
+			var dy := ((bl + 2.0 * bc + br) - (tl + 2.0 * tc + tr)) * strength
+			var n := Vector3(-dx, -dy, 1.0).normalized()
+			out.set_pixel(x, y, Color(n.x * 0.5 + 0.5, n.y * 0.5 + 0.5, n.z * 0.5 + 0.5, 1.0))
+	out.generate_mipmaps()
+	var ntex := ImageTexture.create_from_image(out)
+	_tex_cache[nkey] = ntex
+	return ntex
+
+
+## Albedo + otomatik Sobel normal haritalı PBR materyal.
+static func mat_tex_pbr(c: Color, tex: ImageTexture, rough := 0.9, uv_scale := Vector3.ONE, metallic := 0.0,
+		triplanar := false, norm_key := "", norm_scale := 0.85) -> StandardMaterial3D:
+	var s := mat_tex(c, tex, rough, uv_scale, metallic, triplanar)
+	if norm_key != "":
+		s.normal_enabled = true
+		s.normal_texture = tex_normal_from(norm_key, tex, 1.8)
+		s.normal_scale = norm_scale
+	return s
+
+
+## İki ucu direğe gergin, ortası doğal zincir eğrisiyle sarkan yumuşak pazar brandası mesh'i.
+static func sagged_tarp(w: float, d: float, sag := 0.24, seg_x := 8, seg_z := 10) -> ArrayMesh:
+	var verts := PackedVector3Array()
+	var norms := PackedVector3Array()
+	var uvs := PackedVector2Array()
+	var idx := PackedInt32Array()
+	var cols := seg_x + 1
+	var rows := seg_z + 1
+	for iz in rows:
+		var v := float(iz) / float(seg_z)
+		var z := (v - 0.5) * d
+		var vz := 4.0 * v * (1.0 - v)
+		for ix in cols:
+			var u := float(ix) / float(seg_x)
+			var x := (u - 0.5) * w
+			var ux := 4.0 * u * (1.0 - u)
+			var y := -sag * ux * (0.42 + 0.58 * vz)
+			var dydx := -sag * (4.0 - 8.0 * u) / maxf(w, 0.01) * (0.42 + 0.58 * vz)
+			var dydz := -sag * ux * 0.58 * (4.0 - 8.0 * v) / maxf(d, 0.01)
+			verts.append(Vector3(x, y, z))
+			norms.append(Vector3(-dydx, 1.0, -dydz).normalized())
+			uvs.append(Vector2(u, v))
+	for iz in seg_z:
+		for ix in seg_x:
+			var a := iz * cols + ix
+			var b := a + 1
+			var c := a + cols
+			var e := c + 1
+			idx.append_array([a, b, e, a, e, c])
+	var arr := []
+	arr.resize(Mesh.ARRAY_MAX)
+	arr[Mesh.ARRAY_VERTEX] = verts
+	arr[Mesh.ARRAY_NORMAL] = norms
+	arr[Mesh.ARRAY_TEX_UV] = uvs
+	arr[Mesh.ARRAY_INDEX] = idx
+	var am := ArrayMesh.new()
+	am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
+	return am
+
+
 static func sphere(r: float, seg := 7, rings := 4) -> ArrayMesh:
 	var m := SphereMesh.new()
 	m.radius = r; m.height = r * 2.0

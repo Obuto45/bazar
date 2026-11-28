@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://c22h1uo0m75pg"
-path="res://.godot/imported/cigarette_ash_tex.png-a93c3baa9df5329523a37366176b8b54.ctex"
+path.s3tc="res://.godot/imported/cigarette_ash_tex.png-a93c3baa9df5329523a37366176b8b54.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "a5b03bfbff0cd17ea908675dddb7e468"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://models/cigarette_ash_tex.png"
-dest_files=["res://.godot/imported/cigarette_ash_tex.png-a93c3baa9df5329523a37366176b8b54.ctex"]
+dest_files=["res://.godot/imported/cigarette_ash_tex.png-a93c3baa9df5329523a37366176b8b54.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/lossy_quality=0.7
 compress/uastc_level=0

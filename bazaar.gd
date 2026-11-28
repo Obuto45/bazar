@@ -11,6 +11,7 @@ const Produce := preload("res://produce.gd")
 const VFX := preload("res://vfx.gd")
 const AmbientScript := preload("res://ambient.gd")
 const Shops := preload("res://shops.gd")
+const StallScript := preload("res://stall.gd")
 
 const HALF_X := 14.5
 const HALF_Z := 21.5
@@ -142,6 +143,53 @@ void sky() {
 }
 """
 
+const _PUDDLE_SHADER := """
+shader_type spatial;
+render_mode cull_back, depth_draw_opaque;
+uniform float wet = 0.0;
+uniform float rain = 0.0;
+uniform float seed = 0.0;
+varying vec3 wpos;
+
+float h21(vec2 p) {
+	p = fract(p * vec2(123.34, 456.21));
+	p += dot(p, p + 45.32);
+	return fract(p.x * p.y);
+}
+float vn(vec2 p) {
+	vec2 i = floor(p); vec2 f = fract(p);
+	vec2 u = f * f * (3.0 - 2.0 * f);
+	return mix(mix(h21(i), h21(i + vec2(1.0, 0.0)), u.x),
+			mix(h21(i + vec2(0.0, 1.0)), h21(i + vec2(1.0, 1.0)), u.x), u.y);
+}
+void vertex() {
+	wpos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+}
+void fragment() {
+	vec2 p = UV * 2.0 - 1.0;
+	float n = vn(p * 3.1 + vec2(seed * 7.1, seed * 3.7)) * 0.24 + vn(p * 7.4 + seed) * 0.09;
+	float r = length(p) + n - 0.14;
+	float thresh = mix(0.04, 0.94, smoothstep(0.12, 0.85, wet));
+	if (r > thresh) {
+		discard;
+	}
+	vec2 rp = wpos.xz * 2.6;
+	vec2 cell = floor(rp);
+	vec2 f = fract(rp) - 0.5;
+	float rnd = h21(cell);
+	float phase = fract(TIME * 1.45 + rnd * 6.28);
+	vec2 off = (vec2(h21(cell + 1.3), h21(cell + 5.7)) - 0.5) * 0.42;
+	float d = length(f - off);
+	float ring = sin((d - phase * 0.45) * 42.0) * exp(-d * 7.0) * (1.0 - phase) * rain;
+	vec2 grad = normalize(f - off + vec2(0.0001)) * ring * 0.15;
+	ALBEDO = vec3(0.012, 0.016, 0.024);
+	ROUGHNESS = mix(0.045, 0.012, smoothstep(0.25, 0.9, wet));
+	METALLIC = 0.28;
+	SPECULAR = 1.0;
+	NORMAL = normalize((VIEW_MATRIX * vec4(grad.x, 1.0, grad.y, 0.0)).xyz);
+}
+"""
+
 var interactive := false
 var rng := RandomNumberGenerator.new()
 
@@ -160,8 +208,9 @@ var _sign_mat: ShaderMaterial
 var _sign_labels: Array[Label3D] = []
 var _asphalt_mat: StandardMaterial3D
 var _paver_mat: StandardMaterial3D
-var _puddle_mat: StandardMaterial3D
+var _puddle_mats: Array[ShaderMaterial] = []
 var _puddles: Array[MeshInstance3D] = []
+var _puddle_zones: Array = [] # [Vector2(cx,cz), rx, rz, cos_y, sin_y]
 var _flag_mats: Array[ShaderMaterial] = []
 var _rain: Node3D
 var _ambient: Node3D
@@ -182,7 +231,33 @@ var _night_k := 0.0
 var _crate_tops: Array = [] # ambient kediler için [Vector3, yaw]
 
 
+func _reg_obs(center_xz: Vector2, half_xz: Vector2) -> void:
+	if interactive:
+		StallScript.register_world_obstacle(center_xz, half_xz)
+
+
+func is_in_puddle(pos: Vector3) -> bool:
+	if _wet_k <= 0.15:
+		return false
+	var sc := lerpf(0.25, 0.96, smoothstep(0.12, 0.85, _wet_k))
+	for pz in _puddle_zones:
+		var c: Vector2 = pz[0]
+		var dx := pos.x - c.x
+		var dz := pos.z - c.y
+		var cy: float = pz[3]; var sy: float = pz[4]
+		var lx := dx * cy - dz * sy
+		var lz := dx * sy + dz * cy
+		var rx := maxf(float(pz[1]) * sc, 0.1)
+		var rz := maxf(float(pz[2]) * sc, 0.1)
+		if (lx * lx) / (rx * rx) + (lz * lz) / (rz * rz) <= 1.0:
+			return true
+	return false
+
+
 func _ready() -> void:
+	name = "Bazaar"
+	if interactive:
+		StallScript.clear_world_obstacles()
 	rng.seed = 1453
 	_env_setup()
 	var near := LP.batch()
@@ -222,7 +297,7 @@ func _ready() -> void:
 		_ambient.set("cat_spots", _crate_tops)
 		add_child(_ambient)
 	set_day_progress(_day_progress)
-	set_quality(true)
+	apply_graphics_settings()
 
 
 func _commit(b, rough: float, shadows: bool, ground_ao := 1.0, metal := 0.0) -> MeshInstance3D:
@@ -332,20 +407,31 @@ func get_weather() -> String:
 
 func set_quality(high: bool) -> void:
 	_quality_high = high
-	if _env == null:
+	apply_graphics_settings()
+
+
+func apply_graphics_settings() -> void:
+	if _env == null or _sun == null:
 		return
-	_env.ssao_enabled = high
-	_env.ssil_enabled = high
-	_env.glow_enabled = high
-	_env.volumetric_fog_enabled = high
-	_env.ssr_enabled = high and _wet_k > 0.15
-	_sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS if high else DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
-	_sun.directional_shadow_max_distance = 70.0 if high else 42.0
-	_sky.radiance_size = Sky.RADIANCE_SIZE_128 if high else Sky.RADIANCE_SIZE_32
+	var q: int = clampi(int(Settings.quality_level), 0, 2)
+	var sh: int = clampi(int(Settings.shadows_level), 0, 3)
+	_quality_high = q >= 2
+	_env.ssao_enabled = Settings.ssao_enabled
+	_env.ssil_enabled = q >= 2
+	_env.glow_enabled = Settings.glow_enabled
+	_env.volumetric_fog_enabled = Settings.vol_fog_enabled
+	_env.ssr_enabled = q >= 1 and _wet_k > 0.15
+	_sun.shadow_enabled = sh > 0
+	_sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS if sh >= 2 else DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
+	_sun.directional_shadow_max_distance = 44.0 if sh >= 3 else (36.0 if sh == 2 else 26.0)
+	_sun.shadow_blur = 1.35 if sh >= 3 else (1.1 if sh == 2 else 0.8)
+	_sky.radiance_size = Sky.RADIANCE_SIZE_128 if q >= 2 else (Sky.RADIANCE_SIZE_64 if q == 1 else Sky.RADIANCE_SIZE_32)
+	var rain_mult := 1.0 if q >= 2 else (0.72 if q == 1 else 0.42)
 	if _rain:
-		VFX.set_rain_amount(_rain, _rain_k * (1.0 if high else 0.45))
+		VFX.set_rain_amount(_rain, _rain_k * rain_mult)
 	for f in _flag_mats:
 		f.set_shader_parameter("wind", 1.0 + _cloud_k * 0.8)
+	_apply_visuals()
 
 
 # ---------------------------------------------------------------------------
@@ -397,8 +483,9 @@ func _apply_visuals() -> void:
 	sun_col = _grey(sun_col, ck * 0.4)
 
 	# Güneş yönü: sabah güneydoğu, gün batımı caddenin kuzey ucunda (caminin arkasında)
+	# Gölge yüksekliğini >=7° sınırla ki gün batımında aşırı uzayan şerit gölge oluşmasın
 	var az := lerpf(2.55, -0.22, p)
-	var el_l := deg_to_rad(maxf(el, 4.0))
+	var el_l := deg_to_rad(maxf(el, 7.0))
 	var sdir := Vector3(sin(az) * cos(el_l), sin(el_l), -cos(az) * cos(el_l)).normalized()
 	_sun.basis = Basis.looking_at(-sdir, Vector3.UP)
 	_sun.light_color = sun_col
@@ -421,10 +508,12 @@ func _apply_visuals() -> void:
 	_env.ambient_light_color = amb
 	_env.ambient_light_energy = lerpf(0.75, 0.95, ck) * lerpf(1.0, 0.7, smoothstep(0.9, 1.0, p))
 	_env.fog_light_color = fog_c
-	_env.fog_density = 0.0030 + ck * 0.002 + rk * 0.008 + smoothstep(0.85, 1.0, p) * 0.002
-	_env.fog_height_density = 0.02 + rk * 0.06
+	# Çift sis solmasını önle: volümetrik sis açıkken üstel sis yarıya iner
+	var exp_fog_k := 0.52 if _env.volumetric_fog_enabled else 1.0
+	_env.fog_density = (0.0030 + ck * 0.002 + rk * 0.007 + smoothstep(0.85, 1.0, p) * 0.002) * exp_fog_k
+	_env.fog_height_density = (0.02 + rk * 0.055) * exp_fog_k
 	_env.volumetric_fog_albedo = fog_c.lightened(0.2)
-	_env.volumetric_fog_density = 0.0022 + rk * 0.01
+	_env.volumetric_fog_density = 0.0020 + rk * 0.0085
 	_env.tonemap_exposure = lerpf(1.0, 1.18, smoothstep(0.86, 1.0, p)) + rk * 0.1
 
 	# Akşam lambaları (yağmurda daha erken yanar)
@@ -439,25 +528,28 @@ func _apply_visuals() -> void:
 	if _sign_mat:
 		_sign_mat.set_shader_parameter("emit_self", _night_k * 0.9)
 
-	# Islak zemin
+	# Islak zemin + opak SSR su birikintileri
 	var wet := _wet_k
 	for bm2 in _batch_mats:
 		bm2.set_shader_parameter("wet", wet)
 		bm2.set_shader_parameter("wind", 1.0 + ck * 0.8 + rk * 0.6)
 	if _asphalt_mat:
-		_asphalt_mat.roughness = lerpf(0.94, 0.28, wet)
-		_asphalt_mat.albedo_color = Color(0.86, 0.86, 0.88).darkened(wet * 0.38)
-		_asphalt_mat.metallic_specular = lerpf(0.5, 0.75, wet)
+		_asphalt_mat.roughness = lerpf(0.92, 0.24, wet)
+		_asphalt_mat.albedo_color = Color(0.86, 0.86, 0.88).darkened(wet * 0.40)
+		_asphalt_mat.metallic_specular = lerpf(0.5, 0.82, wet)
 	if _paver_mat:
-		_paver_mat.roughness = lerpf(0.9, 0.42, wet)
-		_paver_mat.albedo_color = Color(0.95, 0.93, 0.9).darkened(wet * 0.3)
-	if _puddle_mat:
-		_puddle_mat.albedo_color = Color(0.12, 0.13, 0.15, 0.7 * smoothstep(0.15, 0.8, wet))
+		_paver_mat.roughness = lerpf(0.88, 0.36, wet)
+		_paver_mat.albedo_color = Color(0.95, 0.93, 0.9).darkened(wet * 0.32)
+	for pm in _puddle_mats:
+		pm.set_shader_parameter("wet", wet)
+		pm.set_shader_parameter("rain", rk)
 	for pd in _puddles:
 		pd.visible = wet > 0.12
-	_env.ssr_enabled = _quality_high and wet > 0.15
+	var q_lvl: int = clampi(int(Settings.quality_level), 0, 2)
+	_env.ssr_enabled = q_lvl >= 1 and wet > 0.15
 	if _rain:
-		VFX.set_rain_amount(_rain, rk * (1.0 if _quality_high else 0.45))
+		var rain_mult := 1.0 if q_lvl >= 2 else (0.72 if q_lvl == 1 else 0.42)
+		VFX.set_rain_amount(_rain, rk * rain_mult)
 	for f in _flag_mats:
 		f.set_shader_parameter("wind", 1.0 + ck * 0.8)
 
@@ -485,10 +577,10 @@ func _env_setup() -> void:
 	_env.adjustment_saturation = 1.12
 	_env.adjustment_contrast = 1.06
 	_env.glow_enabled = true
-	_env.glow_intensity = 0.55
-	_env.glow_bloom = 0.06
-	_env.glow_hdr_threshold = 1.0
-	_env.glow_blend_mode = Environment.GLOW_BLEND_MODE_SOFTLIGHT
+	_env.glow_intensity = 0.45
+	_env.glow_bloom = 0.08
+	_env.glow_hdr_threshold = 1.05
+	_env.glow_blend_mode = Environment.GLOW_BLEND_MODE_SCREEN
 	_env.fog_enabled = true
 	_env.fog_mode = Environment.FOG_MODE_EXPONENTIAL
 	_env.fog_light_color = Color(0.92, 0.86, 0.78)
@@ -527,7 +619,7 @@ func _env_setup() -> void:
 	_sun.shadow_enabled = true
 	_sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
 	_sun.directional_shadow_blend_splits = true
-	_sun.directional_shadow_max_distance = 70.0
+	_sun.directional_shadow_max_distance = 44.0
 	_sun.shadow_bias = 0.04
 	_sun.shadow_normal_bias = 1.2
 	_sun.shadow_blur = 1.3
@@ -563,8 +655,8 @@ func _build_rain() -> void:
 # ---------------------------------------------------------------------------
 
 func _build_street_and_sidewalks(b) -> void:
-	_asphalt_mat = LP.mat_tex(Color(0.86, 0.86, 0.88), LP.tex_asphalt(), 0.94, Vector3(14.0, 15.0, 1.0))
-	_paver_mat = LP.mat_tex(Color(0.95, 0.93, 0.9), LP.tex_pavers(), 0.9, Vector3(9.0, 40.0, 1.0))
+	_asphalt_mat = LP.mat_tex_pbr(Color(0.86, 0.86, 0.88), LP.tex_asphalt(), 0.92, Vector3(14.0, 15.0, 1.0), 0.0, false, "asphalt", 0.9)
+	_paver_mat = LP.mat_tex_pbr(Color(0.95, 0.93, 0.9), LP.tex_pavers(), 0.88, Vector3(9.0, 40.0, 1.0), 0.0, false, "pavers", 1.15)
 
 	# Şehir zemini (pazarın ötesi)
 	var city := MeshInstance3D.new()
@@ -626,30 +718,37 @@ func _build_street_and_sidewalks(b) -> void:
 		mh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		add_child(mh)
 
-	# Su birikintileri (sadece yağmurda görünür, parlak)
-	_puddle_mat = StandardMaterial3D.new()
-	_puddle_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	_puddle_mat.albedo_color = Color(0.05, 0.06, 0.07, 0.0)
-	_puddle_mat.roughness = 0.03
-	_puddle_mat.metallic = 0.2
-	_puddle_mat.metallic_specular = 1.0
+	# Opak SSR su birikintileri (yağmurda büyür, gerçek ayna yansıma + dalga halkaları üretir)
+	var puddle_sh := Shader.new()
+	puddle_sh.code = _PUDDLE_SHADER
+	var puddle_plane := PlaneMesh.new()
+	puddle_plane.size = Vector2(2.0, 2.0)
 	var puddle_pts := [
-		[Vector3(-2.6, 0.014, -6.5), Vector3(1.4, 1, 0.8)], [Vector3(1.9, 0.014, 6.2), Vector3(1.1, 1, 1.6)],
-		[Vector3(-1.2, 0.014, 15.5), Vector3(0.9, 1, 0.7)], [Vector3(2.6, 0.014, -15.0), Vector3(1.3, 1, 0.9)],
-		[Vector3(-3.3, 0.014, 1.8), Vector3(0.6, 1, 1.1)], [Vector3(0.4, 0.014, -19.4), Vector3(1.5, 1, 0.8)],
-		[Vector3(9.2, 0.05, 2.6), Vector3(0.8, 1, 0.6)], [Vector3(-9.0, 0.05, -2.8), Vector3(0.9, 1, 0.7)],
+		[Vector3(-2.6, 0.013, -6.5), Vector3(1.4, 1, 0.85)], [Vector3(1.9, 0.013, 6.2), Vector3(1.15, 1, 1.55)],
+		[Vector3(-1.2, 0.013, 15.5), Vector3(0.95, 1, 0.75)], [Vector3(2.6, 0.013, -15.0), Vector3(1.3, 1, 0.9)],
+		[Vector3(-3.3, 0.013, 1.8), Vector3(0.65, 1, 1.15)], [Vector3(0.4, 0.013, -19.4), Vector3(1.5, 1, 0.85)],
+		[Vector3(9.2, 0.052, 2.6), Vector3(0.85, 1, 0.65)], [Vector3(-9.0, 0.052, -2.8), Vector3(0.95, 1, 0.72)],
 	]
-	for pp in puddle_pts:
+	for pi in puddle_pts.size():
+		var pp: Array = puddle_pts[pi]
+		var pm_sh := ShaderMaterial.new()
+		pm_sh.shader = puddle_sh
+		pm_sh.set_shader_parameter("wet", 0.0)
+		pm_sh.set_shader_parameter("rain", 0.0)
+		pm_sh.set_shader_parameter("seed", float(pi) * 1.73 + 0.5)
+		_puddle_mats.append(pm_sh)
 		var pd := MeshInstance3D.new()
-		pd.mesh = LP.cyl(1.0, 1.0, 0.004, 14)
+		pd.mesh = puddle_plane
 		pd.position = pp[0]
 		pd.scale = pp[1]
-		pd.rotation.y = rng.randf() * TAU
-		pd.material_override = _puddle_mat
+		var yaw := rng.randf() * TAU
+		pd.rotation.y = yaw
+		pd.material_override = pm_sh
 		pd.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		pd.visible = false
 		add_child(pd)
 		_puddles.append(pd)
+		_puddle_zones.append([Vector2(pp[0].x, pp[0].z), float(pp[1].x), float(pp[1].z), cos(yaw), sin(yaw)])
 
 
 ## İkonik Türk semt pazarı üstü: demir boru iskeleler, mavi/yeşil/çizgili eğik naylon brandalar ve sallanan pazarcı ampulleri!
@@ -663,6 +762,8 @@ func _build_overhead_tarps_and_lights(b) -> void:
 		for xp: float in [-4.3, 4.3]:
 			b.cyl(0.048, 0.055, 4.25, Vector3(xp, 2.12, zp), steel)
 			b.cyl(0.12, 0.14, 0.18, Vector3(xp, 0.09, zp), Color(0.42, 0.42, 0.44))
+			LP.solid(self, Vector3(xp, 1.5, zp), Vector3(0.24, 3.0, 0.24))
+			_reg_obs(Vector2(xp, zp), Vector2(0.32, 0.32))
 		b.cyl(0.036, 0.036, 8.7, Vector3(0, 4.15, zp), steel, Vector3(0, 0, PI / 2), 6)
 		if zi < z_posts.size() - 1:
 			var next_z: float = z_posts[zi + 1]
@@ -676,13 +777,15 @@ func _build_overhead_tarps_and_lights(b) -> void:
 		var zl := (z1 - z0)
 		var col_l: Color = TARP_COLORS[ci % TARP_COLORS.size()]
 		var col_r: Color = TARP_COLORS[(ci + 2) % TARP_COLORS.size()]
-		var m_l := LP.mat_tex(col_l, tarp_tex, 0.72, Vector3(3.0, 3.0, 1.0))
-		var m_r := LP.mat_tex(col_r, tarp_tex, 0.72, Vector3(3.0, 3.0, 1.0))
+		var m_l := LP.mat_tex_pbr(col_l, tarp_tex, 0.72, Vector3(3.0, 3.0, 1.0), 0.0, false, "tarp", 0.65)
+		var m_r := LP.mat_tex_pbr(col_r, tarp_tex, 0.72, Vector3(3.0, 3.0, 1.0), 0.0, false, "tarp", 0.65)
 		for m: StandardMaterial3D in [m_l, m_r]:
+			m.cull_mode = BaseMaterial3D.CULL_DISABLED
 			m.backlight_enabled = true
 			m.backlight = m.albedo_color * 0.55
-		LP.add_mat(self, LP.box(Vector3(4.2, 0.04, zl)), Vector3(-2.35, 4.26, zc), m_l, Vector3(0, 0, 0.14))
-		LP.add_mat(self, LP.box(Vector3(4.2, 0.04, zl)), Vector3(2.35, 4.26, zc), m_r, Vector3(0, 0, -0.14))
+		var tarp_mesh := LP.sagged_tarp(4.25, zl, 0.24, 8, 10)
+		LP.add_mat(self, tarp_mesh, Vector3(-2.35, 4.34, zc), m_l, Vector3(0, 0, 0.14))
+		LP.add_mat(self, tarp_mesh, Vector3(2.35, 4.34, zc), m_r, Vector3(0, 0, -0.14))
 		# Branda kenar sarkıntısı (fırfır)
 		for sx in [-4.42, 4.42]:
 			b.box(Vector3(0.03, 0.22, zl), Vector3(sx, 3.88, zc), (col_l if sx < 0 else col_r).darkened(0.1), Vector3.ZERO, 0.4)
@@ -729,6 +832,8 @@ func _build_gates(b) -> void:
 		for gx in [-4.35, 4.35]:
 			b.box(Vector3(0.45, 4.8, 0.45), Vector3(gx, 2.4, gz), Color(0.2, 0.32, 0.48))
 			b.box(Vector3(0.6, 0.3, 0.6), Vector3(gx, 0.15, gz), Color(0.3, 0.3, 0.32))
+			LP.solid(self, Vector3(gx, 1.6, gz), Vector3(0.62, 3.2, 0.62))
+			_reg_obs(Vector2(gx, gz), Vector2(0.44, 0.44))
 		b.box(Vector3(9.4, 0.88, 0.36), Vector3(0, 4.65, gz), Color(0.12, 0.32, 0.62))
 		b.box(Vector3(9.5, 0.12, 0.42), Vector3(0, 5.12, gz), Color(0.98, 0.78, 0.18))
 		b.box(Vector3(9.5, 0.12, 0.42), Vector3(0, 4.18, gz), Color(0.98, 0.78, 0.18))
@@ -774,7 +879,7 @@ var _wall_mats := {}
 
 func _wall_mat(ci: int) -> StandardMaterial3D:
 	if not _wall_mats.has(ci):
-		_wall_mats[ci] = LP.mat_tex(WALL_COLS[ci], LP.tex_plaster(), 0.92, Vector3(0.35, 0.35, 0.35), 0.0, true)
+		_wall_mats[ci] = LP.mat_tex_pbr(WALL_COLS[ci], LP.tex_plaster(), 0.90, Vector3(0.35, 0.35, 0.35), 0.0, true, "plaster", 0.55)
 	return _wall_mats[ci]
 
 
@@ -1176,6 +1281,7 @@ func _build_market_clutter_and_trees(b) -> void:
 			_plastic_crate(b, p, col, last_yaw)
 		_crate_tops.append([sp + Vector3(0, y0 + float(cnt) * 0.32 + 0.02, 0), last_yaw])
 		LP.solid(self, sp + Vector3(0, 0.5, 0), Vector3(0.8, 1.0, 0.8))
+		_reg_obs(Vector2(sp.x, sp.z), Vector2(0.55, 0.55))
 
 	for tp in [
 		Vector3(-12.8, 0, -17.5), Vector3(12.8, 0, -17.5),
@@ -1215,26 +1321,28 @@ func _decor_stall(p: Vector3, yaw: float) -> void:
 	s.position = p
 	s.rotation.y = yaw
 	add_child(s)
-	var wood_m := LP.mat_tex(WOOD, LP.tex_wood(), 0.88, Vector3(2.0, 1.0, 1.0))
+	var wood_m := LP.mat_tex_pbr(WOOD, LP.tex_wood(), 0.86, Vector3(2.0, 1.0, 1.0), 0.0, false, "wood", 0.7)
 	var awn: Color = TARP_COLORS[rng.randi() % TARP_COLORS.size()]
-	var awn_m := LP.mat_tex(awn, LP.tex_tarp(), 0.72, Vector3(2.0, 2.0, 1.0))
+	var awn_m := LP.mat_tex_pbr(awn, LP.tex_tarp(), 0.72, Vector3(2.0, 2.0, 1.0), 0.0, false, "tarp", 0.6)
+	awn_m.cull_mode = BaseMaterial3D.CULL_DISABLED
 	awn_m.backlight_enabled = true
 	awn_m.backlight = awn * 0.5
 	LP.add_mat(s, LP.box(Vector3(3.2, 0.82, 1.12)), Vector3(0, 0.41, 0.3), wood_m)
-	LP.add_mat(s, LP.box(Vector3(3.34, 0.07, 1.24)), Vector3(0, 0.85, 0.3), LP.mat_tex(WOOD.lightened(0.14), LP.tex_wood(), 0.85))
+	LP.add_mat(s, LP.box(Vector3(3.34, 0.07, 1.24)), Vector3(0, 0.85, 0.3), LP.mat_tex_pbr(WOOD.lightened(0.14), LP.tex_wood(), 0.84, Vector3.ONE, 0.0, false, "wood", 0.6))
 	for x in [-1.5, 1.5]:
 		for z in [-0.6, 1.05]:
 			LP.add(s, LP.cyl(0.045, 0.05, 2.5, 6), Vector3(x, 1.25, z), STEEL, Vector3.ZERO, 0.45, 0.65)
-	LP.add_mat(s, LP.box(Vector3(3.5, 0.05, 2.15)), Vector3(0, 2.54, 0.25), awn_m, Vector3(0.18, 0, 0))
+	LP.add_mat(s, LP.sagged_tarp(3.55, 2.2, 0.14, 6, 6), Vector3(0, 2.58, 0.25), awn_m, Vector3(0.18, 0, 0))
 	for i in 3:
 		var item_id: String = Produce.ITEM_ORDER[rng.randi() % Produce.ITEM_ORDER.size()]
 		var base := Vector3(-1.0 + float(i) * 1.0, 0.94, 0.3)
 		var pc: Color = PLASTIC_CRATES[(i + rng.randi()) % PLASTIC_CRATES.size()]
 		LP.add(s, LP.box(Vector3(0.76, 0.14, 0.64)), base, pc, Vector3.ZERO, 0.55)
-		for j in 6:
-			var o := Vector3(rng.randf_range(-0.22, 0.22), 0.14 + (0.10 if j > 3 else 0.0), rng.randf_range(-0.17, 0.17))
-			Produce.build_mesh(s, item_id, base + o, 0.082)
+		Produce.build_crate_fill(s, item_id, base + Vector3(0, 0.08, 0), 0.62, 0.50, 0.84, 2, int(p.x * 13.0 + p.z * 7.0) + i)
 	LP.solid(s, Vector3(0, 0.5, 0.25), Vector3(3.3, 1.0, 1.32))
+	var rot_90 := absf(sin(yaw)) > 0.5
+	var center_off := Basis(Vector3.UP, yaw) * Vector3(0, 0, 0.25)
+	_reg_obs(Vector2(p.x + center_off.x, p.z + center_off.z), Vector2(0.82, 1.75) if rot_90 else Vector2(1.75, 0.82))
 
 
 func _tree(b, p: Vector3) -> void:
@@ -1251,6 +1359,7 @@ func _tree(b, p: Vector3) -> void:
 		var cc: Color = g.lightened(bl[2]) if float(bl[2]) > 0 else g.darkened(-float(bl[2]))
 		b.ellipsoid(bl[1] * sc, p + bl[0] * sc, cc, Vector3(0, rng.randf() * 3, 0), 7, 4, 0.12)
 	LP.solid(self, p + Vector3(0, 1.2, 0), Vector3(0.5, 2.4, 0.5))
+	_reg_obs(Vector2(p.x, p.z), Vector2(0.45, 0.45))
 
 
 func _cypress(b, p: Vector3) -> void:
@@ -1260,6 +1369,7 @@ func _cypress(b, p: Vector3) -> void:
 	b.cyl(0.45 * sc, 0.62 * sc, 2.1 * sc, p + Vector3(0, 1.95 * sc, 0), g)
 	b.cyl(0.02 * sc, 0.48 * sc, 2.3 * sc, p + Vector3(0, 4.15 * sc, 0), g.lightened(0.06))
 	LP.solid(self, p + Vector3(0, 1.0, 0), Vector3(0.42, 2.0, 0.42))
+	_reg_obs(Vector2(p.x, p.z), Vector2(0.40, 0.40))
 
 
 ## Yerdeki yapraklar, kağıtlar, poşetler, park halindeki kurye motoru, çöp konteyneri, bank, saksılar...
@@ -1293,8 +1403,8 @@ func _build_street_details(b) -> void:
 
 	# Kurye motoru (scooter) - batı arka kaldırım
 	_scooter(b, Vector3(-12.2, 0.04, 12.6), 0.4, Color(0.82, 0.12, 0.1), true)
-	_scooter(b, Vector3(15.2, 0.04, -14.0), PI * 0.5, Color(0.15, 0.3, 0.6), false)
 	LP.solid(self, Vector3(-12.2, 0.5, 12.6), Vector3(0.8, 1.0, 1.8), 0.4)
+	_reg_obs(Vector2(-12.2, 12.6), Vector2(0.75, 1.05))
 
 	# Çöp konteyneri (kedilerin favori yeri)
 	var cp := Vector3(-13.0, 0.04, -19.6)
@@ -1305,6 +1415,7 @@ func _build_street_details(b) -> void:
 			b.cyl(0.07, 0.07, 0.06, cp + Vector3(sx, 0.08, sz), Color(0.1, 0.1, 0.1), Vector3(0, 0, PI / 2), 6)
 	b.box(Vector3(0.3, 0.02, 0.5), cp + Vector3(0.9, 0.05, 0.6), Color(0.9, 0.9, 0.88), Vector3(0, 0.6, 0))
 	LP.solid(self, cp + Vector3(0, 0.6, 0), Vector3(1.6, 1.2, 1.1))
+	_reg_obs(Vector2(cp.x, cp.z), Vector2(0.95, 0.72))
 	_crate_tops.append([cp + Vector3(0.2, 1.22, 0), 0.4])
 
 	# Ağaç altı tahta bank
@@ -1319,7 +1430,9 @@ func _build_street_details(b) -> void:
 			b.box(Vector3(1.6, 0.12, 0.04), p + bs * Vector3(0, 0.7 + float(k) * 0.16, -0.25), Color(0.55, 0.36, 0.2), r + Vector3(-0.15, 0, 0))
 		for sx in [-0.7, 0.7]:
 			b.box(Vector3(0.06, 0.45, 0.4), p + bs * Vector3(sx, 0.22, -0.05), Color(0.15, 0.15, 0.16), r)
-		LP.solid(self, p + Vector3(0, 0.4, 0), Vector3(0.6, 0.8, 1.6) if absf(sin(yaw)) > 0.5 else Vector3(1.6, 0.8, 0.6))
+		var rot_b := absf(sin(yaw)) > 0.5
+		LP.solid(self, p + Vector3(0, 0.4, 0), Vector3(0.6, 0.8, 1.6) if rot_b else Vector3(1.6, 0.8, 0.6))
+		_reg_obs(Vector2(p.x, p.z), Vector2(0.48, 0.95) if rot_b else Vector2(0.95, 0.48))
 
 	# Saksılar (kaldırım kenarı)
 	for pp in [Vector3(-13.6, 0.04, -10.6), Vector3(13.7, 0.04, 8.0), Vector3(13.7, 0.04, 14.6), Vector3(-13.7, 0.04, 15.8), Vector3(-13.7, 0.04, -1.0)]:
@@ -1328,6 +1441,8 @@ func _build_street_details(b) -> void:
 	# Elektrik / aydınlatma direği tabanları ve yangın musluğu
 	b.cyl(0.12, 0.14, 0.7, Vector3(-4.7, 0.35, 19.0), Color(0.75, 0.12, 0.1), Vector3.ZERO, 8)
 	b.sphere(0.13, Vector3(-4.7, 0.72, 19.0), Color(0.75, 0.12, 0.1), 8, 4)
+	LP.solid(self, Vector3(-4.7, 0.4, 19.0), Vector3(0.32, 0.8, 0.32))
+	_reg_obs(Vector2(-4.7, 19.0), Vector2(0.3, 0.3))
 
 
 func _scooter(b, p: Vector3, yaw: float, c: Color, delivery_box: bool) -> void:
@@ -1398,7 +1513,10 @@ func _build_cay_ocagi(b) -> void:
 				b.cyl(0.015, 0.015, 0.33, st + Vector3(cos(la) * 0.1, 0.16, sin(la) * 0.1), Color(0.4, 0.26, 0.15), Vector3.ZERO, 4)
 		if tz[0] < 0.0:
 			_crate_tops.append([mp + Vector3(cos(0.5) * 0.55, 0.36, sin(0.5) * 0.55), 1.2])
+		LP.solid(self, mp + Vector3(0, 0.35, 0), Vector3(0.72, 0.7, 0.72))
+		_reg_obs(Vector2(mp.x, mp.z), Vector2(0.68, 0.68))
 	LP.solid(self, p + Vector3(0, 0.6, 0), Vector3(0.9, 1.2, 2.5))
+	_reg_obs(Vector2(p.x, p.z), Vector2(0.65, 1.4))
 	var lbl := Label3D.new()
 	lbl.text = "ÇAY OCAĞI"
 	lbl.font_size = 40
@@ -1442,6 +1560,7 @@ func _build_lamp_posts(b) -> void:
 		add_child(ol)
 		_street_lights.append(ol)
 		LP.solid(self, lp + Vector3(0, 1.5, 0), Vector3(0.3, 3.0, 0.3))
+		_reg_obs(Vector2(lp.x, lp.z), Vector2(0.28, 0.28))
 
 
 ## Meydan üstü ay-yıldızlı flamalar ve binalar arası sarkan elektrik kabloları.

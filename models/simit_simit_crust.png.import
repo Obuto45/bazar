@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://vxiafax6ug76"
-path="res://.godot/imported/simit_simit_crust.png-446150b1dda7d94baa9bd5c839f491ee.ctex"
+path.s3tc="res://.godot/imported/simit_simit_crust.png-446150b1dda7d94baa9bd5c839f491ee.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "2dc262801995952d87ba3795350d0782"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://models/simit_simit_crust.png"
-dest_files=["res://.godot/imported/simit_simit_crust.png-446150b1dda7d94baa9bd5c839f491ee.ctex"]
+dest_files=["res://.godot/imported/simit_simit_crust.png-446150b1dda7d94baa9bd5c839f491ee.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/lossy_quality=0.7
 compress/uastc_level=0

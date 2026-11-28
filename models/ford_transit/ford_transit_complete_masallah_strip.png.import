@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://bohuk3wwrbumf"
-path="res://.godot/imported/ford_transit_complete_masallah_strip.png-38523ceb9e318e82b0daa55c58bc5459.ctex"
+path.s3tc="res://.godot/imported/ford_transit_complete_masallah_strip.png-38523ceb9e318e82b0daa55c58bc5459.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "2d40770e0b93d5b0ae32c7435b8ebeb4"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://models/ford_transit/ford_transit_complete_masallah_strip.png"
-dest_files=["res://.godot/imported/ford_transit_complete_masallah_strip.png-38523ceb9e318e82b0daa55c58bc5459.ctex"]
+dest_files=["res://.godot/imported/ford_transit_complete_masallah_strip.png-38523ceb9e318e82b0daa55c58bc5459.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/lossy_quality=0.7
 compress/uastc_level=0

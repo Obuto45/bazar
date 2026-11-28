@@ -3,13 +3,13 @@
 importer="scene"
 importer_version=1
 type="PackedScene"
-uid="uid://bmgbgcxj3oc4x"
-path="res://.godot/imported/character.glb-d7ae052b4627e9fafc1b5a3d6bdef701.scn"
+uid="uid://k4w0248uv6kd"
+path="res://.godot/imported/cuban_cigar.glb-af3af3688a5ec64dec782bf8b7d66a2e.scn"
 
 [deps]
 
-source_file="res://models/character.glb"
-dest_files=["res://.godot/imported/character.glb-d7ae052b4627e9fafc1b5a3d6bdef701.scn"]
+source_file="res://models/cuban_cigar.glb"
+dest_files=["res://.godot/imported/cuban_cigar.glb-af3af3688a5ec64dec782bf8b7d66a2e.scn"]
 
 [params]
 

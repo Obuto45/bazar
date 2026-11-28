@@ -3,13 +3,13 @@
 importer="scene"
 importer_version=1
 type="PackedScene"
-uid="uid://cnpp01ahpr07v"
-path="res://.godot/imported/wheel_rear.glb-df6a3245ff67442137e67d08d657b13e.scn"
+uid="uid://dlb7tiwajt5do"
+path="res://.godot/imported/baseball_bat.glb-919f330998a29d761d87f89b1fd5a5a9.scn"
 
 [deps]
 
-source_file="res://models/ford_transit/wheel_rear.glb"
-dest_files=["res://.godot/imported/wheel_rear.glb-df6a3245ff67442137e67d08d657b13e.scn"]
+source_file="res://models/baseball_bat.glb"
+dest_files=["res://.godot/imported/baseball_bat.glb-919f330998a29d761d87f89b1fd5a5a9.scn"]
 
 [params]
 

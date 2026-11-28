@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://cg24t4av42y6a"
-path="res://.godot/imported/acma_acma_glaze.png-a02e5f6ef18656e9226683d50c682954.ctex"
+path.s3tc="res://.godot/imported/acma_acma_glaze.png-a02e5f6ef18656e9226683d50c682954.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "651990ab8822a43e6b03bf41c638d6fb"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://models/acma_acma_glaze.png"
-dest_files=["res://.godot/imported/acma_acma_glaze.png-a02e5f6ef18656e9226683d50c682954.ctex"]
+dest_files=["res://.godot/imported/acma_acma_glaze.png-a02e5f6ef18656e9226683d50c682954.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/lossy_quality=0.7
 compress/uastc_level=0

@@ -8,6 +8,8 @@ const LP := preload("res://lowpoly.gd")
 const VFX := preload("res://vfx.gd")
 const CHAR_SIMITCI := preload("res://models/char_simitci.glb")
 const CHAR_CAYCI := preload("res://models/char_cayci.glb")
+const SIMIT_MODEL := preload("res://models/simit.glb")
+const TEA_MODEL := preload("res://models/turkish_tea.glb")
 const StallScript := preload("res://stall.gd")
 
 const PIGEON_SHADER := """
@@ -175,9 +177,9 @@ func _build_cats() -> void:
 			tb.ellipsoid(Vector3(0.025, 0.025, 0.13), Vector3(0, 0, 0.11), CAT_COLS[i % CAT_COLS.size()][0], Vector3(0, 0, 0), 5, 3)
 			_mesh_node(tail, tb)
 		_sleepers.append([root, _rng.randf() * TAU, tail])
-	# Gezinen tekir: batı arka kaldırımda volta atar, ara ara oturur
+	# Gezinen tekir: batı kaldırımında palet ve banklardan temiz hat üzerinde volta atar
 	var root2 := Node3D.new()
-	root2.position = Vector3(-12.0, 0.04, -8.0)
+	root2.position = Vector3(-10.8, 0.04, -8.0)
 	add_child(root2)
 	var cols: Array = CAT_COLS[0]
 	var bb := LP.batch()
@@ -200,7 +202,7 @@ func _build_cats() -> void:
 	tb2.ellipsoid(Vector3(0.022, 0.022, 0.14), Vector3(0, 0.05, 0.12), cols[0], Vector3(-0.6, 0, 0), 5, 3)
 	_mesh_node(tail2, tb2)
 	_walker = {"root": root2, "body": body, "legs": legs, "tail": tail2,
-		"pts": [Vector3(-12.0, 0.04, -9.0), Vector3(-12.0, 0.04, -3.0), Vector3(-12.3, 0.04, 3.5), Vector3(-12.0, 0.04, 9.0)],
+		"pts": [Vector3(-10.8, 0.04, -9.0), Vector3(-10.8, 0.04, -3.2), Vector3(-10.8, 0.04, 3.4), Vector3(-10.8, 0.04, 8.8)],
 		"i": 1, "dir": 1, "wait": 1.0, "speed": 0.75}
 
 
@@ -212,28 +214,32 @@ func feed_cat_at(food_pos: Vector3, stall_pos: Vector3) -> void:
 	var fl := to_local(food_pos)
 	if Vector2(root.position.x - fl.x, root.position.z - fl.z).length() > 9.0 or str(_walker.get("visit", "")) != "":
 		return
-	fl.y = 0.04
-	var sl := to_local(stall_pos)
-	sl.y = 0.04
+	fl.y = 0.04 if absf(fl.x) > 4.25 else 0.0
+	var sl := StallScript.world_keepout_all(self, to_local(stall_pos))
+	sl.y = 0.04 if absf(sl.x) > 4.25 else 0.0
 	_walker["visit"] = "eat"
 	_walker["food"] = fl
 	_walker["stall"] = sl
 	_walker["visit_t"] = 0.0
 	_walker["wait"] = 0.0
 	_walker["speed_v"] = 1.6
+	SteamMgr.unlock("ACH_CAT_FRIEND")
 
 
-## Ziyaret modunda: hedefe yürü (döndürür true = vardı).
+## Ziyaret modunda: hedefe yürü (engel sakınmalı; döndürür true = vardı).
 func _walker_go(root: Node3D, legs: Array[Node3D], target: Vector3, spd: float, dt: float) -> bool:
 	var to := target - root.position
 	to.y = 0.0
 	var d := to.length()
-	if d < 0.08:
+	if d < 0.15 or float(_walker.get("visit_t", 0.0)) > 16.0:
 		for l in legs:
 			l.rotation.x = lerpf(l.rotation.x, 0.0, dt * 6.0)
 		return true
-	root.position += to / d * minf(d, spd * dt)
-	root.rotation.y = lerp_angle(root.rotation.y, atan2(-to.x, -to.z), dt * 6.0)
+	var dir := StallScript.world_steer_all(self, root.position, to / d, d - 0.1)
+	var np := StallScript.world_keepout_all(self, root.position + dir * minf(d, spd * dt))
+	np.y = lerpf(root.position.y, 0.04 if absf(np.x) > 4.25 else 0.0, minf(dt * 10.0, 1.0))
+	root.position = np
+	root.rotation.y = lerp_angle(root.rotation.y, atan2(-dir.x, -dir.z), dt * 6.0)
 	var ph := _t * 12.0
 	legs[0].rotation.x = sin(ph) * 0.6
 	legs[3].rotation.x = sin(ph) * 0.6
@@ -359,6 +365,7 @@ func _build_pigeons() -> void:
 			_mm.set_instance_color(_pigeons.size() - 1, tint)
 	var mmi := MultiMeshInstance3D.new()
 	mmi.multimesh = _mm
+	mmi.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	add_child(mmi)
 
@@ -385,8 +392,17 @@ func _scare_check(dt: float) -> void:
 			var f: Dictionary = _flocks[fi]
 			if float(f["cd"]) > 0.0:
 				continue
-			var dist := Vector2(pos.x - f["home"].x, pos.z - f["home"].z).length()
-			if dist < 1.9 or (dist < 5.0 and spd > 4.6 and spd < 30.0):
+			# Yalnızca yuvaya değil, yemlenen/gezen kuşların gerçek konumuna bak
+			var near_bird := false
+			for pg in _pigeons:
+				if int(pg["flock"]) != fi or not (int(pg["state"]) in [PState.GROUND, PState.FEED]):
+					continue
+				var bp: Vector3 = pg["pos"]
+				var bd := Vector2(pos.x - bp.x, pos.z - bp.z).length()
+				if bd < 1.9 or (bd < 4.6 and spd > 4.6 and spd < 30.0):
+					near_bird = true
+					break
+			if near_bird:
 				_burst(fi, pos)
 
 
@@ -403,7 +419,7 @@ func _burst(fi: int, from: Vector3) -> void:
 		var away := Vector3(a.x - from.x, 0, a.z - from.z).normalized()
 		var e := Vector3(_rng.randf_range(float(px[0]), float(px[1])), 4.19, float(f["perch_z"]) + _rng.randf_range(-0.02, 0.02))
 		if _rng.randf() < 0.3:
-			e = Vector3(signf(a.x + 0.01) * 16.6 + _rng.randf_range(-0.3, 0.3), 14.2, a.z + _rng.randf_range(-3.0, 3.0))
+			e = Vector3(signf(a.x + 0.01) * 14.8 + _rng.randf_range(-0.2, 0.2), 7.6, a.z + _rng.randf_range(-3.0, 3.0))
 		pg["state"] = PState.FLY_UP
 		pg["a"] = a
 		pg["c"] = a + away * 2.2 + Vector3(0, 3.2, 0)
@@ -544,14 +560,18 @@ func _make_person(kind: String) -> Dictionary:
 		body.add_child(m)
 		m.position = m.get_meta("rest")
 	if kind == "simit":
-		# Baştaki halka bezin üstünde simit tablası
+		# Baştaki halka bezin üstünde simit tablası + gerçek PBR simitler!
 		var b := LP.batch()
 		b.cyl(0.42, 0.42, 0.03, Vector3(0, 1.53, 0), Color(0.55, 0.38, 0.22), Vector3.ZERO, 12)
-		for k in 9:
-			var a := float(k) * TAU / 9.0
-			var r := 0.28 if k < 8 else 0.0
-			b.ellipsoid(Vector3(0.09, 0.03, 0.09), Vector3(cos(a) * r, 1.57 + (0.04 if k == 8 else 0.0), sin(a) * r), Color(0.72, 0.42, 0.18), Vector3.ZERO, 7, 3)
 		_mesh_node(body, b)
+		for k in 7:
+			var a := float(k) * TAU / 6.0
+			var r := 0.24 if k < 6 else 0.0
+			var sm := SIMIT_MODEL.instantiate()
+			sm.position = Vector3(cos(a) * r, 1.56 + (0.04 if k == 6 else 0.0), sin(a) * r)
+			sm.rotation = Vector3(PI * 0.5, a, 0.0)
+			sm.scale = Vector3(0.88, 0.88, 0.88)
+			body.add_child(sm)
 	var legs: Array[Node3D] = []
 	for fn in ["FootL", "FootR"]:
 		var f: Node3D = take.call(fn)
@@ -572,15 +592,18 @@ func _make_person(kind: String) -> Dictionary:
 		arm.add_child(hnd)
 		hnd.position = Vector3(0, -0.58, 0)
 		if kind == "cay" and hn == "HandR":
-			# Askılı çay tepsisi
+			# Askılı çay tepsisi + gerçek ince belli PBR çay bardakları!
 			var ab := LP.batch()
 			ab.rod(Vector3(0, -0.6, 0), Vector3(0.0, -0.75, -0.18), 0.008, Color(0.75, 0.75, 0.78))
 			ab.rod(Vector3(0, -0.6, 0), Vector3(0.0, -0.75, 0.18), 0.008, Color(0.75, 0.75, 0.78))
 			ab.cyl(0.2, 0.2, 0.015, Vector3(0, -0.76, 0), Color(0.8, 0.78, 0.74), Vector3.ZERO, 12)
-			for k in 4:
-				var a := float(k) * TAU / 4.0 + 0.4
-				ab.cyl(0.024, 0.018, 0.075, Vector3(cos(a) * 0.11, -0.71, sin(a) * 0.11), Color(0.68, 0.2, 0.06), Vector3.ZERO, 6)
 			_mesh_node(arm, ab)
+			for k in 3:
+				var a := float(k) * TAU / 3.0 + 0.4
+				var tg := TEA_MODEL.instantiate()
+				tg.position = Vector3(cos(a) * 0.10, -0.75, sin(a) * 0.10)
+				tg.scale = Vector3(0.72, 0.72, 0.72)
+				arm.add_child(tg)
 		arms.append(arm)
 	src.free()
 	var lbl := Label3D.new()
@@ -656,8 +679,11 @@ func _tick_near_player(p: Dictionary, dt: float) -> bool:
 	p["near_t"] = float(p["near_t"]) + dt
 	root.rotation.y = lerp_angle(root.rotation.y, atan2(-to.x, -to.z), dt * 5.0)
 	var legs: Array[Node3D] = p["legs"]
+	var arms: Array[Node3D] = p["arms"]
 	for l in legs:
 		l.rotation.x = lerpf(l.rotation.x, 0.0, dt * 6.0)
+	arms[0].rotation.x = lerpf(arms[0].rotation.x, 0.0, dt * 6.0)
+	arms[1].rotation.x = lerpf(arms[1].rotation.x, sin(_t * 2.0) * 0.05 if p["kind"] == "cay" else 0.0, dt * 6.0)
 	return true
 
 
@@ -709,8 +735,8 @@ func _build_people() -> void:
 func call_cay_to(world_pos: Vector3) -> bool:
 	for p in _people:
 		if p["kind"] == "cay":
-			var t := to_local(world_pos)
-			t.y = (p["root"] as Node3D).position.y
+			var t := StallScript.world_keepout_all(self, to_local(world_pos))
+			t.y = 0.04 if absf(t.x) > 4.25 else 0.0
 			p["call"] = t
 			p["call_t"] = 40.0
 			p["wait"] = 0.0
@@ -731,6 +757,7 @@ func _tick_called(p: Dictionary, dt: float) -> bool:
 		return false
 	var root: Node3D = p["root"]
 	var legs: Array[Node3D] = p["legs"]
+	var arms: Array[Node3D] = p["arms"]
 	var lbl: Label3D = p["label"]
 	if lbl.visible:
 		p["lbl_t"] = float(p["lbl_t"]) - dt
@@ -748,6 +775,8 @@ func _tick_called(p: Dictionary, dt: float) -> bool:
 			root.rotation.y = lerp_angle(root.rotation.y, atan2(-tp.x, -tp.z), dt * 5.0)
 		for l in legs:
 			l.rotation.x = lerpf(l.rotation.x, 0.0, dt * 6.0)
+		arms[0].rotation.x = lerpf(arms[0].rotation.x, 0.0, dt * 6.0)
+		arms[1].rotation.x = sin(_t * 2.0) * 0.05
 		if not lbl.visible and float(p.get("ask_cd", 0.0)) <= 0.0:
 			lbl.text = str(VENDOR_OFFERS[p["kind"]]["ask"])
 			lbl.visible = true
@@ -756,12 +785,16 @@ func _tick_called(p: Dictionary, dt: float) -> bool:
 		p["ask_cd"] = float(p.get("ask_cd", 0.0)) - dt
 		return true
 	var dir := to / d
-	dir = StallScript.steer_all(self, root.position, dir, d - 0.2)
-	root.position = StallScript.keepout_all(self, root.position + dir * minf(d, 1.7 * dt))
+	dir = StallScript.world_steer_all(self, root.position, dir, d - 0.2)
+	var np := StallScript.world_keepout_all(self, root.position + dir * minf(d, 1.7 * dt))
+	np.y = lerpf(root.position.y, 0.04 if absf(np.x) > 4.25 else 0.0, minf(dt * 10.0, 1.0))
+	root.position = np
 	root.rotation.y = lerp_angle(root.rotation.y, atan2(-dir.x, -dir.z), dt * 6.0)
 	var ph := _t * 8.0
 	legs[0].rotation.x = sin(ph) * 0.5
 	legs[1].rotation.x = -sin(ph) * 0.5
+	arms[0].rotation.x = -sin(ph) * 0.35
+	arms[1].rotation.x = sin(_t * 2.0) * 0.04
 	(p["body"] as Node3D).position.y = absf(sin(ph)) * 0.03
 	return true
 
@@ -816,10 +849,11 @@ func _tick_person(p: Dictionary, dt: float) -> void:
 					sfx.play_3d("tea", root.global_position, null, -6.0)
 		return
 	var dir := to / d
-	dir = StallScript.steer_all(self, root.position, dir, d - 0.2) # tezgah içine girme
+	dir = StallScript.world_steer_all(self, root.position, dir, d - 0.2) # tezgah ve kamyonet içine girme
 	var step := minf(d, float(p["speed"]) * dt)
-	root.position = StallScript.keepout_all(self, root.position + dir * step)
-	root.position.y = target.y
+	var np := StallScript.world_keepout_all(self, root.position + dir * step)
+	np.y = lerpf(root.position.y, 0.04 if absf(np.x) > 4.25 else 0.0, minf(dt * 10.0, 1.0))
+	root.position = np
 	root.rotation.y = lerp_angle(root.rotation.y, atan2(-dir.x, -dir.z), dt * 5.0)
 	var ph := _t * 6.2
 	legs[0].rotation.x = sin(ph) * 0.45

@@ -2,23 +2,24 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://dejuciua08nnt"
-path="res://.godot/imported/ford_transit_chassis_rear_banner.png-82fb9f3f508e00a06bb9ab0aa6ea1ae0.ctex"
+uid="uid://bdqwamhm1of4e"
+path.s3tc="res://.godot/imported/cuban_cigar_cigar_band_tex.png-58fadb2d98250a308d7ca785074b8549.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
-"md5": "f064b80664d06c6580e3bf482e6a5563"
+"md5": "ecce8edbfe4903979a41a1c10e9fb238"
 }
 
 [deps]
 
-source_file="res://models/ford_transit/ford_transit_chassis_rear_banner.png"
-dest_files=["res://.godot/imported/ford_transit_chassis_rear_banner.png-82fb9f3f508e00a06bb9ab0aa6ea1ae0.ctex"]
+source_file="res://models/cuban_cigar_cigar_band_tex.png"
+dest_files=["res://.godot/imported/cuban_cigar_cigar_band_tex.png-58fadb2d98250a308d7ca785074b8549.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/lossy_quality=0.7
 compress/uastc_level=0

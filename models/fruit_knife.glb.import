@@ -3,13 +3,13 @@
 importer="scene"
 importer_version=1
 type="PackedScene"
-uid="uid://1xutvjbrjyi7"
-path="res://.godot/imported/wheel_front.glb-e1a4b0702f1cc5a9cf09f5829eb57394.scn"
+uid="uid://dcs3my7iif7yk"
+path="res://.godot/imported/fruit_knife.glb-0bc77895302185bc7d2fa15783441306.scn"
 
 [deps]
 
-source_file="res://models/ford_transit/wheel_front.glb"
-dest_files=["res://.godot/imported/wheel_front.glb-e1a4b0702f1cc5a9cf09f5829eb57394.scn"]
+source_file="res://models/fruit_knife.glb"
+dest_files=["res://.godot/imported/fruit_knife.glb-0bc77895302185bc7d2fa15783441306.scn"]
 
 [params]
 

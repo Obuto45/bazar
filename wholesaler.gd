@@ -78,7 +78,9 @@ var _model_root: Node3D
 var _wheels: Array[Node3D] = []
 var _amber_mat: StandardMaterial3D
 var _headlight_mat: StandardMaterial3D
-var _solid_body: StaticBody3D
+var _solid_body: AnimatableBody3D
+var _horn_areas: Array[Area3D] = []
+var _crate_solids: Dictionary = {} # item_id -> StaticBody3D
 var _rack_root: Node3D
 var _crate_areas: Array[Area3D] = []
 var _crate_labels: Dictionary = {} # item_id -> Label3D
@@ -88,6 +90,9 @@ var _horn_audio: AudioStreamPlayer3D
 var _prices: Dictionary = {}
 var _deal_item := "domates"
 var _event_item := ""
+var _prev_spd := 0.0
+var _pitch_k := 0.0
+var _vib_t := 0.0
 
 
 func _ready() -> void:
@@ -116,8 +121,24 @@ func _ready() -> void:
 	_voice_audio.attenuation_model = AudioStreamPlayer3D.ATTENUATION_INVERSE_DISTANCE
 	_voice_audio.volume_db = -2.5
 	add_child(_voice_audio)
-	if DisplayServer.get_name() != "headless":
-		_engine_audio.play()
+	visible = false
+	_set_rack_active(false)
+
+
+## Yeni gün başladığında kamyoneti tekrar sabah geliş sırasına alır.
+func reset_for_new_day() -> void:
+	_used = false
+	state = State.AWAY
+	state_timer = ARRIVE_DELAY
+	position = Vector3(0.0, 0.0, ENTER_Z)
+	_net_pos = position
+	_honked_arrive = false
+	_honked_warn = false
+	_prev_spd = 0.0
+	_pitch_k = 0.0
+	stock.clear()
+	if _engine_audio and _engine_audio.playing:
+		_engine_audio.stop()
 	visible = false
 	_set_rack_active(false)
 
@@ -167,8 +188,9 @@ func _build_truck() -> void:
 	_sign_lbl.no_depth_test = true
 	add_child(_sign_lbl)
 
-	# Katı çarpıştırıcı (park halindeyken oyuncular kamyondan geçmez)
-	_solid_body = StaticBody3D.new()
+	# Hareketli katı çarpıştırıcı (AnimatableBody3D: sürüşte oyuncuları itip geçmesini engeller)
+	_solid_body = AnimatableBody3D.new()
+	_solid_body.sync_to_physics = true
 	var cs := CollisionShape3D.new()
 	var sh := BoxShape3D.new()
 	sh.size = Vector3(2.20, 2.18, 5.96)
@@ -229,14 +251,26 @@ func _build_supply_rack() -> void:
 		area.add_child(cs)
 		spot.add_child(area)
 		_crate_areas.append(area)
+		var cbody := StaticBody3D.new()
+		cbody.collision_layer = 0
+		cbody.collision_mask = 0
+		var ccs := CollisionShape3D.new()
+		var csh := BoxShape3D.new()
+		csh.size = Vector3(0.64, 0.34, 0.54)
+		ccs.shape = csh
+		ccs.position = Vector3(0, 0.17, 0)
+		cbody.add_child(ccs)
+		spot.add_child(cbody)
+		_crate_solids[item_id] = cbody
 
 
 ## Kamyon kabin kapılarında şoföre selam / havalı korna çaldırma alanı!
 func _build_cab_horn_areas() -> void:
+	_horn_areas.clear()
 	for sx in [-1.3, 1.3]:
 		var area := Area3D.new()
 		area.name = "CabHorn_%d" % int(signf(sx))
-		area.collision_layer = 4
+		area.collision_layer = 0
 		area.collision_mask = 0
 		area.set_meta("kind", "truck_horn")
 		area.set_meta("hl_size", Vector3(0.6, 1.0, 1.2))
@@ -247,22 +281,33 @@ func _build_cab_horn_areas() -> void:
 		cs.shape = sh
 		area.add_child(cs)
 		add_child(area)
+		_horn_areas.append(area)
 
 
 func _set_rack_active(on: bool) -> void:
+	var was_on := _rack_root != null and _rack_root.visible
 	if _rack_root:
 		_rack_root.visible = on
+	for ha in _horn_areas:
+		ha.collision_layer = 4 if on else 0
 	for a in _crate_areas:
 		var iid := str(a.get_meta("item_id"))
 		var n := stock_left(iid)
-		a.collision_layer = 4 if (on and n > 0) else 0
+		var active := on and n > 0
+		a.collision_layer = 4 if active else 0
+		var cb: StaticBody3D = _crate_solids.get(iid)
+		if cb:
+			cb.collision_layer = 1 if active else 0
 		var spot := a.get_parent() as Node3D
 		if spot:
 			spot.visible = n > 0
+			if active and not was_on:
+				spot.scale = Vector3(0.15, 0.15, 0.15)
+				var tw := create_tween()
+				tw.tween_property(spot, "scale", Vector3.ONE, 0.28).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 		var lbl: Label3D = _crate_labels.get(iid)
 		if lbl and n > 0:
-			lbl.text = "%s ×%d
-%d TL" % [ITEM_EMOJI.get(iid, "📦"), n, price_of(iid)]
+			lbl.text = "%s ×%d\n%d TL" % [ITEM_EMOJI.get(iid, "📦"), n, price_of(iid)]
 			var dp := discount_of(iid)
 			if dp > 0:
 				lbl.text += "\n%%%d indirim" % dp
@@ -332,12 +377,14 @@ func _gen_stock() -> void:
 	for k in 4:
 		disc_pct[disc[k]] = [20, 30, 40].pick_random()
 	var d := {}
+	var pcount := maxi(1, Net.names.size() if Net.online() else 1)
+	var base_qty := maxi(1, ceili(float(pcount) / 3.0))
 	for iid: String in ids:
 		var info: Dictionary = Produce.ITEMS[iid]
 		# Temel ürünler ucuz (başlangıç parasıyla alınır), özel ürünler pahalı
 		var mult := randf_range(0.45, 0.75) if int(info.get("tier", 0)) == 0 else randf_range(0.95, 1.3)
 		var pct: int = int(disc_pct.get(iid, 0))
-		d[iid] = [1, maxi(12, roundi(float(info["crate_cost"]) * mult * (1.0 - float(pct) / 100.0))), pct]
+		d[iid] = [base_qty, maxi(12, roundi(float(info["crate_cost"]) * mult * (1.0 - float(pct) / 100.0))), pct]
 	if Net.online():
 		rpc_sync_stock.rpc(d)
 	else:
@@ -366,10 +413,39 @@ func _physics_process(dt: float) -> void:
 
 	# Tekerlekleri ilerleme mesafesine göre fiziksel döndür (+Z yönü -> +X rotasyon)
 	var dz := position.z - prev_z
+	var cur_spd := dz / maxf(dt, 0.001)
 	if absf(dz) > 0.0005:
 		_wheel_rot = wrapf(_wheel_rot + dz / 0.37, 0.0, TAU)
 		for w in _wheels:
 			w.rotation.x = _wheel_rot
+
+	# Fren burun dalışı + dizel rölanti titreşimi
+	var accel_z := (cur_spd - _prev_spd) / maxf(dt, 0.001)
+	_prev_spd = cur_spd
+	var want_pitch := clampf(-accel_z * 0.0065, -0.028, 0.032) if state != State.AWAY else 0.0
+	_pitch_k = lerpf(_pitch_k, want_pitch, minf(dt * 8.0, 1.0))
+	if _model_root:
+		_model_root.rotation.x = _pitch_k
+		if state != State.AWAY:
+			_vib_t += dt * (46.0 if state == State.PARKED else 72.0)
+			_model_root.position.y = sin(_vib_t) * (0.004 if state == State.PARKED else 0.006)
+		else:
+			_model_root.position.y = 0.0
+
+	# Hareket halindeyken şeritte kalan oyuncuları nazikçe yana it (içine gömülmesin)
+	if state == State.ENTERING or state == State.DEPARTING:
+		var world := get_parent()
+		var pg := world.get_node_or_null("Players") if world else null
+		if pg:
+			for pl in pg.get_children():
+				if pl is CharacterBody3D and pl.is_multiplayer_authority():
+					var p3 := (pl as Node3D).global_position
+					var rx := p3.x - position.x
+					var rz := p3.z - position.z
+					if absf(rx) < 1.65 and absf(rz) < 3.45:
+						var push_x := 1.0 if rx >= 0.0 else -1.0
+						(pl as Node3D).global_position.x = position.x + push_x * 1.72
+						(pl as CharacterBody3D).velocity.x = push_x * 3.2
 
 	# Park halindeyken dörtlü flaşörler yanıp sönsün!
 	if _amber_mat:
@@ -382,19 +458,22 @@ func _physics_process(dt: float) -> void:
 		else:
 			_amber_mat.emission_enabled = false
 
-	# Motor sesi ve görünürlük
+	# Motor sesi ve görünürlük (yumuşak geçiş; AWAY iken motor tamamen durur)
 	visible = state != State.AWAY
 	if _solid_body:
 		_solid_body.collision_layer = 1 if state != State.AWAY else 0
-	if _engine_audio:
+	if _engine_audio and DisplayServer.get_name() != "headless":
 		if state == State.AWAY:
-			_engine_audio.volume_db = -80.0
-		elif state == State.PARKED:
-			_engine_audio.volume_db = -17.0
-			_engine_audio.pitch_scale = 0.88
+			if _engine_audio.playing:
+				_engine_audio.stop()
 		else:
-			_engine_audio.volume_db = -10.5
-			_engine_audio.pitch_scale = 1.18
+			if not _engine_audio.playing:
+				_engine_audio.volume_db = -36.0
+				_engine_audio.play()
+			var tgt_db := -17.0 if state == State.PARKED else -10.5
+			var tgt_pitch := 0.88 if state == State.PARKED else lerpf(0.92, 1.22, clampf(absf(cur_spd) / DRIVE_SPEED, 0.0, 1.0))
+			_engine_audio.volume_db = lerpf(_engine_audio.volume_db, tgt_db, minf(dt * 4.5, 1.0))
+			_engine_audio.pitch_scale = lerpf(_engine_audio.pitch_scale, tgt_pitch, minf(dt * 5.0, 1.0))
 
 	_update_sign()
 
@@ -403,12 +482,12 @@ func _tick_host(dt: float) -> void:
 	match state:
 		State.ENTERING:
 			var dist := PARK_Z - position.z
-			var spd := clampf(dist * 0.85, 1.4, DRIVE_SPEED)
+			var spd := clampf(dist * 0.92, 0.25, DRIVE_SPEED)
 			position.z += minf(spd * dt, maxf(dist, 0.0))
 			if not _honked_arrive and position.z >= -16.5:
 				_honked_arrive = true
 				_fire_horn(false)
-			if position.z >= PARK_Z - 0.05:
+			if position.z >= PARK_Z - 0.04:
 				position.z = PARK_Z
 				state = State.PARKED
 				state_timer = PARK_DURATION
@@ -482,8 +561,9 @@ func _update_sign() -> void:
 
 
 func request_honk() -> void:
-	if _horn_cd > 0.0:
+	if _horn_cd > 0.0 or state != State.PARKED:
 		return
+	SteamMgr.unlock("ACH_TRUCK_HORN")
 	if Net.online():
 		rpc_request_honk.rpc_id(1)
 	else:

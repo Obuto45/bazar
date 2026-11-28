@@ -109,7 +109,12 @@ var _upgrade_visuals: Dictionary = {}
 var _bell_area: Area3D
 var _bell_mesh: Node3D
 var _light_bulbs: Array[StandardMaterial3D] = []
+var _light_omni: OmniLight3D
+var _radio_reels: Array[Node3D] = []
+var _reserved_spots: Dictionary = {} # customer_name -> slot_idx (int)
 var _anim_t := 0.0
+
+static var world_obstacles: Array = [] # [{pos: Vector2, half: Vector2}, ...] statik dünya engelleri (bazaar.gd kaydeder)
 
 # İtibar (0..5 yıldız, host yetkili) ve tazelik görselleri
 var reputation := 2.5
@@ -161,13 +166,52 @@ func _build_all() -> void:
 	_built = get_children().slice(n0)
 
 
-## Tezgah tablası yarı genişliği: 1.77 / 2.57 / 3.37
+## Tezgah tablası yarı genişliği: 1.77 / 2.34 / 2.86 (6.40 m komşu aralığına kesinlikle sığar, çakışmaz)
 func half_width() -> float:
-	return 1.77 + 0.8 * float(expansion_level)
+	match expansion_level:
+		1: return 2.34
+		2: return 2.86
+		_: return 1.77
+
+
+func _slot_spacing() -> float:
+	match expansion_level:
+		1: return 0.74
+		2: return 0.68
+		_: return 0.78
 
 
 func _slot_x(i: int) -> float:
-	return (float(i) - float(slots.size() - 1) * 0.5) * SLOT_SPACING
+	return (float(i) - float(slots.size() - 1) * 0.5) * _slot_spacing()
+
+
+## Müşteri tezgah önü kuyruk noktası rezervasyonu (iki müşteri aynı noktada iç içe geçmez).
+func reserve_customer_spot(cid: String) -> Vector3:
+	var cnt := 3 + 2 * expansion_level
+	if _reserved_spots.has(cid):
+		return customer_spot(spot_offset(int(_reserved_spots[cid])))
+	var used := _reserved_spots.values()
+	var pick := 0
+	for i in cnt:
+		if not (i in used):
+			pick = i
+			break
+	if pick == 0 and (0 in used):
+		pick = absi(hash(cid)) % cnt
+	_reserved_spots[cid] = pick
+	return customer_spot(spot_offset(pick))
+
+
+func release_customer_spot(cid: String) -> void:
+	_reserved_spots.erase(cid)
+
+
+static func clear_world_obstacles() -> void:
+	world_obstacles.clear()
+
+
+static func register_world_obstacle(center_xz: Vector2, half_xz: Vector2) -> void:
+	world_obstacles.append({"pos": center_xz, "half": half_xz})
 
 
 ## Tezgahı 6 (seviye 1) / 8 (seviye 2) yuvaya genişletir; mevcut yuva içerikleri korunur.
@@ -247,6 +291,99 @@ static func keepout_all(from: Node, p: Vector3) -> Vector3:
 	return p
 
 
+## Birleşik dünya yönlendirmesi: oyuncu tezgahları + aktif Toptancı kamyoneti + statik pazar engelleri.
+static func world_steer_all(from: Node, pos: Vector3, dir: Vector3, look := 1.0) -> Vector3:
+	if from == null or not from.is_inside_tree():
+		return dir
+	var out := steer_all(from, pos, dir, look)
+	var ahead := pos + out * minf(look, 1.1)
+	var world := _find_world(from)
+	if world:
+		var truck := world.get_node_or_null("Wholesaler") as Node3D
+		if truck and truck.has_method("is_present") and truck.is_present():
+			var rx := ahead.x - truck.position.x
+			var rz := ahead.z - truck.position.z
+			var hx := 2.15 if (truck.has_method("is_parked") and truck.is_parked()) else 1.55
+			var z_min := -4.35 if (truck.has_method("is_parked") and truck.is_parked()) else -3.35
+			if absf(rx) < hx and rz > z_min and rz < 3.45:
+				var sx := 1.0 if (pos.x - truck.position.x) >= 0.0 else -1.0
+				out = (out + Vector3(sx * 1.45, 0.0, 0.0)).normalized()
+	for ob in world_obstacles:
+		var c: Vector2 = ob["pos"]
+		var h: Vector2 = ob["half"]
+		var dx := ahead.x - c.x
+		var dz := ahead.z - c.y
+		if absf(dx) < h.x + 0.35 and absf(dz) < h.y + 0.35:
+			var push := Vector3(signf(pos.x - c.x) if absf(pos.x - c.x) >= absf(pos.z - c.y) else 0.0,
+				0.0, signf(pos.z - c.y) if absf(pos.z - c.y) > absf(pos.x - c.x) else 0.0)
+			if push.length_squared() < 0.01:
+				push = Vector3(1.0, 0.0, 0.0)
+			out = (out + push * 1.25).normalized()
+	return out
+
+
+## Birleşik katı yasak bölge itmesi (tezgahlar + aktif Toptancı + statik engeller).
+static func world_keepout_all(from: Node, p: Vector3) -> Vector3:
+	p = keepout_all(from, p)
+	if from == null or not from.is_inside_tree():
+		return p
+	var world := _find_world(from)
+	if world:
+		var truck := world.get_node_or_null("Wholesaler") as Node3D
+		if truck and truck.has_method("is_present") and truck.is_present():
+			var parked: bool = truck.has_method("is_parked") and truck.is_parked()
+			var hx := 2.05 if parked else 1.48
+			var z0 := -4.25 if parked else -3.25
+			var z1 := 3.30
+			var rx := p.x - truck.position.x
+			var rz := p.z - truck.position.z
+			if absf(rx) < hx and rz > z0 and rz < z1:
+				var dl := rx + hx
+				var dr := hx - rx
+				var db := rz - z0
+				var df := z1 - rz
+				var m := minf(minf(dl, dr), minf(db, df))
+				if m == dl:
+					p.x = truck.position.x - hx
+				elif m == dr:
+					p.x = truck.position.x + hx
+				elif m == db:
+					p.z = truck.position.z + z0
+				else:
+					p.z = truck.position.z + z1
+	for ob in world_obstacles:
+		var c: Vector2 = ob["pos"]
+		var h: Vector2 = ob["half"]
+		var rx := p.x - c.x
+		var rz := p.z - c.y
+		if absf(rx) < h.x and absf(rz) < h.y:
+			var dx := h.x - absf(rx)
+			var dz := h.y - absf(rz)
+			if dx < dz:
+				p.x = c.x + (h.x if rx >= 0.0 else -h.x)
+			else:
+				p.z = c.y + (h.y if rz >= 0.0 else -h.y)
+	return p
+
+
+static func _find_world(from: Node) -> Node:
+	var n := from
+	while n:
+		if n.name == "World":
+			return n
+		n = n.get_parent()
+	return null
+
+
+func _night_factor() -> float:
+	var w := _find_world(self)
+	var m := w.get_parent() if w else null
+	var prog := float(m.call("_day_prog")) if (m and m.has_method("_day_prog")) else 0.4
+	var rainy := (w != null and str(w.get_meta("weather", "clear")) == "rain")
+	var eve := clampf((prog - 0.62) / 0.24, 0.0, 1.0)
+	return clampf(maxf(eve, 0.45 if rainy else 0.0), 0.0, 1.0)
+
+
 func _process(dt: float) -> void:
 	_anim_t += dt
 	if bell_boost > 0.0:
@@ -254,9 +391,18 @@ func _process(dt: float) -> void:
 	if bell_cd > 0.0:
 		bell_cd = maxf(bell_cd - dt, 0.0)
 	if not _light_bulbs.is_empty() and has_upgrade("lights"):
+		var nk := _night_factor()
+		var base_e := lerpf(0.18, 2.3, nk)
+		var pulse_e := lerpf(0.04, 0.45, nk)
 		for i in _light_bulbs.size():
-			_light_bulbs[i].emission_energy_multiplier = 2.0 + sin(_anim_t * 4.5 + float(i) * 1.1) * 0.45
+			_light_bulbs[i].emission_energy_multiplier = base_e + sin(_anim_t * 4.5 + float(i) * 1.1) * pulse_e
+		if _light_omni:
+			_light_omni.visible = nk > 0.12
+			_light_omni.light_energy = 1.55 * nk
 	if has_radio and radio_playing:
+		for reel in _radio_reels:
+			if is_instance_valid(reel):
+				reel.rotation.z -= dt * 3.6
 		_radio_note_cd -= dt
 		if _radio_note_cd <= 0.0:
 			_radio_note_cd = 1.15
@@ -337,9 +483,12 @@ func _apply_fresh_visual(idx: int) -> void:
 	var f := float(s.get("fresh", 1.0))
 	var stocked := str(s["item"]) != "" and int(s["count"]) > 0
 	var ov := _slot_overlays[idx]
-	ov.albedo_color.a = clampf((0.92 - f) * 0.78, 0.0, 0.62)
+	var rot_a := clampf((0.92 - f) * 0.72, 0.0, 0.58)
+	ov.albedo_color.a = rot_a
 	var pile: Dictionary = _slot_piles[idx]
 	if not pile.is_empty() and is_instance_valid(pile["root"]):
+		# Taze üründe (fresh > 0.92) overlay'i çıkar ki ikinci pass draw call yemesin
+		Produce.set_pile_overlay(pile["root"], ov if rot_a > 0.015 else null)
 		var k := lerpf(0.88, 1.0, clampf(f / 0.8, 0.0, 1.0))
 		(pile["root"] as Node3D).scale = Vector3(k, k * lerpf(0.86, 1.0, clampf(f / 0.8, 0.0, 1.0)), k)
 	var bar := _slot_fresh_bars[idx]
@@ -383,16 +532,23 @@ func _build_geometry() -> void:
 	var wood_m := LP.mat_tex(WOOD, LP.tex_wood(), 0.86, Vector3(2.0, 1.0, 1.0))
 	var top_m := LP.mat_tex(WOOD.lightened(0.14), LP.tex_wood(), 0.84, Vector3(2.0, 1.0, 1.0))
 	var tarp_a := LP.mat_tex(awning_color, LP.tex_tarp(), 0.72, Vector3(2.0, 2.0, 1.0))
+	tarp_a.backlight_enabled = true
+	tarp_a.backlight = awning_color * 0.42
 	var tarp_w := LP.mat_tex(Color(0.96, 0.94, 0.88), LP.tex_tarp(), 0.74, Vector3(2.0, 2.0, 1.0))
+	tarp_w.backlight_enabled = true
+	tarp_w.backlight = Color(0.36, 0.34, 0.28)
 
 	var hw := half_width()
 	var tw := hw * 2.0
 	LP.add_mat(self, LP.box(Vector3(tw - 0.14, 0.52, 0.92)), Vector3(0, 0.26, 0.25), wood_m)
 	LP.add(self, LP.box(Vector3(tw - 0.08, 0.08, 0.96)), Vector3(0, 0.06, 0.25), WOOD.darkened(0.24))
 	LP.add_mat(self, LP.box(Vector3(tw, 0.06, 1.04)), Vector3(0, 0.545, 0.25), top_m)
+	# Terazi & Zil için yan destek rafları (ürün kasalarıyla sıfır çakışma!)
+	LP.add_mat(self, LP.box(Vector3(0.34, 0.05, 0.46)), Vector3(hw + 0.15, 0.545, 0.36), top_m)
+	LP.add_mat(self, LP.box(Vector3(0.30, 0.05, 0.40)), Vector3(-(hw + 0.13), 0.545, 0.36), top_m)
 	for i in slots.size():
 		LP.add(self, LP.box(Vector3(0.06, 0.48, 0.03)), Vector3(_slot_x(i) * 1.03, 0.27, 0.72), WOOD.darkened(0.18))
-	LP.solid(self, Vector3(0, 0.285, 0.25), Vector3(tw, 0.57, 1.04))
+	LP.solid(self, Vector3(0, 0.285, 0.25), Vector3(tw + 0.32, 0.57, 1.04))
 
 	# Galvaniz çelik pazarcı direkleri
 	for x in [-(hw - 0.15), hw - 0.15]:
@@ -401,12 +557,16 @@ func _build_geometry() -> void:
 		LP.add(self, LP.box(Vector3(0.05, 0.05, 1.62)), Vector3(x, 2.74, 0.05), STEEL, Vector3.ZERO, 0.42, 0.7)
 	LP.add(self, LP.box(Vector3(tw - 0.18, 0.06, 0.06)), Vector3(0, 2.78, 0.85), STEEL, Vector3.ZERO, 0.42, 0.7)
 
-	# Çizgili dokulu branda tente (genişlemede şerit sayısı artar)
+	# Çizgili dokulu branda tente + yağmur engelleyici (tentenin altına yağmur damlamasın)
 	var ns := 5 + 2 * expansion_level
 	var sw := (tw + 0.11) / float(ns)
 	for i in ns:
 		var m := tarp_a if i % 2 == 0 else tarp_w
 		LP.add_mat(self, LP.box(Vector3(sw, 0.05, 2.18)), Vector3(-(tw + 0.11) * 0.5 + sw * (float(i) + 0.5), 2.93, 0.12), m, Vector3(0.18, 0, 0))
+	var rain_col := GPUParticlesCollisionBox3D.new()
+	rain_col.size = Vector3(tw + 0.24, 0.22, 2.35)
+	rain_col.position = Vector3(0, 2.94, 0.12)
+	add_child(rain_col)
 	LP.add_mat(self, LP.box(Vector3(tw + 0.14, 0.22, 0.04)), Vector3(0, 2.71, 1.17), tarp_a)
 	var nf := 9 + 4 * expansion_level
 	for i in nf:
@@ -434,7 +594,7 @@ func _build_geometry() -> void:
 
 func _build_scale() -> void:
 	var sc := Node3D.new()
-	sc.position = Vector3(half_width() - 0.33, 0.58, 0.56)
+	sc.position = Vector3(half_width() + 0.14, 0.575, 0.36)
 	add_child(sc)
 	LP.add(sc, LP.cyl(0.08, 0.10, 0.04, 8), Vector3(0, 0.02, 0), BRASS.darkened(0.18), Vector3.ZERO, 0.3, 0.8)
 	LP.add(sc, LP.cyl(0.015, 0.02, 0.28, 6), Vector3(0, 0.16, 0), BRASS, Vector3.ZERO, 0.28, 0.82)
@@ -487,13 +647,18 @@ func _build_upgrade_board() -> void:
 	b.add_child(area)
 
 
-## Tezgaha bırakılan Arabesk Radyo yuvası (sağ arka masa köşesi).
+## Tezgaha bırakılan Arabesk Radyo yuvası (sağ arka köşe, teraziden uzak).
 func _build_radio_slot() -> void:
 	_radio_node = Items.build_item_model("radyo")
-	_radio_node.position = Vector3(half_width() - 0.25, 0.58, -0.05)
+	_radio_node.position = Vector3(half_width() + 0.10, 0.575, -0.06)
 	_radio_node.rotation.y = -0.35
 	_radio_node.hide()
 	add_child(_radio_node)
+	_radio_reels.clear()
+	for rn in ["ReelL", "ReelR"]:
+		var r := _radio_node.find_child(rn, true, false) as Node3D
+		if r:
+			_radio_reels.append(r)
 
 	_radio_audio = Sfx.make_radio_player()
 	_radio_node.add_child(_radio_audio)
@@ -555,16 +720,22 @@ func rpc_set_stall_radio(placed: bool, playing: bool, idx := -1, pos := -1.0) ->
 			_radio_audio.stop()
 
 
+	if has_radio and radio_playing and owner_id == (multiplayer.get_unique_id() if Net.online() else 1):
+		SteamMgr.unlock("ACH_DJ_ARABESK")
+
+
 func _build_upgrade_attachments() -> void:
 	_upgrade_visuals.clear()
 	_light_bulbs.clear()
+	_light_omni = null
 
 	var mega := Node3D.new()
 	mega.position = Vector3(-(half_width() - 0.15), 2.52, 0.92)
 	mega.rotation = Vector3(-0.1, 0.25, 0.0)
-	LP.add(mega, LP.cyl(0.05, 0.16, 0.32, 8), Vector3(0, 0, 0.14), Color(0.92, 0.24, 0.18), Vector3(PI / 2, 0, 0), 0.35, 0.2)
-	LP.add(mega, LP.torus(0.14, 0.17, 10, 5), Vector3(0, 0, 0.30), BRASS, Vector3(PI / 2, 0, 0), 0.25, 0.8)
-	LP.add(mega, LP.box(Vector3(0.07, 0.14, 0.07)), Vector3(0, -0.09, 0.02), Color(0.2, 0.2, 0.22))
+	var mega_m := Items.build_item_model("megafon")
+	mega_m.scale = Vector3(1.25, 1.25, 1.25)
+	mega.add_child(mega_m)
+	LP.add(mega, LP.box(Vector3(0.06, 0.14, 0.06)), Vector3(0, -0.10, 0.0), STEEL.darkened(0.25), Vector3.ZERO, 0.4, 0.7)
 	mega.hide()
 	add_child(mega)
 	_upgrade_visuals["megaphone"] = mega
@@ -578,15 +749,16 @@ func _build_upgrade_attachments() -> void:
 		var bm := bulb.material_override as StandardMaterial3D
 		bm.emission_enabled = true
 		bm.emission = col
-		bm.emission_energy_multiplier = 2.2
+		bm.emission_energy_multiplier = 0.2
 		_light_bulbs.append(bm)
 	LP.add(lights, LP.box(Vector3(half_width() * 2.0 + 0.14, 0.05, 0.06)), Vector3(0, 2.84, 1.19), BRASS, Vector3.ZERO, 0.25, 0.8)
-	var glow := OmniLight3D.new()
-	glow.position = Vector3(0, 2.44, 0.72)
-	glow.light_color = Color(1.0, 0.82, 0.45)
-	glow.light_energy = 1.45
-	glow.omni_range = 5.5
-	lights.add_child(glow)
+	_light_omni = OmniLight3D.new()
+	_light_omni.position = Vector3(0, 2.44, 0.72)
+	_light_omni.light_color = Color(1.0, 0.82, 0.45)
+	_light_omni.light_energy = 0.0
+	_light_omni.omni_range = 5.5
+	_light_omni.visible = false
+	lights.add_child(_light_omni)
 	lights.hide()
 	add_child(lights)
 	_upgrade_visuals["lights"] = lights
@@ -598,8 +770,9 @@ func _build_upgrade_attachments() -> void:
 	add_child(big)
 	_upgrade_visuals["big_crate"] = big
 
+	# Pirinç zil: sol yan uzatma rafında, Slot 0 ile sıfır çakışma!
 	var bell := Node3D.new()
-	bell.position = Vector3(-(half_width() - 0.33), 0.58, 0.56)
+	bell.position = Vector3(-(half_width() + 0.13), 0.575, 0.36)
 	_bell_mesh = Node3D.new()
 	bell.add_child(_bell_mesh)
 	LP.add(_bell_mesh, LP.cyl(0.08, 0.11, 0.03, 8), Vector3(0, 0.015, 0), Color(0.18, 0.14, 0.12))
@@ -648,8 +821,11 @@ func _build_upgrade_attachments() -> void:
 	add_child(flama)
 	_upgrade_visuals["flama"] = flama
 
+	# Sardunya saksısı: sağ ön direkte demir halka askıda (terazi & kasa ile sıfır çakışma!)
 	var saksi := Node3D.new()
-	saksi.position = Vector3(half_width() - 0.2, 0.58, 0.6)
+	saksi.position = Vector3(half_width() - 0.15, 1.48, 0.98)
+	LP.add(saksi, LP.box(Vector3(0.04, 0.04, 0.14)), Vector3(0, 0.09, -0.08), STEEL.darkened(0.2), Vector3.ZERO, 0.4, 0.7)
+	LP.add(saksi, LP.torus(0.095, 0.112, 12, 5), Vector3(0, 0.10, 0), STEEL.darkened(0.2), Vector3.ZERO, 0.4, 0.7)
 	LP.add(saksi, LP.cyl(0.1, 0.09, 0.17, 10), Vector3(0, 0.085, 0), Color(0.78, 0.76, 0.72), Vector3.ZERO, 0.4, 0.6)
 	LP.add(saksi, LP.cyl(0.103, 0.103, 0.04, 10), Vector3(0, 0.11, 0), Color(0.85, 0.65, 0.15), Vector3.ZERO, 0.5)
 	LP.add(saksi, LP.ellipsoid(0.13, 0.09, 0.13, 7, 4), Vector3(0, 0.22, 0), Color(0.22, 0.5, 0.2), Vector3.ZERO, 0.9)
@@ -720,9 +896,9 @@ func _build_slots() -> void:
 		_slot_piles.append({})
 
 		var ov := StandardMaterial3D.new()
-		ov.albedo_color = Color(0.24, 0.17, 0.06, 0.0)
+		ov.albedo_color = Color(0.28, 0.22, 0.08, 0.0)
 		ov.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		ov.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		ov.roughness = 0.92
 		_slot_overlays.append(ov)
 
 		# Çürüyünce vızıldayan sinekler
@@ -1310,6 +1486,8 @@ func rpc_request_spray(sprayer_id: int) -> void:
 	if sprayer_id != owner_id:
 		return
 	refresh_freshness(SPRAY_AMOUNT)
+	if sprayer_id == (multiplayer.get_unique_id() if Net.online() else 1):
+		SteamMgr.unlock("ACH_FRESH_SPRAY")
 
 
 func _spray_fx() -> void:
@@ -1506,7 +1684,7 @@ func rpc_ring_bell() -> void:
 		return
 	bell_boost = 10.0
 	bell_cd = 15.0
-	var bell_pos := to_global(Vector3(-(half_width() - 0.33), 0.78, 0.56))
+	var bell_pos := to_global(Vector3(-(half_width() + 0.13), 0.76, 0.36))
 	Sfx.play_3d("bell", bell_pos, self, 0.0, 1.0, 32.0)
 	VFX.spawn_sound_ring(self, bell_pos, 5.5, Color(1.0, 0.85, 0.28))
 	VFX.spawn_floating_text(self, bell_pos + Vector3(0, 0.55, 0), "🔔 GEL VATANDAŞ GEL!", Color(1.0, 0.88, 0.3), 38)

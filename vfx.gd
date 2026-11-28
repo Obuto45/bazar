@@ -4,6 +4,13 @@ extends RefCounted
 const LP := preload("res://lowpoly.gd")
 
 static var _soft_mat: StandardMaterial3D
+static var _cache: Dictionary = {}
+
+
+static func _c(key: String, builder: Callable) -> Variant:
+	if not _cache.has(key):
+		_cache[key] = builder.call()
+	return _cache[key]
 
 
 ## Duman/buhar için yumuşak kenarlı kamera'ya dönük bulut: radyal geçişli doku + kameraya çok yaklaşınca saydamlaşır
@@ -45,9 +52,11 @@ static func ramp(offsets: Array, colors: Array) -> Gradient:
 
 
 static func soft_puff_mesh(size: float) -> QuadMesh:
-	var q := QuadMesh.new()
-	q.size = Vector2(size, size)
-	return q
+	var key := "puff_q_%.3f" % size
+	return _c(key, func():
+		var q := QuadMesh.new()
+		q.size = Vector2(size, size)
+		return q)
 
 
 static func _soften(p: CPUParticles3D, size: float) -> void:
@@ -61,15 +70,17 @@ static func _soften(p: CPUParticles3D, size: float) -> void:
 
 
 static func _vcol_mat(rough := 0.5, metallic := 0.0, unshaded := false, alpha := false) -> StandardMaterial3D:
-	var m := StandardMaterial3D.new()
-	m.vertex_color_use_as_albedo = true
-	m.roughness = rough
-	m.metallic = metallic
-	if unshaded:
-		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	if alpha:
-		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	return m
+	var key := "vc_%.2f_%.2f_%d_%d" % [rough, metallic, int(unshaded), int(alpha)]
+	return _c(key, func():
+		var m := StandardMaterial3D.new()
+		m.vertex_color_use_as_albedo = true
+		m.roughness = rough
+		m.metallic = metallic
+		if unshaded:
+			m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		if alpha:
+			m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		return m)
 
 
 static func _spawn_oneshot(parent: Node, world_pos: Vector3, amount: int, lifetime: float,
@@ -85,6 +96,7 @@ static func _spawn_oneshot(parent: Node, world_pos: Vector3, amount: int, lifeti
 	p.lifetime = lifetime
 	p.mesh = mesh
 	p.material_override = mat
+	p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	p.direction = dir
 	p.spread = spread
 	p.initial_velocity_min = vel_min
@@ -107,20 +119,45 @@ static func _spawn_oneshot(parent: Node, world_pos: Vector3, amount: int, lifeti
 
 
 static func burst_coins(parent: Node, world_pos: Vector3, count := 10) -> void:
-	var coin_mesh := LP.cyl(0.052, 0.052, 0.016, 7)
-	var m := _vcol_mat(0.22, 0.85, false, false)
-	m.emission_enabled = true
-	m.emission = Color(1.0, 0.78, 0.18)
-	m.emission_energy_multiplier = 0.9
+	var coin_mesh: Mesh = _c("m_coin", func(): return LP.cyl(0.052, 0.052, 0.016, 7))
+	var m: StandardMaterial3D = _c("mat_coin", func():
+		var mm := StandardMaterial3D.new()
+		mm.vertex_color_use_as_albedo = true
+		mm.roughness = 0.22
+		mm.metallic = 0.85
+		mm.emission_enabled = true
+		mm.emission = Color(1.0, 0.78, 0.18)
+		mm.emission_energy_multiplier = 0.9
+		return mm)
 	_spawn_oneshot(parent, world_pos, count, 0.85, coin_mesh, m,
 		Color(1.0, 0.84, 0.22), 2.2, 4.4, 52.0, Vector3(0, -9.0, 0))
 
 
 static func burst_dust(parent: Node, world_pos: Vector3, color := Color(0.92, 0.88, 0.80), count := 7) -> void:
-	var puff := LP.sphere(0.055, 5, 3)
-	var m := _vcol_mat(0.95, 0.0, false, true)
-	_spawn_oneshot(parent, world_pos, count, 0.5, puff, m,
-		Color(color.r, color.g, color.b, 0.75), 0.7, 1.9, 140.0, Vector3(0, 0.6, 0))
+	if not _ok(parent):
+		return
+	var p := CPUParticles3D.new()
+	p.one_shot = true
+	p.explosiveness = 0.85
+	p.amount = count
+	p.lifetime = 0.55
+	_soften(p, 0.16)
+	p.direction = Vector3.UP
+	p.spread = 140.0
+	p.initial_velocity_min = 0.55
+	p.initial_velocity_max = 1.65
+	p.damping_min = 1.6
+	p.damping_max = 2.4
+	p.gravity = Vector3(0, 0.45, 0)
+	p.scale_amount_curve = _scale_curve(0.45, 1.25, 1.75, 0.35)
+	var base := Color(color.r, color.g, color.b, 0.52)
+	p.color_ramp = ramp([0.0, 0.2, 1.0], [Color(base, 0.0), base, Color(base, 0.0)])
+	parent.add_child(p)
+	p.global_position = world_pos
+	p.emitting = true
+	var tw := p.create_tween()
+	tw.tween_interval(p.lifetime + 0.3)
+	tw.tween_callback(p.queue_free)
 
 
 static func burst_mood(parent: Node, world_pos: Vector3, happy: bool) -> void:
@@ -316,12 +353,9 @@ static func spawn_stink_puff(parent: Node, world_pos: Vector3, wide := false) ->
 	var p := CPUParticles3D.new()
 	p.one_shot = true
 	p.explosiveness = 0.25
-	p.amount = 18 if wide else 10
+	p.amount = 16 if wide else 10
 	p.lifetime = 1.65
-	p.mesh = LP.sphere(0.085 if wide else 0.058, 6, 4)
-	var sm := _vcol_mat(0.95, 0.0, true, true)
-	p.material_override = sm
-	p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_soften(p, 0.26 if wide else 0.18)
 	p.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
 	p.emission_sphere_radius = 0.52 if wide else 0.22
 	p.direction = Vector3.UP
@@ -330,12 +364,7 @@ static func spawn_stink_puff(parent: Node, world_pos: Vector3, wide := false) ->
 	p.initial_velocity_max = 0.68
 	p.gravity = Vector3(0.06, 0.24, 0.04)
 	p.scale_amount_curve = _scale_curve(0.50, 1.45, 2.1, 0.45)
-	var g := Gradient.new()
-	g.set_color(0, Color(0.48, 0.84, 0.14, 0.0))
-	g.set_color(1, Color(0.42, 0.72, 0.12, 0.0))
-	g.add_point(0.18, Color(0.52, 0.88, 0.16, 0.68))
-	g.add_point(0.62, Color(0.46, 0.78, 0.14, 0.48))
-	p.color_ramp = g
+	p.color_ramp = ramp([0.0, 0.18, 0.62, 1.0], [Color(0.48, 0.84, 0.14, 0.0), Color(0.52, 0.88, 0.16, 0.58), Color(0.46, 0.78, 0.14, 0.38), Color(0.42, 0.72, 0.12, 0.0)])
 	parent.add_child(p)
 	p.global_position = world_pos
 	p.emitting = true
@@ -474,22 +503,18 @@ static func spawn_water_mist(parent: Node, world_pos: Vector3, dir := Vector3.FO
 	var p := CPUParticles3D.new()
 	p.one_shot = true
 	p.explosiveness = 0.7
-	p.amount = 10
-	p.lifetime = 1.0
-	p.mesh = LP.sphere(0.07, 6, 3)
-	p.material_override = _vcol_mat(0.9, 0.0, true, true)
+	p.amount = 12
+	p.lifetime = 0.95
+	_soften(p, 0.20)
 	p.direction = d
 	p.spread = 18.0
 	p.initial_velocity_min = 1.2
 	p.initial_velocity_max = 2.4
 	p.damping_min = 2.0
 	p.damping_max = 3.2
-	p.gravity = Vector3(0, -0.4, 0)
+	p.gravity = Vector3(0, -0.35, 0)
 	p.scale_amount_curve = _scale_curve(0.4, 1.4, 2.4)
-	var g := Gradient.new()
-	g.set_color(0, Color(0.85, 0.94, 1.0, 0.42))
-	g.set_color(1, Color(0.85, 0.94, 1.0, 0.0))
-	p.color_ramp = g
+	p.color_ramp = ramp([0.0, 0.2, 1.0], [Color(0.85, 0.94, 1.0, 0.0), Color(0.85, 0.94, 1.0, 0.38), Color(0.85, 0.94, 1.0, 0.0)])
 	parent.add_child(p)
 	p.global_position = world_pos + d * 0.35
 	p.emitting = true
@@ -570,8 +595,7 @@ static func spawn_stink(parent: Node, world_pos: Vector3) -> Node3D:
 	p.name = "Stink"
 	p.amount = 7
 	p.lifetime = 1.8
-	p.mesh = LP.sphere(0.045, 5, 3)
-	p.material_override = _vcol_mat(0.9, 0.0, true, true)
+	_soften(p, 0.16)
 	p.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
 	p.emission_sphere_radius = 0.2
 	p.direction = Vector3.UP
@@ -582,11 +606,7 @@ static func spawn_stink(parent: Node, world_pos: Vector3) -> Node3D:
 	p.tangential_accel_min = -0.6
 	p.tangential_accel_max = 0.6
 	p.scale_amount_curve = _scale_curve(0.3, 1.0, 1.9, 0.4)
-	var g := Gradient.new()
-	g.set_color(0, Color(0.55, 0.72, 0.25, 0.0))
-	g.add_point(0.25, Color(0.55, 0.72, 0.25, 0.34))
-	g.set_color(g.get_point_count() - 1, Color(0.45, 0.55, 0.22, 0.0))
-	p.color_ramp = g
+	p.color_ramp = ramp([0.0, 0.25, 1.0], [Color(0.55, 0.72, 0.25, 0.0), Color(0.55, 0.72, 0.25, 0.34), Color(0.45, 0.55, 0.22, 0.0)])
 	if _ok(parent):
 		parent.add_child(p)
 		p.global_position = world_pos
@@ -600,8 +620,7 @@ static func spawn_steam(parent: Node, world_pos: Vector3, strength := 1.0) -> No
 	p.name = "Steam"
 	p.amount = int(8 * strength) + 2
 	p.lifetime = 2.2
-	p.mesh = LP.sphere(0.05, 5, 3)
-	p.material_override = _vcol_mat(0.9, 0.0, false, true)
+	_soften(p, 0.18)
 	p.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
 	p.emission_sphere_radius = 0.04
 	p.direction = Vector3.UP
@@ -612,11 +631,7 @@ static func spawn_steam(parent: Node, world_pos: Vector3, strength := 1.0) -> No
 	p.damping_min = 0.1
 	p.damping_max = 0.3
 	p.scale_amount_curve = _scale_curve(0.35, 1.2, 2.6, 0.35)
-	var g := Gradient.new()
-	g.set_color(0, Color(0.95, 0.95, 0.97, 0.0))
-	g.add_point(0.15, Color(0.95, 0.95, 0.97, 0.32))
-	g.set_color(g.get_point_count() - 1, Color(0.95, 0.95, 0.97, 0.0))
-	p.color_ramp = g
+	p.color_ramp = ramp([0.0, 0.15, 1.0], [Color(0.95, 0.95, 0.97, 0.0), Color(0.95, 0.95, 0.97, 0.32), Color(0.95, 0.95, 0.97, 0.0)])
 	if _ok(parent):
 		parent.add_child(p)
 		p.global_position = world_pos

@@ -314,6 +314,13 @@ var _net_pos := Vector3.ZERO
 var _net_yaw := 0.0
 var _net_spd := 0.0
 var _sync_t := 0.0
+var _full_sync_t := 0.0
+var _sync_dirty := true
+var _life := 0.0
+var _blink_t := 2.4
+var _eyes: Array[Node3D] = []
+var _mouth: Node3D
+var _reserved_owner := 0
 
 static var _mesh_cache := {}
 static var _mat_cache := {}
@@ -368,6 +375,31 @@ func _ready() -> void:
 	_update_weather(true)
 	_refresh_bag_visual()
 	_refresh_bubble()
+	_cache_face_nodes()
+
+
+func _exit_tree() -> void:
+	_release_spot()
+
+
+func _cache_face_nodes() -> void:
+	_eyes.clear()
+	_mouth = null
+	if head == null:
+		return
+	for en in ["EyeL", "EyeR"]:
+		var e := head.find_child(en, true, false) as Node3D
+		if e:
+			_eyes.append(e)
+	_mouth = head.find_child("Mouth", true, false) as Node3D
+
+
+func _release_spot() -> void:
+	if _reserved_owner != 0:
+		var old_st := _find_stall(_reserved_owner)
+		if old_st and old_st.has_method("release_customer_spot"):
+			old_st.release_customer_spot(name)
+		_reserved_owner = 0
 
 
 # ---------------------------------------------------------------- mesh / materyal önbellekleri
@@ -1149,18 +1181,18 @@ func _process(dt: float) -> void:
 		return
 	var to_cam := cam.global_position - _popup_pivot.global_position
 	var d := to_cam.length()
-	var hide_far := d > 34.0
+	var hide_far := d > 24.0
 	_popup_pivot.visible = not hide_far
 	if hide_far:
 		return
 	to_cam.y = 0.0
 	if to_cam.length_squared() > 0.001:
 		_popup_pivot.global_rotation = Vector3(0, atan2(to_cam.x, to_cam.z), 0)
-	var s := clampf(d / 6.5, 1.0, 2.2) / maxf(scale.x, 0.5)
+	var s := clampf(d / 8.5, 0.85, 1.45) / maxf(scale.x, 0.5)
 	_popup_pivot.scale = Vector3(s, s, s)
 	var py := _bubble_base_y + (0.34 if _umbrella and _umbrella.visible else 0.0)
 	_popup_pivot.position.y = lerpf(_popup_pivot.position.y, py, minf(dt * 6.0, 1.0))
-	var far := d > 17.0
+	var far := d > 14.0
 	_bubble_refresh_t -= dt
 	if far != _far_mode or _bubble_refresh_t <= 0.0:
 		_far_mode = far
@@ -1177,14 +1209,30 @@ func _physics_process(dt: float) -> void:
 		_wx_t = 1.0
 		_update_weather(false)
 	if is_host:
+		_life += dt
+		if _drunk_scold_cd > 0.0:
+			_drunk_scold_cd = maxf(_drunk_scold_cd - dt, 0.0)
+		if _life > 160.0 and state != State.LEAVE:
+			_go_leave(_rand_line("moveon"))
 		_tick_ai(dt)
 		_tick_talk(dt)
 		_sync_t += dt
+		_full_sync_t += dt
 		if Net.online() and _sync_t >= 0.1:
 			_sync_t = 0.0
-			rpc_sync_state.rpc(position, _body_yaw, _spd, state, target_owner_id, wants, offers, mood_text, wait_timer, say_text, emote_text)
+			if _sync_dirty or _full_sync_t >= 1.0:
+				_sync_dirty = false
+				_full_sync_t = 0.0
+				rpc_sync_state.rpc(position, _body_yaw, _spd, state, target_owner_id, wants, offers, mood_text, wait_timer, say_text, emote_text)
+			else:
+				rpc_sync_pose.rpc(position, _body_yaw, _spd, wait_timer)
 	else:
-		position = position.lerp(_net_pos, minf(dt * 12.0, 1.0))
+		# Hız tabanlı öngörü + yumuşak takip (ağ gecikmesinde kayma/titreme yok)
+		var lead := _net_pos + Vector3(sin(_net_yaw), 0.0, cos(_net_yaw)) * (_net_spd * 0.06)
+		if position.distance_squared_to(lead) > 16.0:
+			position = _net_pos
+		else:
+			position = position.lerp(lead, minf(dt * 12.0, 1.0))
 		_body_yaw = lerp_angle(_body_yaw, _net_yaw, minf(dt * 12.0, 1.0))
 		_spd = lerpf(_spd, _net_spd, minf(dt * 10.0, 1.0))
 	_update_patience_bar()
@@ -1236,12 +1284,14 @@ func _say(txt: String, dur := 3.2) -> void:
 		return
 	say_text = txt
 	_say_t = dur
+	_sync_dirty = true
 	_refresh_bubble()
 
 
 func _emote(e: String, dur := 1.8) -> void:
 	emote_text = e
 	_emote_t = dur
+	_sync_dirty = true
 	_pop_emote(e)
 
 
@@ -1287,11 +1337,13 @@ func _chatter_line() -> String:
 
 
 func _go_leave(mood: String) -> void:
+	_release_spot()
 	mood_text = mood
 	state = State.LEAVE
 	target_owner_id = 0
 	target_pos = exit_pos
 	say_text = ""
+	_sync_dirty = true
 	_refresh_bubble()
 
 
@@ -1441,17 +1493,24 @@ func _move_toward_target(dt: float, speed: float) -> void:
 		_spd = 0.0
 		return
 	var dir := diff / dist
-	# Ortadaki Ford Transit Toptancı park/sürüş halindeyse yanından kibarca dolan
-	var w := _world()
-	var truck := w.get_node_or_null("Wholesaler") as Node3D if w else null
-	if truck and truck.has_method("is_present") and truck.is_present():
-		var rel_x := position.x - truck.position.x
-		var rel_z := position.z - truck.position.z
-		if absf(rel_x) < 2.25 and absf(rel_z) < 4.5:
-			var push_x := 1.0 if rel_x >= 0.0 else -1.0
-			dir = (dir + Vector3(push_x * 1.3, 0.0, 0.0)).normalized()
-	dir = StallScript.steer_all(self, position, dir, dist - 0.2) # tezgah içine girme, kenarından dolan
-	position = StallScript.keepout_all(self, position + dir * minf(speed * dt, dist))
+	# Yakındaki diğer müşterilerden yumuşakça ayrıl (iç içe geçme önlenir)
+	if get_parent():
+		var sep := Vector3.ZERO
+		for other in get_parent().get_children():
+			if other == self or not (other is Node3D):
+				continue
+			var dv := Vector3(position.x - (other as Node3D).position.x, 0.0, position.z - (other as Node3D).position.z)
+			var d2 := dv.length_squared()
+			if d2 > 0.0004 and d2 < 0.42:
+				sep += dv.normalized() * (0.65 - sqrt(d2))
+		if sep.length_squared() > 0.001:
+			dir = (dir + sep * 1.1).normalized()
+	dir = StallScript.world_steer_all(self, position, dir, dist - 0.2)
+	var next_p := StallScript.world_keepout_all(self, position + dir * minf(speed * dt, dist))
+	# Kaldırım yüksekliği (x > 4.25 iken yumuşak 4 cm çıkış)
+	var tgt_y := 0.04 if absf(next_p.x) > 4.25 else 0.0
+	next_p.y = lerpf(position.y, tgt_y, minf(dt * 12.0, 1.0))
+	position = next_p
 	_body_yaw = lerp_angle(_body_yaw, atan2(dir.x, dir.z), minf(dt * 8.0, 1.0))
 	_spd = speed
 
@@ -1568,25 +1627,28 @@ func _evaluate_stalls(only_louder_override: bool) -> void:
 		# Soğuma süresi + olasılık: titrek davranmasın
 		if _switch_cd <= 0.0 and best_stall.owner_id != target_owner_id and best_shout > cur_shout + 0.35 and best_shout >= 0.55 \
 				and _rng.randf() < 0.55:
+			_release_spot()
 			_switch_cd = 7.0
 			target_owner_id = best_stall.owner_id
+			_reserved_owner = target_owner_id
 			state = State.APPROACH
 			_pause_t = 0.0
 			_bought_here = 0
-			var busy_n := _count_customers_at(target_owner_id)
-			target_pos = best_stall.customer_spot(best_stall.spot_offset(busy_n))
+			_sync_dirty = true
+			target_pos = best_stall.reserve_customer_spot(name) if best_stall.has_method("reserve_customer_spot") else best_stall.customer_spot(best_stall.spot_offset(_count_customers_at(target_owner_id)))
 			_emote("❗")
 			_say(_rand_line("lure"), 2.2)
 		return
 
 	var lure_prob := clampf(best_score * 0.85 + (0.28 if best_shout >= 0.5 else 0.0), 0.14, 0.97)
 	if best_score > 0.24 and _rng.randf() < lure_prob:
+		_release_spot()
 		target_owner_id = best_stall.owner_id
-		var busy_n := _count_customers_at(target_owner_id)
-		var side_off: float = best_stall.spot_offset(busy_n)
-		target_pos = best_stall.customer_spot(side_off)
+		_reserved_owner = target_owner_id
+		target_pos = best_stall.reserve_customer_spot(name) if best_stall.has_method("reserve_customer_spot") else best_stall.customer_spot(best_stall.spot_offset(_count_customers_at(target_owner_id)))
 		state = State.APPROACH
 		_pause_t = 0.0
+		_sync_dirty = true
 		if best_shout >= 0.5:
 			_emote("❗")
 			_say(_rand_line("lure"), 2.2)
@@ -1780,6 +1842,14 @@ func _trigger_reaction(happy: bool) -> void:
 
 
 @rpc("authority", "unreliable_ordered")
+func rpc_sync_pose(p: Vector3, yaw: float, s: float, wt := 28.0) -> void:
+	_net_pos = p
+	_net_yaw = yaw
+	_net_spd = s
+	wait_timer = wt
+
+
+@rpc("authority", "unreliable_ordered")
 func rpc_sync_state(p: Vector3, yaw: float, s: float, st: int, own: int, w: Dictionary, off: Dictionary, mood: String,
 		wt := 28.0, say := "", emo := "") -> void:
 	_net_pos = p
@@ -1963,7 +2033,7 @@ func _animate(dt: float) -> void:
 	var head_pitch := 0.0
 	var head_roll := -sway * 0.6
 	var umb := _umbrella != null and _umbrella.visible
-	var behind_back := archetype == Archetype.EMEKLI and moving
+	var behind_back := archetype == Archetype.EMEKLI and moving and _has_trolley
 
 	var tgt := {}
 	var trot := {}
@@ -2048,6 +2118,17 @@ func _animate(dt: float) -> void:
 		_phone.visible = _idle_kind == Idle.PHONE and not moving
 	if _umbrella:
 		_umbrella.rotation.z = lerpf(_umbrella.rotation.z, -sway * 0.8 + sin(t * 1.3) * 0.03, f)
+	# Göz kırpma + konuşurken hafif ağız hareketi
+	if not _eyes.is_empty():
+		_blink_t -= dt
+		if _blink_t <= -0.11:
+			_blink_t = randf_range(2.6, 5.4)
+		var ey := 0.14 if _blink_t <= 0.0 else 1.0
+		for e in _eyes:
+			e.scale.y = ey
+	if _mouth:
+		var talking := say_text != "" or mood_text != ""
+		_mouth.scale.y = (0.8 + absf(sin(t * 14.0)) * 0.85) if talking else 1.0
 	if _kid:
 		_animate_kid(dt, t, kw, moving)
 

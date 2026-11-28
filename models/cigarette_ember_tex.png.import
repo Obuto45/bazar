@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://cy5mfvh8lcxsv"
-path="res://.godot/imported/cigarette_ember_tex.png-4264475cd31216717a76dbcfcb7328e5.ctex"
+path.s3tc="res://.godot/imported/cigarette_ember_tex.png-4264475cd31216717a76dbcfcb7328e5.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "cfadb42e9157e81fd4262a52b5fe77af"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://models/cigarette_ember_tex.png"
-dest_files=["res://.godot/imported/cigarette_ember_tex.png-4264475cd31216717a76dbcfcb7328e5.ctex"]
+dest_files=["res://.godot/imported/cigarette_ember_tex.png-4264475cd31216717a76dbcfcb7328e5.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/lossy_quality=0.7
 compress/uastc_level=0

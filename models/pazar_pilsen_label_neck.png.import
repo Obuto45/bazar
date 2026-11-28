@@ -3,9 +3,10 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://ukggorufhlh1"
-path="res://.godot/imported/pazar_pilsen_label_neck.png-ffee05d07b05f266f29b28421912fd0c.ctex"
+path.s3tc="res://.godot/imported/pazar_pilsen_label_neck.png-ffee05d07b05f266f29b28421912fd0c.s3tc.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
 }
 generator_parameters={
 "md5": "fb7650e4862b4d3780b6e78dc87bb04d"
@@ -14,11 +15,11 @@ generator_parameters={
 [deps]
 
 source_file="res://models/pazar_pilsen_label_neck.png"
-dest_files=["res://.godot/imported/pazar_pilsen_label_neck.png-ffee05d07b05f266f29b28421912fd0c.ctex"]
+dest_files=["res://.godot/imported/pazar_pilsen_label_neck.png-ffee05d07b05f266f29b28421912fd0c.s3tc.ctex"]
 
 [params]
 
-compress/mode=0
+compress/mode=2
 compress/high_quality=false
 compress/lossy_quality=0.7
 compress/uastc_level=0

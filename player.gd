@@ -66,7 +66,7 @@ const FP_GRIP := {
 	"bira": [Vector3(0.052, 0.048, -0.006), Vector3(-6, -16, 12), 0.68],
 	"radyo": [Vector3(0.0, 0.215, 0.0), Vector3(0, 0, 90), 0.8],
 	"megafon": [Vector3(0.0, -0.04, 0.03), Vector3.ZERO, 0.8],
-	"bicak": [Vector3(0.0, -0.01, 0.05), Vector3(80, 0, 0), 0.6],
+	"bicak": [Vector3(0.0, -0.012, 0.062), Vector3(80, 0, 0), 0.62],
 	"spray": [Vector3(0.0, -0.03, 0.04), Vector3.ZERO, 0.7],
 	"sigara": [Vector3(0.030, -0.026, 0.030), Vector3(-12, 16, -16), 0.54],
 	"puro": [Vector3(0.034, -0.028, 0.032), Vector3(-12, 16, -16), 0.58],
@@ -95,6 +95,14 @@ var _tp_item_anchor: Node3D
 var _tp_item_visual: Node3D
 var _hl_box: Node3D
 var _hl_mat: StandardMaterial3D
+var _col_shape: CollisionShape3D
+var _knock_t := 0.0
+var _hitstop_t := 0.0
+var _sync_t := 0.0
+var _net_vel := Vector3.ZERO
+var _rem_step_half := 0
+var _fp_radio_reels: Array[Node3D] = []
+var _pending_spray_empty := false
 
 # Ekonomi ve günlük istatistikler
 var money := STARTING_MONEY
@@ -252,7 +260,21 @@ func face_yaw() -> float:
 
 
 func add_trauma(amount: float) -> void:
-	_trauma = clampf(_trauma + amount * 0.55, 0.0, 0.7) # azaltılmış yumuşak sarsıntı
+	_trauma = clampf(_trauma + amount * 0.85, 0.0, 1.0)
+
+
+func _exit_tree() -> void:
+	for n in _ko_rbs:
+		var rb = _ko_rbs[n]
+		if is_instance_valid(rb):
+			rb.queue_free()
+	_ko_rbs.clear()
+	for j in _ko_joints:
+		if is_instance_valid(j):
+			j.queue_free()
+	_ko_joints.clear()
+	if is_instance_valid(_ko_fade_layer):
+		_ko_fade_layer.queue_free()
 
 
 func _ready() -> void:
@@ -267,6 +289,7 @@ func _ready() -> void:
 	col.shape = cap
 	col.position.y = 0.7
 	add_child(col)
+	_col_shape = col
 	_build_model(HAIRS[(id / 8 + id) % HAIRS.size()], SHIRTS[id % SHIRTS.size()])
 	_hand_radio_audio = Sfx.make_radio_player()
 	_hand_radio_audio.position = Vector3(0, 1.0, 0)
@@ -290,15 +313,16 @@ func _ready() -> void:
 		cam_root = Node3D.new()
 		add_child(cam_root)
 		cam = Camera3D.new()
-		cam.fov = 78
+		cam.fov = Settings.fov
 		cam.near = 0.04
 		cam_root.add_child(cam)
 		cam.current = true
 		_ray = RayCast3D.new()
 		_ray.target_position = Vector3(0, 0, -INTERACT_REACH)
 		_ray.collide_with_areas = true
-		_ray.collide_with_bodies = false
-		_ray.collision_mask = 4
+		_ray.collide_with_bodies = true
+		_ray.collision_mask = 1 | 4
+		_ray.add_exception(self)
 		cam.add_child(_ray)
 		# Affedici etkileşim: ışın ıskalarsa ince bir küre taraması en yakın hedefi yakalar (zil, hırsız, müşteri)
 		_shape = ShapeCast3D.new()
@@ -385,6 +409,22 @@ func get_effective_shout() -> float:
 
 func select_slot(idx: int) -> void:
 	var prev_slot := active_slot
+	# Tüketim aşaması geçtiyse yuva değiştirme açığıyla sonsuz kullanım engellenir
+	if _action_kind != "" and _action_stage >= 1:
+		match _action_kind:
+			"smoke_drag": _finish_consumable_step(_action_item, "")
+			"tea_sip": _finish_consumable_step("cay", "")
+			"simit_bite", "simit_throw": _finish_consumable_step(_action_item, "")
+			"beer_sip":
+				var b_done := active_slot >= 0 and active_slot < inventory.size() and str(inventory[active_slot].get("id", "")) == "bira" \
+					and int(inventory[active_slot].get("puffs", 0)) >= int(Items.CATALOG["bira"]["puffs_per_use"])
+				_finish_consumable_step("bira", "")
+				if b_done:
+					_on_beer_finished()
+	if _pending_spray_empty:
+		_pending_spray_empty = false
+		if prev_slot >= 0 and prev_slot < inventory.size() and str(inventory[prev_slot].get("id", "")) == "spray" and int(inventory[prev_slot].get("uses", 0)) <= 0:
+			inventory[prev_slot] = {}
 	if idx < 0 or idx >= INV_SIZE:
 		active_slot = -1
 	elif active_slot == idx:
@@ -477,14 +517,23 @@ func _apply_live_cig_ash(visual: Node3D, burn_r: float, ash_r: float) -> void:
 		pap.scale.z = rem
 	var tip_grp := visual.find_child("CigTipGroup", true, false) as Node3D
 	if tip_grp:
-		tip_grp.position.z = -0.088 * rem
+		var burn_len: float = float(tip_grp.get_meta("burn_len", 0.088))
+		tip_grp.position.z = -burn_len * rem
 		var ash_b := tip_grp.find_child("AshBody", true, false) as Node3D
 		if ash_b:
 			ash_b.scale.z = lerpf(0.28, 2.15, clampf(ash_r, 0.0, 1.0))
 
 
+static func _disable_shadows_recursive(n: Node) -> void:
+	if n is GeometryInstance3D:
+		(n as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	for c in n.get_children():
+		_disable_shadows_recursive(c)
+
+
 func _refresh_equipped_visual() -> void:
 	_update_fp_hands()
+	_fp_radio_reels.clear()
 	if _fp_item_visual:
 		_fp_item_visual.queue_free()
 		_fp_item_visual = null
@@ -498,7 +547,13 @@ func _refresh_equipped_visual() -> void:
 	var ar := _current_ash_ratio()
 	if is_multiplayer_authority() and _fp_item_anchor:
 		_fp_item_visual = Items.build_item_model(iid, br, ar)
+		_disable_shadows_recursive(_fp_item_visual)
 		_fp_item_anchor.add_child(_fp_item_visual)
+		if iid == "radyo":
+			for rn in ["ReelL", "ReelR"]:
+				var rl := _fp_item_visual.find_child(rn, true, false) as Node3D
+				if rl:
+					_fp_radio_reels.append(rl)
 		# Karakterin kendi sağ eli (FP_GRIP ile her eşyaya tam oturtulur)
 		var grip: Array = FP_GRIP.get(iid, [Vector3(0.0, -0.05, 0.04), Vector3.ZERO, 0.7])
 		var fh := _make_fp_hand("HandR", float(grip[2]))
@@ -725,8 +780,10 @@ func _unhandled_input(e: InputEvent) -> void:
 			select_slot(-1)
 			return
 	if e is InputEventMouseMotion:
-		look_yaw = wrapf(look_yaw - e.relative.x * SENS, -PI, PI)
-		look_pitch = clampf(look_pitch - e.relative.y * SENS, -1.45, 1.35)
+		var sens := Settings.mouse_sens
+		var y_sgn := -1.0 if Settings.invert_y else 1.0
+		look_yaw = wrapf(look_yaw - e.relative.x * sens, -PI, PI)
+		look_pitch = clampf(look_pitch - e.relative.y * sens * y_sgn, -1.45, 1.35)
 		_sway_off.x = clampf(_sway_off.x - e.relative.x * 0.00055, -0.045, 0.045)
 		_sway_off.y = clampf(_sway_off.y + e.relative.y * 0.00045, -0.035, 0.035)
 	elif e.is_action_pressed("interact"):
@@ -850,6 +907,7 @@ func _use_active_item() -> void:
 			_start_action("mega_blast", iid, 0.72)
 			var pos := global_position + Vector3(0, 1.3, 0)
 			_trigger_item_fx_synced("mega", iid, pos, Vector3.UP)
+			SteamMgr.unlock("ACH_MEGA_VOICE")
 
 		"bicak":
 			if _knife_cd > 0.0:
@@ -859,7 +917,6 @@ func _use_active_item() -> void:
 			var pos := global_position + Vector3(0, 1.1, 0)
 			var fwd := -cam.global_transform.basis.z if cam else Vector3(0, 0, -1)
 			_trigger_item_fx_synced("knife", iid, pos, fwd)
-			_check_knife_hit(fwd)
 
 		"sopa":
 			if _knife_cd > 0.0:
@@ -873,6 +930,8 @@ func _use_active_item() -> void:
 			_set_hand_radio_synced(not _hand_radio_playing)
 			Sfx.play("ui_click", -8.0, 1.15 if _hand_radio_playing else 0.85)
 			_start_action("radio_toggle", iid, 0.34)
+			if _hand_radio_playing:
+				SteamMgr.unlock("ACH_DJ_ARABESK")
 
 		"spray":
 			if _spray_cd > 0.0:
@@ -889,16 +948,12 @@ func _use_active_item() -> void:
 			_start_action("spray_pump", iid, 0.56)
 			var sl := inventory[active_slot]
 			sl["uses"] = int(sl.get("uses", 1)) - 1
-			if int(sl["uses"]) <= 0:
-				inventory[active_slot] = {}
-				active_slot = -1
+			_pending_spray_empty = int(sl["uses"]) <= 0
 			var to_st: Vector3 = (st.global_position + Vector3(0, 0.75, 0)) - nozzle
 			var dir := (fwd * 0.5 + to_st.normalized() * 0.5).normalized()
 			_trigger_item_fx_synced("spray", iid, nozzle, dir)
 			st.request_spray(_my_peer_id())
-			add_trauma(0.05)
-			_sync_equipped_to_peers()
-			_refresh_equipped_visual()
+			add_trauma(0.08)
 			inventory_changed.emit()
 
 
@@ -1059,6 +1114,11 @@ func _tick_item_action(dt: float) -> void:
 							var target_fill := 0.04 if cur_p >= max_p else clampf(1.0 - (float(cur_p) / float(max_p)) * 0.88, 0.16, 1.0)
 							liq.create_tween().tween_property(liq, "scale:y", target_fill, 0.34).set_trans(Tween.TRANS_SINE)
 
+		"knife_slash":
+			if _action_stage == 0 and u >= 0.24:
+				_action_stage = 1
+				_check_knife_hit(fwd)
+
 		"bat_swing":
 			if _action_stage == 0 and u >= 0.42:
 				_action_stage = 1
@@ -1086,6 +1146,16 @@ func _tick_item_action(dt: float) -> void:
 				if active_slot >= 0 and active_slot < inventory.size() and str(inventory[active_slot].get("id", "")) == "bira":
 					inventory[active_slot]["puffs"] = int(inventory[active_slot].get("puffs", 0)) + 1
 					inventory_changed.emit()
+					if _fp_item_visual:
+						var bliq := _fp_item_visual.find_child("PilsnerLiquid", true, false) as Node3D
+						if bliq:
+							var bmax: int = int(Items.CATALOG["bira"]["puffs_per_use"])
+							var bcur: int = int(inventory[active_slot].get("puffs", 0))
+							var btgt := 0.12 if bcur >= bmax else clampf(1.0 - (float(bcur) / float(bmax)) * 0.72, 0.28, 1.0)
+							bliq.create_tween().tween_property(bliq, "scale:y", btgt, 0.32).set_trans(Tween.TRANS_SINE)
+						var bfoam := _fp_item_visual.find_child("BeerFoam", true, false) as Node3D
+						if bfoam:
+							bfoam.visible = false
 
 		"simit_bite":
 			if _action_stage == 0 and u >= 0.30:
@@ -1093,14 +1163,22 @@ func _tick_item_action(dt: float) -> void:
 				var mouth_p := _get_mouth_world() + fwd * 0.08
 				_trigger_item_fx_synced("simit_bite", _action_item, mouth_p, fwd)
 				simit_buff = minf(simit_buff + 18.0, MAX_BUFF)
-				add_trauma(0.06)
+				add_trauma(0.08)
 				if active_slot >= 0 and active_slot < inventory.size() and str(inventory[active_slot].get("id", "")) == _action_item:
 					inventory[active_slot]["puffs"] = int(inventory[active_slot].get("puffs", 0)) + 1
 					inventory_changed.emit()
-					var max_p: int = int(Items.CATALOG[_action_item]["puffs_per_use"])
-					if int(inventory[active_slot].get("puffs", 0)) < max_p:
-						_sync_equipped_to_peers()
-						_refresh_equipped_visual()
+					# Modeli yeniden kurmadan mevcut dilimleri gizle (animasyon sıçraması yok!)
+					if _fp_item_visual:
+						var br := _current_burn_ratio()
+						var is_acma := _action_item == "acma"
+						var total_s := 8 if is_acma else 10
+						var keep_s := clampi(int(round((1.0 - br * 0.72) * float(total_s))), 3, total_s)
+						var pref := "AcmaSeg_" if is_acma else "SimitSeg_"
+						for i in total_s:
+							var sg := _fp_item_visual.find_child("%s%d" % [pref, i], true, false) as Node3D
+							if sg:
+								sg.visible = i < keep_s
+					_sync_equipped_to_peers()
 
 	if _action_t >= _action_dur:
 		var done_kind := _action_kind
@@ -1117,6 +1195,15 @@ func _tick_item_action(dt: float) -> void:
 				_finish_consumable_step("cay", "🍵 Ohh mis gibi tavşan kanı çay bitti!")
 			"simit_bite", "simit_throw":
 				_finish_consumable_step(done_item, "🥯 Açma bitti, mis gibiydi!" if done_item == "acma" else "🥯 Çıtır simit bitti, enerji doldu!")
+			"spray_pump":
+				if _pending_spray_empty:
+					_pending_spray_empty = false
+					if active_slot >= 0 and active_slot < inventory.size() and str(inventory[active_slot].get("id", "")) == "spray":
+						inventory[active_slot] = {}
+						active_slot = -1
+					_sync_equipped_to_peers()
+					_refresh_equipped_visual()
+					inventory_changed.emit()
 			"beer_sip":
 				var bottle_done := false
 				if active_slot >= 0 and active_slot < inventory.size() and str(inventory[active_slot].get("id", "")) == "bira":
@@ -1154,6 +1241,8 @@ func _check_knife_hit(fwd: Vector3) -> void:
 			best_d = d
 			best_id = p.name.to_int()
 	if best_id > 0:
+		_hitstop_t = 0.04
+		add_trauma(0.22)
 		main.request_knife_attack(best_id)
 
 
@@ -1176,10 +1265,36 @@ func _check_bat_hit(fwd: Vector3) -> void:
 	if best:
 		var kd: Vector3 = best.global_position - global_position
 		best.knockout_synced(Vector3(kd.x, 0, kd.z))
-		add_trauma(0.2)
+		_hitstop_t = 0.045
+		add_trauma(0.32)
 		var main := _find_main()
 		if main and main.has_method("request_assault_report"):
 			main.request_assault_report(best.name.to_int(), "sopa")
+
+
+## Fırlatma çıkış noktasını duvar / tezgah içinde doğmasın diye gözden ışınla sınırlar.
+func _safe_throw_origin(desired: Vector3) -> Vector3:
+	if cam == null or not is_inside_tree():
+		return desired
+	var eye := cam.global_position
+	var sp := get_world_3d().direct_space_state
+	if sp == null:
+		return desired
+	var q := PhysicsRayQueryParameters3D.create(eye, desired, 1, [get_rid()])
+	var hit := sp.intersect_ray(q)
+	if not hit.is_empty():
+		var hp: Vector3 = hit["position"]
+		var d := desired - eye
+		var l := d.length()
+		if l > 0.001:
+			return hp - (d / l) * 0.14
+	return desired
+
+
+static func _safe_look_at(n: Node3D, from_p: Vector3, dir: Vector3) -> void:
+	var d := dir.normalized() if dir.length_squared() > 0.0001 else Vector3.FORWARD
+	var up := Vector3.UP if absf(d.y) < 0.94 else Vector3.RIGHT
+	n.look_at_from_position(from_p, from_p + d, up)
 
 
 func _throw_bat() -> void:
@@ -1191,9 +1306,9 @@ func _throw_bat() -> void:
 	_refresh_equipped_visual()
 	inventory_changed.emit()
 	var fwd := -cam.global_transform.basis.z if cam else Vector3(0, 0, -1)
-	var start_p := (cam.global_position if cam else global_position + Vector3(0, 1.2, 0)) + fwd * 0.5 + Vector3(0, -0.15, 0)
+	var start_p := _safe_throw_origin((cam.global_position if cam else global_position + Vector3(0, 1.2, 0)) + fwd * 0.5 + Vector3(0, -0.15, 0))
 	var vel := fwd * 13.0 + Vector3.UP * 2.0 + velocity * 0.35
-	add_trauma(0.1)
+	add_trauma(0.14)
 	if Net.online():
 		rpc_throw_bat.rpc(start_p, vel)
 	else:
@@ -1208,6 +1323,7 @@ func rpc_throw_bat(start_p: Vector3, vel: Vector3) -> void:
 	Sfx.play_3d("crate_throw", start_p, w, -5.0, 1.35)
 	var rb := RigidBody3D.new()
 	rb.mass = 1.0
+	rb.continuous_cd = true
 	rb.contact_monitor = true
 	rb.max_contacts_reported = 4
 	rb.add_collision_exception_with(self)
@@ -1220,9 +1336,10 @@ func rpc_throw_bat(start_p: Vector3, vel: Vector3) -> void:
 	cs.position = Vector3(0, 0, -0.2)
 	cs.rotation_degrees.x = 90.0
 	rb.add_child(cs)
-	rb.add_child(Items.build_item_model("sopa"))
+	var vis := Items.build_item_model("sopa")
+	rb.add_child(vis)
 	w.add_child(rb)
-	rb.look_at_from_position(start_p, start_p + vel)
+	_safe_look_at(rb, start_p, vel)
 	rb.linear_velocity = vel
 	rb.angular_velocity = rb.global_transform.basis.x * -14.0
 	rb.body_entered.connect(func(b: Node) -> void:
@@ -1244,7 +1361,7 @@ func rpc_throw_bat(start_p: Vector3, vel: Vector3) -> void:
 	)
 	var tw := rb.create_tween()
 	tw.tween_interval(14.0)
-	tw.tween_property(rb, "scale", Vector3.ONE * 0.01, 0.5)
+	tw.tween_property(vis, "scale", Vector3.ONE * 0.01, 0.5)
 	tw.tween_callback(rb.queue_free)
 
 
@@ -1264,9 +1381,9 @@ func _throw_beer() -> void:
 	_refresh_equipped_visual()
 	inventory_changed.emit()
 	var fwd := -cam.global_transform.basis.z if cam else Vector3(0, 0, -1)
-	var start_p := (cam.global_position if cam else global_position + Vector3(0, 1.2, 0)) + fwd * 0.48 + Vector3(0, -0.10, 0)
+	var start_p := _safe_throw_origin((cam.global_position if cam else global_position + Vector3(0, 1.2, 0)) + fwd * 0.48 + Vector3(0, -0.10, 0))
 	var vel := fwd * 7.8 + Vector3.UP * 2.5 + velocity * 0.22
-	add_trauma(0.11)
+	add_trauma(0.14)
 	if Net.online():
 		rpc_throw_beer.rpc(start_p, vel)
 	else:
@@ -1311,7 +1428,7 @@ func rpc_throw_beer(start_p: Vector3, vel: Vector3) -> void:
 	det.add_child(dcs)
 	rb.add_child(det)
 	w.add_child(rb)
-	rb.look_at_from_position(start_p, start_p + vel)
+	_safe_look_at(rb, start_p, vel)
 	rb.linear_velocity = vel
 	rb.angular_velocity = rb.global_transform.basis.x * -11.0 + Vector3(0, 4.5, 0)
 	var on_shatter := func(hit_node: Node, direct_stall_owner: int) -> void:
@@ -1361,6 +1478,7 @@ func _resolve_beer_impact(hit_body: Node, hit_p: Vector3, hit_v: Vector3, direct
 	var my_id := _my_peer_id()
 	# 0) Doğrudan rakip tezgah yuvasına / meyvelerine çarpma!
 	if direct_stall_owner > 0 and direct_stall_owner != my_id:
+		SteamMgr.unlock("ACH_SABOTAGE_BEER")
 		if main.has_method("request_beer_hit_stall"):
 			main.request_beer_hit_stall(direct_stall_owner)
 		return
@@ -1385,6 +1503,7 @@ func _resolve_beer_impact(hit_body: Node, hit_p: Vector3, hit_v: Vector3, direct
 		if kd.length_squared() < 0.05:
 			kd = vic.global_position - global_position
 			kd.y = 0.0
+		SteamMgr.unlock("ACH_SABOTAGE_BEER")
 		if main.has_method("request_beer_hit_player"):
 			main.request_beer_hit_player(vic.name.to_int(), kd)
 		return
@@ -1405,6 +1524,7 @@ func _resolve_beer_impact(hit_body: Node, hit_p: Vector3, hit_v: Vector3, direct
 					best_sd = sd
 					st = s
 	if st and main.has_method("request_beer_hit_stall"):
+		SteamMgr.unlock("ACH_SABOTAGE_BEER")
 		main.request_beer_hit_stall(int(st.owner_id))
 
 
@@ -1564,7 +1684,7 @@ func _fly_crumb(w: Node, from: Vector3, vel: Vector3) -> void:
 func _crumb_step(t: float, mi: Node3D, from: Vector3, vel: Vector3) -> void:
 	if is_instance_valid(mi):
 		mi.global_position = from + vel * t + Vector3(0, -4.9 * t * t, 0)
-		mi.rotation += Vector3(0.31, 0.2, 0.12)
+		mi.rotation = Vector3(t * 14.0, t * 9.0, t * 6.0)
 
 
 func _crumb_land(w: Node, land: Vector3) -> void:
@@ -1574,45 +1694,6 @@ func _crumb_land(w: Node, land: Vector3) -> void:
 	if st:
 		var side := (st as Node3D).global_transform.basis.x
 		get_tree().call_group("ambient", "feed_cat_at", land, (st as Node3D).global_position + side * 1.95)
-
-
-## Su fısfısı buğusu: yarı saydam mavi damlacık konisi, yavaşlayarak genişler ve söner.
-static func _spawn_mist(parent: Node, world_pos: Vector3, dir: Vector3) -> void:
-	if parent == null or not parent.is_inside_tree():
-		return
-	var p := CPUParticles3D.new()
-	p.one_shot = true
-	p.explosiveness = 0.55
-	p.amount = 26
-	p.lifetime = 0.75
-	p.mesh = LP.sphere(0.022, 5, 3)
-	var m := StandardMaterial3D.new()
-	m.vertex_color_use_as_albedo = true
-	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	p.material_override = m
-	p.direction = dir
-	p.spread = 13.0
-	p.initial_velocity_min = 2.0
-	p.initial_velocity_max = 3.6
-	p.gravity = Vector3(0, -1.6, 0)
-	p.damping_min = 2.0
-	p.damping_max = 3.4
-	var sc := Curve.new()
-	sc.add_point(Vector2(0.0, 0.5))
-	sc.add_point(Vector2(1.0, 1.7))
-	p.scale_amount_curve = sc
-	var grad := Gradient.new()
-	grad.set_color(0, Color(0.92, 0.98, 1.0, 0.85))
-	grad.add_point(0.5, Color(0.62, 0.84, 1.0, 0.45))
-	grad.set_color(1, Color(0.6, 0.82, 1.0, 0.0))
-	p.color_ramp = grad
-	parent.add_child(p)
-	p.global_position = world_pos
-	p.emitting = true
-	var tw := p.create_tween()
-	tw.tween_interval(p.lifetime + 0.3)
-	tw.tween_callback(p.queue_free)
 
 
 func apply_knife_hit_synced(knock_dir: Vector3) -> void:
@@ -1632,8 +1713,9 @@ func rpc_on_knife_hit(knock_dir: Vector3) -> void:
 	VFX.spawn_floating_text(w, global_position + Vector3(0, 1.85, 0), "💢 SALDIRIYA UĞRADIN!", Color(1.0, 0.28, 0.22), 44)
 	if is_multiplayer_authority():
 		_stun_t = 1.2
+		_knock_t = 0.35
 		velocity = knock_dir * 6.5 + Vector3.UP * 2.5
-		add_trauma(0.55)
+		add_trauma(0.65)
 		if held_crate:
 			_do_throw_crate()
 
@@ -1652,12 +1734,10 @@ func rpc_on_beer_hit(knock_dir: Vector3, stink_dur := 25.0) -> void:
 	stink_t = maxf(stink_t, stink_dur)
 	var w := _find_world()
 	if w:
-		Sfx.play_3d("glass_shatter", global_position + Vector3(0, 1.1, 0), w, -0.5, 0.96, 32.0)
-		VFX.spawn_beer_shatter(w, global_position + Vector3(0, 1.05, 0))
 		VFX.spawn_stink_puff(w, global_position + Vector3(0, 1.15, 0), true)
 		VFX.spawn_floating_text(w, global_position + Vector3(0, 1.9, 0), "🍺🤢 ŞİŞE YEDİN! LEŞ GİBİ KOKUYORSUN!", Color(0.66, 0.96, 0.28), 44)
 	if is_multiplayer_authority():
-		add_trauma(0.55)
+		add_trauma(0.65)
 		if held_crate:
 			_do_throw_crate()
 		_toast("🍺🤢 Kafana bira şişesi yedin! %dsn kötü kokacaksın!" % int(round(stink_dur)), Color(0.68, 0.95, 0.30))
@@ -1719,7 +1799,19 @@ func _process(dt: float) -> void:
 			_tp_dur = 0.0
 
 	if is_multiplayer_authority():
-		_tick_item_action(dt)
+		if _hitstop_t > 0.0:
+			_hitstop_t = maxf(_hitstop_t - dt, 0.0)
+		else:
+			_tick_item_action(dt)
+		# Sağ analog çubuk bakışı (Gamepad / Steam Deck)
+		if _ko_phase == 0 and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED and InputMap.has_action("look_left"):
+			var rx := Input.get_axis("look_left", "look_right")
+			var ry := Input.get_axis("look_up", "look_down")
+			if absf(rx) > 0.01 or absf(ry) > 0.01:
+				var gs := Settings.gamepad_sens
+				var ys := -1.0 if Settings.invert_y else 1.0
+				look_yaw = wrapf(look_yaw - rx * gs * dt, -PI, PI)
+				look_pitch = clampf(look_pitch - ry * gs * ys * dt, -1.45, 1.35)
 		# Standart sigara mekaniği: yanan sigara elde dururken yavaşça kül uzatır, çok uzarsa kendiliğinden düşer!
 		if _action_kind == "" and active_slot >= 0 and active_slot < inventory.size():
 			var eq_s := equipped_item_id()
@@ -1733,8 +1825,11 @@ func _process(dt: float) -> void:
 				inventory[active_slot]["ash"] = cur_ash
 				_apply_live_cig_ash(_fp_item_visual, _current_burn_ratio(), cur_ash)
 
-	# Elde çalan Arabesk Radyo notaları
+	# Elde çalan Arabesk Radyo notaları + makara dönüşü
 	if _hand_radio_playing:
+		for rl in _fp_radio_reels:
+			if is_instance_valid(rl):
+				rl.rotation.z -= dt * 3.6
 		_radio_note_cd -= dt
 		if _radio_note_cd <= 0.0:
 			_radio_note_cd = 1.15
@@ -1752,6 +1847,13 @@ func _process(dt: float) -> void:
 		_process_voice_capture(dt)
 		if _ko_phase == 0:
 			_process_interaction(dt)
+		# Kamera render hızında (144/240 Hz kaymak gibi!)
+		if cam_root:
+			var cam_dt := dt * (0.15 if _hitstop_t > 0.0 else 1.0)
+			if _ko_phase != 0:
+				_ko_camera(cam_dt)
+			else:
+				_camera(cam_dt)
 	else:
 		_process_voice_remote(dt)
 		_pump_voice_playback()
@@ -1779,7 +1881,11 @@ func _physics_process(dt: float) -> void:
 	elif is_multiplayer_authority():
 		_local(dt)
 	else:
-		position = position.lerp(net_pos, minf(dt * 15.0, 1.0))
+		var lead := net_pos + _net_vel * 0.04
+		if position.distance_squared_to(lead) > 16.0:
+			position = net_pos
+		else:
+			position = position.lerp(lead, minf(dt * 14.0, 1.0))
 	_turn_body(dt)
 	if _ko_phase != 0:
 		_ko_tick(dt)
@@ -1787,11 +1893,20 @@ func _physics_process(dt: float) -> void:
 		_animate(dt)
 	_animate_mouth(dt)
 	_animate_eyes(dt)
-	if cam_root:
-		if _ko_phase != 0:
-			_ko_camera(dt)
-		else:
-			_camera(dt)
+
+
+func _surface_under(pos: Vector3) -> String:
+	var w := _find_world()
+	if w:
+		var bz := w.get_node_or_null("Bazaar")
+		if bz == null:
+			for c in w.get_children():
+				if c.has_method("is_in_puddle"):
+					bz = c
+					break
+		if bz and bz.has_method("is_in_puddle") and bz.call("is_in_puddle", pos):
+			return "puddle"
+	return "paver" if absf(pos.x) > 4.25 else "asphalt"
 
 
 func _local(dt: float) -> void:
@@ -1799,16 +1914,30 @@ func _local(dt: float) -> void:
 	tea_buff = maxf(tea_buff - dt, 0.0)
 	simit_buff = maxf(simit_buff - dt, 0.0)
 	smoke_buff = maxf(smoke_buff - dt, 0.0)
+	if _knock_t > 0.0:
+		_knock_t = maxf(_knock_t - dt, 0.0)
+	if _ko_phase != 0:
+		velocity = Vector3.ZERO
+		spd = 0.0
+		sprint_k = lerpf(sprint_k, 0.0, minf(dt * 10.0, 1.0))
+		_sync_t += dt
+		if Net.online() and _sync_t >= 0.05:
+			_sync_t = 0.0
+			sync_state.rpc(global_position, body_yaw, look_yaw, look_pitch, 0.0, false, 0.0, Vector3.ZERO)
+		return
 	var inp := Vector2.ZERO
 	var captured := Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
 	if captured and _stun_t <= 0.0:
 		inp = Input.get_vector("left", "right", "fwd", "back")
 	var dir := (Basis(Vector3.UP, look_yaw) * Vector3(inp.x, 0, inp.y)).normalized()
 	var running := Input.is_action_pressed("run") and inp.y < 0.0 and _stun_t <= 0.0
-	# Hız bonusları birikmez, büyüğü geçer: sigara/puro %25, simit %15
+	# Hız bonusları birikmez, büyüğü geçer: sigara/puro %25, simit %15; dolu kasa hafif ağırlık hissi (%92)
 	var speed_k := 1.25 if smoke_buff > 0.0 else (1.15 if simit_buff > 0.0 else 1.0)
-	var target := dir * (RUN if running else WALK) * speed_k
-	var accel := (14.0 if target != Vector3.ZERO else 18.0) if is_on_floor() else 3.0
+	var carry_k := 0.92 if (held_crate and held_count > 0) else 1.0
+	var target := dir * (RUN if running else WALK) * speed_k * carry_k
+	var accel := (14.0 if target != Vector3.ZERO else 18.0) if is_on_floor() else (3.2 if target != Vector3.ZERO else 0.9)
+	if _knock_t > 0.0:
+		accel = 1.6
 	velocity.x = move_toward(velocity.x, target.x, accel * dt * WALK)
 	velocity.z = move_toward(velocity.z, target.z, accel * dt * WALK)
 	var was_air := air
@@ -1838,8 +1967,9 @@ func _local(dt: float) -> void:
 		velocity = Vector3.ZERO
 	spd = Vector2(velocity.x, velocity.z).length()
 	air = not is_on_floor()
-	# Koşma efekti yoğunluğu (HUD hız çizgileri ve FOV artışı için)
-	var target_sprint := clampf((spd - WALK - 0.35) / (RUN - WALK), 0.0, 1.0) if (running and not air) else 0.0
+	# Koşma efekti yoğunluğu (zıplarken FOV ani çökmesin, havada ivmeyi koru)
+	var keep_sprint := running and (not air or sprint_k > 0.25)
+	var target_sprint := clampf((spd - WALK - 0.35) / (RUN - WALK), 0.0, 1.0) if keep_sprint else 0.0
 	sprint_k = lerpf(sprint_k, target_sprint, minf(dt * 9.0, 1.0))
 	# Yanal kayışta hafif kamera yatışı
 	var side_v := (Basis(Vector3.UP, look_yaw).inverse() * velocity).x
@@ -1847,51 +1977,60 @@ func _local(dt: float) -> void:
 	if was_air and not air:
 		var impact := clampf(fall_v / 9.0, 0.35, 1.4)
 		land_t = 0.14 * impact
-		add_trauma(0.06 + 0.08 * impact)
-		Sfx.play("step", -13.0 + impact * 3.0, 0.9 - impact * 0.08)
-		VFX.burst_dust(_find_world(), global_position + Vector3(0, 0.08, 0), Color(0.84, 0.80, 0.72), int(3 + impact * 3.0))
-	# Bağırma: El Megafonu takılıysa mikrofon dB +12 dB güçlenir!
-	var db_boost := 12.0 if is_holding_item("megafon") else 0.0
+		add_trauma(0.10 + 0.12 * impact)
+		var surf := _surface_under(global_position)
+		Sfx.play_step(surf, global_position, true, clampf(impact * 0.7, 0.2, 1.0))
+		if surf == "puddle":
+			VFX.spawn_splash(_find_world(), global_position + Vector3(0, 0.02, 0))
+		else:
+			VFX.burst_dust(_find_world(), global_position + Vector3(0, 0.08, 0), Color(0.84, 0.80, 0.72), int(3 + impact * 3.0))
+	# Bağırma: megafon +12 dB sadece gerçekten ses eşiği geçildiğinde eklenir (sessizlik bağırma sayılmaz!)
+	var db_boost := 12.0 if (is_holding_item("megafon") and talk_db > Settings.mic_threshold_db) else 0.0
 	var manual_shout := SHOUT_KEY_POWER if (captured and Input.is_action_pressed("shout")) else 0.0
-	var mic_shout := 0.0 if mic_muted else \
+	var mic_active := (not mic_muted) and (Settings.voice_mode == 0 or Input.is_action_pressed("ptt")) and talk_db > Settings.mic_threshold_db
+	var mic_shout := 0.0 if not mic_active else \
 		clampf(((talk_db + db_boost) - SHOUT_DB_MIN) / (SHOUT_DB_MAX - SHOUT_DB_MIN), 0.0, 1.0) * 1.45
 	var burst := 1.05 if _mega_burst > 0.0 else 0.0
 	# Çay: senkronlanan shout_power'a uygulanır ki host da görsün
 	var tea_k: float = (1.25 if tea_buff > 0.0 else 1.0) * float(DRUNK_SHOUT[mini(drunk_level, 2)])
 	shout_power = lerpf(shout_power, maxf(maxf(manual_shout, mic_shout), burst) * tea_k, minf(dt * 14.0, 1.0))
-	if Net.online():
-		sync_state.rpc(global_position, body_yaw, look_yaw, look_pitch, spd, air, shout_power)
+	_sync_t += dt
+	if Net.online() and _sync_t >= 0.05:
+		_sync_t = 0.0
+		sync_state.rpc(global_position, body_yaw, look_yaw, look_pitch, spd, air, shout_power, velocity)
 
 
-## Azaltılmış yumuşak ekran sarsılması + canlı koşma FOV efekti + 1. şahıs eşya animasyonları!
+## Akıcı kamera + hissedilir darbe sarsıntısı + kullanıcı FOV/Hareket Azaltma uyumlu 1. şahıs eşya animasyonları!
 func _camera(dt: float) -> void:
 	if _mirror_t > 0.0:
 		_mirror_camera(dt)
 		return
+	var motion_k := 0.25 if Settings.reduce_motion else 1.0
 	var kr := clampf((spd - WALK) / (RUN - WALK), 0.0, 1.0)
 	bob_k = lerpf(bob_k, 0.0 if air else clampf(spd / WALK, 0.0, 1.0), minf(dt * 8.0, 1.0))
-	# Ekran sarsılması ~%65 azaltıldı: kaymak gibi akıcı yürüyüş ve koşu!
-	var amp := lerpf(0.010, 0.022, kr) * bob_k
-	var bob := Vector3(cos(phase) * amp * 0.45, absf(sin(phase)) * amp - amp * 0.5 - land_t * 0.18, 0)
+	var amp := lerpf(0.010, 0.022, kr) * bob_k * motion_k
+	var bob := Vector3(cos(phase) * amp * 0.45, absf(sin(phase)) * amp - amp * 0.5 - land_t * 0.18 * motion_k, 0)
 
 	var shake_off := Vector3.ZERO
 	var shake_roll := 0.0
 	if _trauma > 0.0:
-		_trauma = maxf(_trauma - dt * 2.4, 0.0)
-		var sh := _trauma * _trauma
-		_shake_t += dt * 30.0
-		shake_off = Vector3(sin(_shake_t * 1.7) * 0.015 * sh, sin(_shake_t * 2.3) * 0.012 * sh, 0.0)
-		shake_roll = sin(_shake_t * 1.2) * 0.014 * sh
+		_trauma = maxf(_trauma - dt * 2.2, 0.0)
+		var sh := _trauma * _trauma * motion_k
+		_shake_t += dt * 34.0
+		shake_off = Vector3((sin(_shake_t * 1.7) + cos(_shake_t * 3.1) * 0.4) * 0.032 * sh,
+			(sin(_shake_t * 2.3) + sin(_shake_t * 4.7) * 0.35) * 0.028 * sh, 0.0)
+		shake_roll = (sin(_shake_t * 1.3) + cos(_shake_t * 2.9) * 0.4) * 0.036 * sh
 
 	var yb := Basis(Vector3.UP, look_yaw)
 	cam_root.position = Vector3(0, EYE_Y, 0) + yb * (Vector3(0, 0, -EYE_FWD) + bob + shake_off)
-	var dk: float = DRUNK_SWAY[mini(drunk_level, 2)]
+	var dk: float = float(DRUNK_SWAY[mini(drunk_level, 2)]) * motion_k
 	var dt_s := Time.get_ticks_msec() * 0.001
 	var dsway := Vector3(sin(dt_s * 0.9) * 0.4, sin(dt_s * 0.63 + 1.0), sin(dt_s * 1.1)) * dk
-	cam_root.rotation = Vector3(clampf(look_pitch + _cam_pitch_mod + dsway.x * 0.5, -1.45, 1.35), look_yaw + dsway.y * 0.6, -cos(phase) * 0.004 * bob_k * (1.0 + kr) + shake_roll + _strafe_roll + dsway.z)
-	# Belirgin koşma FOV açılması (78° -> 89°!) + nefes çekme/üfleme mikro odaklanması
-	var smoke_fov := 3.5 if smoke_buff > 0.0 else 0.0 # sigara hızı: hafif FOV açılması
-	cam.fov = lerpf(cam.fov, 78.0 + sprint_k * 11.5 + smoke_fov + _cam_fov_mod, minf(dt * 7.5, 1.0))
+	cam_root.rotation = Vector3(clampf(look_pitch + _cam_pitch_mod + dsway.x * 0.5, -1.45, 1.35), look_yaw + dsway.y * 0.6,
+		-cos(phase) * 0.004 * bob_k * (1.0 + kr) * motion_k + shake_roll + _strafe_roll * motion_k + dsway.z)
+	var smoke_fov := 3.5 if smoke_buff > 0.0 else 0.0
+	var sprint_fov := sprint_k * 10.5 * (0.45 if Settings.reduce_motion else 1.0)
+	cam.fov = lerpf(cam.fov, Settings.fov + sprint_fov + smoke_fov + _cam_fov_mod, minf(dt * 8.0, 1.0))
 
 	if _fp_crate_anchor:
 		_place_kick = lerpf(_place_kick, 0.0, minf(dt * 14.0, 1.0))
@@ -1952,16 +2091,11 @@ func _camera(dt: float) -> void:
 				a_rot = Vector3(8.0, -28.0, 14.0) * lift
 
 			"ash_flick":
-				# Keskin bilek vuruşu + işaret parmağı dokunuşuyla kül silkme!
+				# Keskin bilek vuruşuyla kül silkme!
 				var f1 := sin(u * PI)
 				var snap := sin(clampf((u - 0.28) / 0.36, 0.0, 1.0) * PI)
 				a_pos = Vector3(-0.04 * f1, -0.025 * f1 - 0.038 * snap, -0.02 * f1)
 				a_rot = Vector3(-24.0 * snap - 6.0 * f1, -10.0 * f1, -12.0 * snap)
-				var idx_f := _fp_item_visual.find_child("IndexFinger", true, false) as Node3D
-				if idx_f:
-					var j1 := idx_f.get_node_or_null("J1") as Node3D
-					if j1:
-						j1.rotation_degrees.x = -10.0 - 28.0 * snap
 
 			"beer_sip":
 				# Şişeyi ağza kaldır ve şişe ağzını (+X dönüşüyle) OYUNCUYA doğru yatırıp yudumla!
@@ -2121,6 +2255,11 @@ func _camera(dt: float) -> void:
 			if dial and dial.material_override is StandardMaterial3D:
 				(dial.material_override as StandardMaterial3D).emission_energy_multiplier = 1.2 + beat * 1.1
 
+		elif iid == "spray" and _action_kind != "spray_pump":
+			var trig_r := _fp_item_visual.find_child("Trigger", true, false) as Node3D
+			if trig_r:
+				trig_r.rotation.x = lerpf(trig_r.rotation.x, -0.35, minf(dt * 12.0, 1.0))
+
 		_fp_item_visual.position = a_pos
 		_fp_item_visual.rotation_degrees = a_rot
 
@@ -2129,8 +2268,9 @@ func _camera(dt: float) -> void:
 
 
 @rpc("authority", "unreliable_ordered")
-func sync_state(p: Vector3, by: float, ly: float, lp: float, s: float, a: bool, sp := 0.0) -> void:
+func sync_state(p: Vector3, by: float, ly: float, lp: float, s: float, a: bool, sp := 0.0, vel := Vector3.ZERO) -> void:
 	net_pos = p
+	_net_vel = vel
 	body_yaw = by
 	look_yaw = ly
 	look_pitch = lp
@@ -2168,11 +2308,21 @@ func _animate(dt: float) -> void:
 	var lift := lerpf(0.11, 0.20, kr) * kw
 	if not air and spd > 0.08:
 		phase = wrapf(phase + dt * (spd / stride_full) * 0.94, 0.0, TAU)
-		if not npc and is_multiplayer_authority() and spd > 0.65:
+		if not npc and spd > 0.65:
 			var cur_half := 0 if phase < PI else 1
-			if cur_half != _prev_step_half:
-				_prev_step_half = cur_half
-				Sfx.play("step", -14.0 + kr * 4.5, 0.96 + kr * 0.16 + float(cur_half) * 0.07)
+			if is_multiplayer_authority():
+				if cur_half != _prev_step_half:
+					_prev_step_half = cur_half
+					var surf := _surface_under(global_position)
+					Sfx.play_step(surf, global_position, true, kr)
+					if surf == "puddle":
+						VFX.spawn_splash(_find_world(), global_position + Vector3(0, 0.02, 0))
+			elif cur_half != _rem_step_half:
+				_rem_step_half = cur_half
+				var rsurf := _surface_under(global_position)
+				Sfx.play_step(rsurf, global_position, false, kr)
+				if rsurf == "puddle":
+					VFX.spawn_splash(_find_world(), global_position + Vector3(0, 0.02, 0))
 	land_t = maxf(land_t - dt, 0.0)
 	var land := land_t / 0.14
 	var breathe := sin(t * 2.2)
@@ -2238,12 +2388,28 @@ func _animate(dt: float) -> void:
 				"sopa":
 					p = rest[n] + Vector3(0.04, 0.16, 0.16)
 					r = Vector3(-0.2, 0.0, 0.0)
+				"bicak":
+					p = rest[n] + Vector3(0.03, 0.13, 0.18)
+					r = Vector3(-0.35, 0.15, 0.0)
+				"radyo":
+					p = rest[n] + Vector3(0.05, 0.10 + breathe * 0.01, 0.16)
+					r = Vector3(-0.15, -0.25, 0.0)
+				"spray":
+					p = rest[n] + Vector3(0.03, 0.14, 0.18)
+					r = Vector3(-0.28, 0.10, 0.0)
 				"megafon":
 					var sh_k := 1.0 if (shout_power >= SHOUT_ON or _mega_burst > 0.0) else 0.25
 					p = rest[n] + Vector3(0.14 * sh_k, 0.26 * sh_k + 0.08, 0.24 * sh_k + 0.08)
 					r = Vector3(-0.5 * sh_k, 0.2 * sh_k, 0.0)
 			p.y += hold_bob
 			match _tp_action:
+				"mega":
+					p = rest[n] + Vector3(0.16 * tp_env, 0.32 * tp_env + 0.08, 0.28 * tp_env + 0.08)
+					r = Vector3(-0.55 * tp_env, 0.22 * tp_env, 0.0)
+					head_tilt_tp = -0.10 * tp_env
+				"radio_tune":
+					p = rest[n] + Vector3(0.08 * tp_env, 0.16 * tp_env + 0.08, 0.22 * tp_env + 0.10)
+					r = Vector3(-0.35 * tp_env, -0.35 * tp_env, 0.0)
 				"smoke_inhale":
 					p = rest[n] + Vector3(0.18 * tp_env, 0.34 * tp_env + 0.10, 0.26 * tp_env + 0.08)
 					r = Vector3(-0.75 * tp_env, 0.4 * tp_env, 0.0)
@@ -2317,7 +2483,8 @@ func _set_self_visible(on: bool) -> void:
 
 static func _invisible_mat() -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
-	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
+	m.alpha_scissor_threshold = 1.0
 	m.albedo_color = Color(0, 0, 0, 0)
 	return m
 
@@ -2337,6 +2504,7 @@ func _save_look() -> void:
 	for k in look:
 		cf.set_value("look", k, look[k])
 	cf.save(LOOK_FILE)
+	SteamMgr.cloud_save_file("gorunum.cfg", LOOK_FILE)
 
 
 ## Host (satın alma sonrası) ya da sahibi çağırır: herkeste görünüm güncellenir.
@@ -2452,7 +2620,16 @@ func _mirror_camera(dt: float) -> void:
 	var fwd := ht.basis.z
 	fwd.y = 0.0
 	fwd = fwd.normalized() if fwd.length_squared() > 0.001 else Vector3(0, 0, 1)
-	var eye := ht.origin + fwd * 1.2 + Vector3(0, 0.08, 0)
+	var desired := ht.origin + fwd * 1.2 + Vector3(0, 0.08, 0)
+	var eye := desired
+	var sp := get_world_3d().direct_space_state if is_inside_tree() else null
+	if sp:
+		var hit := sp.intersect_ray(PhysicsRayQueryParameters3D.create(ht.origin, desired, 1, [get_rid()]))
+		if not hit.is_empty():
+			var d := desired - ht.origin
+			var l := d.length()
+			if l > 0.01:
+				eye = (hit["position"] as Vector3) - (d / l) * 0.14
 	var target := Transform3D(Basis.looking_at(ht.origin - eye, Vector3.UP), eye)
 	cam_root.global_transform = cam_root.global_transform.interpolate_with(target, minf(dt * 8.0, 1.0))
 	if _mirror_t <= 0.0:
@@ -2473,6 +2650,7 @@ func _on_beer_finished() -> void:
 			_toast("🍺🍺 Kafalar güzel... fiyat ayarına dikkat!", Color(0.6, 0.8, 1.0))
 		_:
 			_toast("🍺🍺🍺 Gözlerin kapanıyor...", Color(1.0, 0.6, 0.6))
+			SteamMgr.unlock("ACH_BEER_FAINT")
 			_faint_t = FAINT_CLOSE
 
 
@@ -2500,8 +2678,12 @@ func _tick_drunk(dt: float) -> void:
 			knockout_synced(fwd, FAINT_SLEEP)
 		return
 	if beer_fainted:
-		eyelid = 1.0 if _ko_t > 1.0 else clampf(_ko_t, 0.0, 1.0)
-		if _ko_phase == 0:
+		if _ko_phase == 1:
+			eyelid = 1.0
+		elif _ko_phase == 2:
+			eyelid = clampf(_ko_t / KO_REASM, 0.0, 1.0)
+		else:
+			eyelid = 0.0
 			beer_fainted = false
 			_set_drunk(1)
 			_toast("🥴 Ayıldın... biraz", Color(0.8, 0.8, 1.0))
@@ -2534,6 +2716,10 @@ func rpc_knockout(dir: Vector3, dur := KO_TIME) -> void:
 	dir = dir.normalized() if dir.length_squared() > 0.001 else Vector3(0, 0, 1)
 	_ko_phase = 1
 	_ko_t = dur
+	if _col_shape:
+		_col_shape.disabled = true
+	var krng := RandomNumberGenerator.new()
+	krng.seed = hash(name) ^ int(round(global_position.x * 10.0)) ^ int(round(global_position.z * 10.0))
 	var mat := PhysicsMaterial.new()
 	mat.friction = 1.0
 	mat.bounce = 0.0
@@ -2570,9 +2756,8 @@ func rpc_knockout(dir: Vector3, dur := KO_TIME) -> void:
 		j.global_position = body.global_position.lerp(rb.global_position, 0.5)
 		j.node_a = body.get_path()
 		j.node_b = rb.get_path()
-		# PARAM_BIAS Jolt Physics ile desteklenmiyor (uyarı basıyordu); varsayılan yeterli
 		_ko_joints.append(j)
-		rb.apply_central_impulse(dir * 3.0 * rb.mass + Vector3(randf_range(-0.5, 0.5), 0.5, randf_range(-0.5, 0.5)) * rb.mass)
+		rb.apply_central_impulse(dir * 3.0 * rb.mass + Vector3(krng.randf_range(-0.4, 0.4), 0.5, krng.randf_range(-0.4, 0.4)) * rb.mass)
 	body.apply_central_impulse(dir * 55.0 + Vector3.UP * 30.0)
 	body.apply_torque_impulse(Vector3.UP.cross(dir) * 6.0)
 	(_ko_rbs["Head"] as RigidBody3D).apply_central_impulse(dir * 14.0 + Vector3.UP * 4.0)
@@ -2581,7 +2766,7 @@ func rpc_knockout(dir: Vector3, dur := KO_TIME) -> void:
 	VFX.burst_dust(w, pos + Vector3(0, 0.1, 0), Color(0.84, 0.80, 0.72), 6)
 	VFX.spawn_hit_burst(w, pos + Vector3(0, 0.5, 0))
 	if is_multiplayer_authority():
-		_stun_t = KO_TIME + 1.0
+		_stun_t = dur + KO_REASM
 		_action_kind = ""
 		_action_dur = 0.0
 		_place_held = false
@@ -2635,8 +2820,11 @@ func _ko_tick(dt: float) -> void:
 	if _ko_phase == 1:
 		for n: String in _ko_rbs:
 			var rb := _ko_rbs[n] as RigidBody3D
-			if is_instance_valid(rb) and rb.linear_velocity.length() > 4.5:
-				rb.linear_velocity = rb.linear_velocity.normalized() * 4.5 # uçup gitmesin
+			if is_instance_valid(rb):
+				if rb.linear_velocity.length() > 4.5:
+					rb.linear_velocity = rb.linear_velocity.normalized() * 4.5
+				if rb.angular_velocity.length() > 12.0:
+					rb.angular_velocity = rb.angular_velocity.normalized() * 12.0
 		if _ko_t <= 0.0:
 			_ko_begin_reassemble()
 	else:
@@ -2650,8 +2838,17 @@ func _ko_tick(dt: float) -> void:
 func _ko_begin_reassemble() -> void:
 	var body := _ko_rbs["Body"] as RigidBody3D
 	if is_multiplayer_authority() and is_instance_valid(body):
-		# Otoriteli konum ayağa kalkarken ragdoll gövdesine taşınır (sync_state sonrası herkese yayılır)
-		global_position = Vector3(body.global_position.x, global_position.y, body.global_position.z)
+		# Güvenli kalkış konumu: sınırlar içinde, tezgah/kamyon dışında ve zemine tam oturmuş
+		var safe := Vector3(clampf(body.global_position.x, -13.6, 13.6), maxf(body.global_position.y, 0.05), clampf(body.global_position.z, -20.2, 20.2))
+		safe = StallScript.world_keepout_all(self, safe)
+		var sp := get_world_3d().direct_space_state if is_inside_tree() else null
+		if sp:
+			var hit := sp.intersect_ray(PhysicsRayQueryParameters3D.create(Vector3(safe.x, 2.2, safe.z), Vector3(safe.x, -0.5, safe.z), 1, [get_rid()]))
+			if not hit.is_empty():
+				safe.y = (hit["position"] as Vector3).y + 0.04
+			else:
+				safe.y = 0.08
+		global_position = safe
 		velocity = Vector3.ZERO
 		net_pos = global_position
 	_ko_start.clear()
@@ -2675,6 +2872,8 @@ func _ko_end() -> void:
 	_ko_phase = 0
 	_ko_start.clear()
 	_stun_t = 0.0
+	if _col_shape:
+		_col_shape.disabled = false
 	if is_multiplayer_authority():
 		if cam_root:
 			cam_root.top_level = false
@@ -2689,14 +2888,24 @@ func _ko_end() -> void:
 	_update_fp_hands()
 
 
-## Bayılırken kamera kafa parçasını izler; toparlanırken 1. şahıs gözüne süzülür.
+## Bayılırken kamera kafa parçasını izler; zemin/duvar kesmesi olmadan 1. şahıs gözüne süzülür.
 func _ko_camera(dt: float) -> void:
 	var ht := (parts["Head"] as Node3D).global_transform
 	var hb := ht.basis.orthonormalized()
-	var target := Transform3D(hb * Basis(Vector3.UP, PI), ht.origin + hb * Vector3(0, 0.02, 0.12))
+	var eye := ht.origin + hb * Vector3(0, 0.02, 0.12)
+	eye.y = maxf(eye.y, 0.14)
+	var sp := get_world_3d().direct_space_state if is_inside_tree() else null
+	if sp:
+		var hit := sp.intersect_ray(PhysicsRayQueryParameters3D.create(ht.origin, eye, 1, [get_rid()]))
+		if not hit.is_empty():
+			eye = (hit["position"] as Vector3).lerp(ht.origin, 0.25)
+			eye.y = maxf(eye.y, 0.14)
+	var target := Transform3D(hb * Basis(Vector3.UP, PI), eye)
 	if _ko_phase == 2:
 		var k := smoothstep(0.0, 1.0, 1.0 - clampf(_ko_t / KO_REASM, 0.0, 1.0))
-		var fp := Transform3D(Basis.from_euler(Vector3(look_pitch, look_yaw, 0.0), EULER_ORDER_YXZ), global_position + Vector3(0, EYE_Y, 0))
+		var yb := Basis(Vector3.UP, look_yaw)
+		var fp_origin := global_position + Vector3(0, EYE_Y, 0) + yb * Vector3(0, 0, -EYE_FWD)
+		var fp := Transform3D(Basis.from_euler(Vector3(look_pitch, look_yaw, 0.0), EULER_ORDER_YXZ), fp_origin)
 		target = target.interpolate_with(fp, k)
 	var cur := cam_root.global_transform
 	cam_root.global_transform = Transform3D(cur.basis.orthonormalized(), cur.origin).interpolate_with(target, minf(dt * 10.0, 1.0))
@@ -2741,6 +2950,7 @@ func _setup_voice_playback() -> void:
 	gen.mix_rate = VOICE_RATE
 	gen.buffer_length = VOICE_GEN_SEC
 	_voice_player = AudioStreamPlayer3D.new()
+	_voice_player.bus = Sfx.BUS_VOICE
 	_voice_player.stream = gen
 	_voice_player.attenuation_model = AudioStreamPlayer3D.ATTENUATION_INVERSE_DISTANCE
 	_voice_player.unit_size = VOICE_UNIT_SIZE
@@ -2766,7 +2976,8 @@ func _process_voice_capture(dt: float) -> void:
 			talk_db = lerpf(talk_db, -60.0, minf(dt * 10.0, 1.0))
 		return
 	var frames := _voice_cap.get_buffer(avail)
-	if mic_muted:
+	var ptt_blocked := Settings.voice_mode == 1 and not Input.is_action_pressed("ptt")
+	if mic_muted or ptt_blocked:
 		talk_level = 0.0
 		talk_db = -60.0
 		_voice_accum.clear()
@@ -2779,9 +2990,10 @@ func _process_voice_capture(dt: float) -> void:
 	var mono := PackedFloat32Array()
 	mono.resize(n)
 	var sum_sq := 0.0
+	var gain := Settings.mic_gain
 	for i in n:
 		var v := frames[i]
-		var x := 0.5 * (v.x + v.y)
+		var x := 0.5 * (v.x + v.y) * gain
 		var hp := hp_a * (_hp_prev_out + x - _hp_prev_in)
 		_hp_prev_in = x
 		_hp_prev_out = hp
@@ -2792,9 +3004,10 @@ func _process_voice_capture(dt: float) -> void:
 	var rms := sqrt(sum_sq / float(n))
 	var db := linear_to_db(maxf(rms, 0.00001))
 	talk_db = db
-	var lvl := clampf((db - VOICE_DB_MIN) / (VOICE_DB_MAX - VOICE_DB_MIN), 0.0, 1.0)
+	var gate_db := Settings.mic_threshold_db
+	var lvl := clampf((db - gate_db) / maxf(VOICE_DB_MAX - gate_db, 10.0), 0.0, 1.0)
 	talk_level = lvl
-	if lvl > 0.02:
+	if db >= gate_db:
 		_voice_hold = 0.28
 	else:
 		_voice_hold = maxf(_voice_hold - dt, 0.0)
@@ -2827,6 +3040,10 @@ func _process_voice_capture(dt: float) -> void:
 func voice_packet(pcm: PackedByteArray, lvl: float) -> void:
 	if npc or is_multiplayer_authority():
 		return
+	if Settings.is_peer_muted(_my_peer_id()):
+		_remote_talk = 0.0
+		_rx_buf.clear()
+		return
 	_remote_talk = clampf(lvl, 0.0, 1.0)
 	_remote_talk_t = 0.26
 	var samples := pcm.size() / 2
@@ -2841,6 +3058,18 @@ func voice_packet(pcm: PackedByteArray, lvl: float) -> void:
 
 
 func _pump_voice_playback() -> void:
+	if _voice_player:
+		var muted := Settings.is_peer_muted(_my_peer_id())
+		var holding_mega := is_holding_item("megafon")
+		var want_bus := Sfx.BUS_VOICE_MEGA if holding_mega else Sfx.BUS_VOICE
+		if _voice_player.bus != want_bus:
+			_voice_player.bus = want_bus
+		_voice_player.max_distance = 44.0 if holding_mega else VOICE_MAX_DIST
+		_voice_player.unit_size = 11.0 if holding_mega else VOICE_UNIT_SIZE
+		_voice_player.volume_db = -80.0 if muted else (10.0 if holding_mega else 7.0)
+		if muted:
+			_rx_buf.clear()
+			return
 	if _voice_pb == null and _voice_player:
 		_voice_player.play()
 		_voice_pb = _voice_player.get_stream_playback() as AudioStreamGeneratorPlayback
@@ -3019,22 +3248,34 @@ func _find_customer(cname: String) -> Node:
 
 
 func _ray_target() -> Area3D:
+	var blocked_dist := INTERACT_REACH
 	if _ray and _ray.is_colliding():
-		var a := _ray.get_collider() as Area3D
-		if a:
-			return a
-	# Affedici yedek: küre taramasında kameraya en yakın hedef
+		var hit_c := _ray.get_collider()
+		if hit_c is Area3D:
+			return hit_c as Area3D
+		if cam:
+			blocked_dist = cam.global_position.distance_to(_ray.get_collision_point())
+	# Affedici yedek: küre taramasında duvar/tezgah arkasında OLMAYAN en yakın hedef
 	if _shape and _shape.is_colliding() and cam:
 		var best: Area3D = null
-		var best_d := INF
+		var best_d := blocked_dist + 0.12
+		var sp := get_world_3d().direct_space_state if is_inside_tree() else null
 		for i in _shape.get_collision_count():
 			var c := _shape.get_collider(i) as Area3D
 			if c == null:
 				continue
-			var d := cam.global_position.distance_to(_shape.get_collision_point(i))
-			if d < best_d:
-				best_d = d
-				best = c
+			var pt := _shape.get_collision_point(i)
+			var d := cam.global_position.distance_to(pt)
+			if d >= best_d:
+				continue
+			if sp:
+				var los := sp.intersect_ray(PhysicsRayQueryParameters3D.create(cam.global_position, pt, 1, [get_rid()]))
+				if not los.is_empty():
+					var hd := cam.global_position.distance_to(los["position"] as Vector3)
+					if hd + 0.18 < d:
+						continue
+			best_d = d
+			best = c
 		return best
 	return null
 
@@ -3329,7 +3570,8 @@ func _do_catch_thief(area: Area3D) -> void:
 		return
 	_catch_cd = 0.5
 	_use_anim = 1.0
-	add_trauma(0.12)
+	_hitstop_t = 0.04
+	add_trauma(0.24)
 	var fwd := -cam.global_transform.basis.z if cam else Vector3(0, 0, -1)
 	_trigger_item_fx_synced("catch", "", global_position + Vector3(0, 1.1, 0) + fwd * 0.5, fwd)
 	var my_id := _my_peer_id()
@@ -3409,11 +3651,11 @@ func _do_throw_crate() -> void:
 			_throw_beer()
 		return
 	var fwd := -cam.global_transform.basis.z if cam else Vector3(0, 0, -1)
-	var start_p := (_fp_crate_anchor.global_position if _fp_crate_anchor else global_position + Vector3(0, 0.9, 0)) + fwd * 0.25
+	var start_p := _safe_throw_origin((_fp_crate_anchor.global_position if _fp_crate_anchor else global_position + Vector3(0, 0.9, 0)) + fwd * 0.25)
 	var vel := fwd * 9.5 + Vector3.UP * 3.4 + velocity * 0.35
 	var item_id := held_item
 	var cnt := held_count
-	add_trauma(0.14)
+	add_trauma(0.18)
 	set_held_crate(false, "", 0)
 	if Net.online():
 		rpc_throw_crate.rpc(item_id, cnt, start_p, vel)
@@ -3429,8 +3671,10 @@ func rpc_throw_crate(item_id: String, count: int, start_p: Vector3, vel: Vector3
 	Sfx.play_3d("crate_throw", start_p, w, -3.0)
 	var rb := RigidBody3D.new()
 	rb.mass = 1.2
+	rb.continuous_cd = true
 	rb.contact_monitor = true
 	rb.max_contacts_reported = 2
+	rb.add_collision_exception_with(self)
 	rb.position = start_p
 	rb.linear_velocity = vel
 	rb.angular_velocity = Vector3(randf_range(-8.0, 8.0), randf_range(-6.0, 6.0), randf_range(-8.0, 8.0))
@@ -3448,11 +3692,12 @@ func rpc_throw_crate(item_id: String, count: int, start_p: Vector3, vel: Vector3
 	sh.size = Vector3(0.42, 0.20, 0.34)
 	cs.shape = sh
 	rb.add_child(cs)
-	rb.add_child(StallScript.build_held_crate(item_id, count, _my_crate_capacity()))
+	var vis := StallScript.build_held_crate(item_id, count, _my_crate_capacity())
+	rb.add_child(vis)
 	w.add_child(rb)
 	var tw := rb.create_tween()
 	tw.tween_interval(14.0)
-	tw.tween_property(rb, "scale", Vector3.ONE * 0.01, 0.5)
+	tw.tween_property(vis, "scale", Vector3.ONE * 0.01, 0.5)
 	tw.tween_callback(rb.queue_free)
 
 
@@ -3513,11 +3758,12 @@ func _apply_held_crate(has_crate: bool, item_id: String, count: int) -> void:
 	if has_crate:
 		if is_multiplayer_authority() and _fp_crate_anchor:
 			_fp_crate_visual = StallScript.build_held_crate(held_item, held_count, _my_crate_capacity())
+			_disable_shadows_recursive(_fp_crate_visual)
 			_fp_crate_anchor.add_child(_fp_crate_visual)
-			# İki el kasanın yanlarında
+			# İki el kasanın doğru yanlarında (+X sağ, -X sol)
 			for hn: String in ["HandR", "HandL"]:
 				var ch := _make_fp_hand(hn, 0.9)
-				ch.position = Vector3(-0.25 if hn == "HandR" else 0.25, 0.0, 0.02)
+				ch.position = Vector3(0.25 if hn == "HandR" else -0.25, 0.0, 0.02)
 				_fp_crate_visual.add_child(ch)
 		elif _held_anchor:
 			_held_visual = StallScript.build_held_crate(held_item, held_count, _my_crate_capacity())
@@ -3583,6 +3829,7 @@ func _spawn_coin_fly(n: int) -> void:
 		coin.rotation = Vector3(randf_range(0, TAU), 0, randf_range(0, TAU))
 		var lift := Vector3(randf_range(-0.45, 0.45), randf_range(0.55, 0.9), randf_range(-0.45, 0.45))
 		var spin := randf_range(10.0, 18.0)
+		var rot0 := coin.rotation.x
 		var idx := i
 		coin.scale = Vector3.ZERO
 		var tw := coin.create_tween()
@@ -3595,7 +3842,7 @@ func _spawn_coin_fly(n: int) -> void:
 			var p1 := p0 + lift
 			var u := 1.0 - t
 			coin.global_position = u * u * p0 + 2.0 * u * t * p1 + t * t * tgt
-			coin.rotation.x += spin * 0.016
+			coin.rotation.x = rot0 + spin * t * 0.48
 			coin.scale = Vector3.ONE * lerpf(1.0, 0.45, t * t)
 		, 0.0, 1.0, 0.48).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
 		tw.tween_callback(func() -> void:

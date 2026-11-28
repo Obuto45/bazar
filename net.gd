@@ -1,19 +1,27 @@
 extends Node
-## Ağ katmanı: Steam lobi + SteamMultiplayerPeer (Valve relay), tek PC testi için ENet yedeği.
-## KartopuTest'teki sistemin aynısı (GodotSteam eklentisi).
+## Ağ katmanı: Steam lobi (Herkese Açık / Arkadaşlar / Oda Kodu) + SteamMultiplayerPeer (Valve relay),
+## tek PC / yerel ağ testi için ENet yedeği ve Host oyuncu atma (kick).
 
 signal status(msg: String)
 signal lobby_changed
 signal left
 signal invited(from_name: String, lobby: int)
+signal lobby_list_updated(lobbies: Array)
 
-const APP_ID := 480 # Spacewar test App ID'si; kendi App ID'n olunca değiştir (steam_appid.txt ile birlikte).
+const APP_ID := 480 # Spacewar test App ID'si; kendi Steam App ID'n alınınca bunu değiştir.
 const LOCAL_PORT := 7777
 const MAX_PLAYERS := 8
+const GAME_TAG := "bazar_market_v1"
+const CODE_CHARS := "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
 var steam_ok := false
 var lobby_id := 0
+var lobby_code := ""
+var lobby_name := ""
+var lobby_is_public := true
 var names := {} # peer_id -> görünen ad
+var _pending_code := ""
+var _pending_lobby_name := ""
 
 
 func _ready() -> void:
@@ -25,21 +33,23 @@ func _ready() -> void:
 		Steam.join_requested.connect(_on_join_requested)
 		Steam.lobby_invite.connect(func(inviter, lobby, _game): invited.emit(Steam.getFriendPersonaName(inviter), lobby))
 		Steam.lobby_chat_update.connect(func(_a, _b, _c, _d): lobby_changed.emit())
+		if Steam.has_signal("lobby_match_list"):
+			Steam.lobby_match_list.connect(_on_lobby_match_list)
 	else:
 		push_warning("Steam başlatılamadı: %s" % r)
 	multiplayer.peer_connected.connect(func(_id): lobby_changed.emit())
 	multiplayer.peer_disconnected.connect(_on_peer_left)
 	multiplayer.connected_to_server.connect(_on_connected)
-	multiplayer.connection_failed.connect(func(): status.emit("Bağlantı başarısız."); leave())
-	multiplayer.server_disconnected.connect(func(): status.emit("Host ayrıldı."); leave())
+	multiplayer.connection_failed.connect(func(): status.emit(L10n.pick("Bağlantı başarısız.", "Connection failed.")); leave())
+	multiplayer.server_disconnected.connect(func(): status.emit(L10n.pick("Host ayrıldı.", "Host disconnected.")); leave())
 
 
 func my_name() -> String:
-	return Steam.getPersonaName() if steam_ok else "Oyuncu"
+	return Steam.getPersonaName() if steam_ok else L10n.pick("Oyuncu", "Player")
 
 
 func display_name(id: int) -> String:
-	return names.get(id, "Oyuncu %d" % id)
+	return names.get(id, "%s %d" % [L10n.pick("Oyuncu", "Player"), id])
 
 
 func online() -> bool:
@@ -48,15 +58,90 @@ func online() -> bool:
 		and p.get_connection_status() == MultiplayerPeer.CONNECTION_CONNECTED
 
 
-# --- Steam ---
+static func _gen_room_code() -> String:
+	var out := ""
+	for _i in 4:
+		out += CODE_CHARS[randi() % CODE_CHARS.length()]
+	return out
 
-func host_steam() -> void:
+
+# --- Steam Lobileri ---
+
+func host_steam(is_public := true, custom_name := "") -> void:
 	if not steam_ok:
-		status.emit("Steam açık değil / başlatılamadı.")
+		status.emit(L10n.pick("Steam açık değil / başlatılamadı.", "Steam is not running."))
 		return
 	leave()
-	Steam.createLobby(Steam.LOBBY_TYPE_FRIENDS_ONLY, MAX_PLAYERS)
-	status.emit("Lobi kuruluyor...")
+	lobby_is_public = is_public
+	_pending_lobby_name = custom_name.strip_edges().left(36)
+	var ltype := Steam.LOBBY_TYPE_PUBLIC if is_public else Steam.LOBBY_TYPE_FRIENDS_ONLY
+	Steam.createLobby(ltype, MAX_PLAYERS)
+	status.emit(L10n.pick("Lobi kuruluyor...", "Creating lobby..."))
+
+
+func request_public_lobbies() -> void:
+	if not steam_ok:
+		lobby_list_updated.emit([])
+		status.emit(L10n.pick("Steam bağlı değil.", "Steam is offline."))
+		return
+	_pending_code = ""
+	if Steam.has_method("addRequestLobbyListStringFilter"):
+		Steam.addRequestLobbyListStringFilter("game", GAME_TAG, Steam.LOBBY_COMPARISON_EQUAL)
+	if Steam.has_method("addRequestLobbyListDistanceFilter"):
+		Steam.addRequestLobbyListDistanceFilter(Steam.LOBBY_DISTANCE_FILTER_WORLDWIDE)
+	if Steam.has_method("addRequestLobbyListResultCountFilter"):
+		Steam.addRequestLobbyListResultCountFilter(30)
+	Steam.requestLobbyList()
+	status.emit(L10n.pick("Açık pazarlar aranıyor...", "Searching open bazaars..."))
+
+
+func join_by_code(code: String) -> void:
+	var norm := code.strip_edges().to_upper()
+	if norm.length() < 4:
+		status.emit(L10n.pick("Geçerli bir 4 haneli oda kodu gir.", "Enter a valid 4-character room code."))
+		return
+	if not steam_ok:
+		status.emit(L10n.pick("Oda kodu için Steam açık olmalı.", "Steam must be open to join by code."))
+		return
+	_pending_code = norm
+	if Steam.has_method("addRequestLobbyListStringFilter"):
+		Steam.addRequestLobbyListStringFilter("game", GAME_TAG, Steam.LOBBY_COMPARISON_EQUAL)
+		Steam.addRequestLobbyListStringFilter("code", norm, Steam.LOBBY_COMPARISON_EQUAL)
+	if Steam.has_method("addRequestLobbyListDistanceFilter"):
+		Steam.addRequestLobbyListDistanceFilter(Steam.LOBBY_DISTANCE_FILTER_WORLDWIDE)
+	Steam.requestLobbyList()
+	status.emit(L10n.pick("Oda kodu aranıyor: %s...", "Searching room code: %s...") % norm)
+
+
+func _on_lobby_match_list(lobbies: Array) -> void:
+	if _pending_code != "":
+		var want := _pending_code
+		_pending_code = ""
+		if lobbies.is_empty():
+			status.emit(L10n.pick("'%s' kodlu oda bulunamadı.", "Room '%s' not found.") % want)
+			return
+		join_lobby(int(lobbies[0]))
+		return
+	var out := []
+	for lid in lobbies:
+		var id := int(lid)
+		var lname := str(Steam.getLobbyData(id, "name"))
+		var code := str(Steam.getLobbyData(id, "code"))
+		var ver := str(Steam.getLobbyData(id, "ver"))
+		var cnt := int(Steam.getNumLobbyMembers(id))
+		var mx := int(Steam.getLobbyMemberLimit(id))
+		if cnt <= 0 or cnt >= mx:
+			continue
+		out.append({
+			"id": id,
+			"name": lname if lname != "" else L10n.pick("Semt Pazarı", "Street Bazaar"),
+			"code": code,
+			"ver": ver,
+			"players": cnt,
+			"max": mx if mx > 0 else MAX_PLAYERS,
+		})
+	lobby_list_updated.emit(out)
+	status.emit(L10n.pick("%d açık pazar bulundu.", "Found %d open bazaar(s).") % out.size())
 
 
 ## Çevrimiçi Steam arkadaşları: [[steam_id, ad, lobi_id (yoksa 0)], ...]
@@ -77,59 +162,66 @@ func join_lobby(id: int) -> void:
 	_on_join_requested(id, 0)
 
 
-## Overlay gerektirmez: davet Steam sohbetine düşer, arkadaş "Katıl" der.
 func invite_friend(id: int, friend_name: String) -> void:
 	if lobby_id == 0:
-		status.emit("Önce Steam lobisi kur.")
+		status.emit(L10n.pick("Önce Steam lobisi kur.", "Create a Steam lobby first."))
 		return
 	if Steam.inviteUserToLobby(lobby_id, id):
-		status.emit("%s davet edildi. Oyunu açıkken Steam sohbetindeki daveti kabul etsin." % friend_name)
+		status.emit(L10n.pick("%s davet edildi. Steam sohbetinden katılabilir.", "Invited %s via Steam chat.") % friend_name)
 	else:
-		status.emit("Davet gönderilemedi.")
+		status.emit(L10n.pick("Davet gönderilemedi.", "Failed to send invite."))
 
 
 func _new_steam_peer() -> SteamMultiplayerPeer:
 	var peer := SteamMultiplayerPeer.new()
-	peer.set_server_relay(true) # Valve relay: NAT sorunsuz
-	peer.set_no_nagle(true) # paketleri bekletmeden gönder
+	peer.set_server_relay(true)
+	peer.set_no_nagle(true)
 	return peer
 
 
 func _on_lobby_created(result: int, id: int) -> void:
 	if result != 1:
-		status.emit("Lobi kurulamadı (kod %d)." % result)
+		status.emit(L10n.pick("Lobi kurulamadı (kod %d).", "Failed to create lobby (code %d).") % result)
 		return
 	lobby_id = id
-	Steam.setLobbyData(id, "name", my_name() + " pazarı")
+	lobby_code = _gen_room_code()
+	lobby_name = _pending_lobby_name if _pending_lobby_name != "" else (my_name() + L10n.pick(" Pazarı", "'s Bazaar"))
+	Steam.setLobbyData(id, "game", GAME_TAG)
+	Steam.setLobbyData(id, "ver", Updater.version())
+	Steam.setLobbyData(id, "name", lobby_name)
+	Steam.setLobbyData(id, "code", lobby_code)
+	Steam.setLobbyData(id, "public", "1" if lobby_is_public else "0")
 	var peer := _new_steam_peer()
 	peer.host_with_lobby(id)
 	multiplayer.multiplayer_peer = peer
 	_register_self()
-	status.emit("Lobi hazır. Arkadaşlarını davet et.")
+	status.emit(L10n.pick("Lobi hazır! Oda kodu: %s", "Lobby ready! Room code: %s") % lobby_code)
+	SteamMgr.set_presence_lobby(1, MAX_PLAYERS)
 
 
 func _on_join_requested(id: int, _friend: int) -> void:
 	leave()
 	Steam.joinLobby(id)
-	status.emit("Lobiye katılınıyor...")
+	status.emit(L10n.pick("Lobiye katılınıyor...", "Joining lobby..."))
 
 
 func _on_lobby_joined(id: int, _perm: int, _locked: bool, response: int) -> void:
 	if response != 1:
-		status.emit("Lobiye katılınamadı (kod %d)." % response)
+		status.emit(L10n.pick("Lobiye katılınamadı (kod %d).", "Could not join lobby (code %d).") % response)
 		return
 	if Steam.getLobbyOwner(id) == Steam.getSteamID():
-		return # kendi lobimiz, host tarafı zaten kuruldu
+		return
 	lobby_id = id
+	lobby_code = str(Steam.getLobbyData(id, "code"))
+	lobby_name = str(Steam.getLobbyData(id, "name"))
 	var peer := _new_steam_peer()
 	peer.connect_to_lobby(id)
 	multiplayer.multiplayer_peer = peer
-	status.emit("Hosta bağlanılıyor...")
+	status.emit(L10n.pick("Hosta bağlanılıyor...", "Connecting to host..."))
 
 
-# --- Tek PC testi (ENet) ---
+# --- Tek PC / LAN testi (ENet) ---
 
-## Yerel test portu: varsayılan 7777; paralel testler için `-- port=7791` ile değiştirilebilir.
 func local_port() -> int:
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("port=") and a.substr(5).is_valid_int():
@@ -141,21 +233,41 @@ func host_local() -> void:
 	leave()
 	var p := ENetMultiplayerPeer.new()
 	if p.create_server(local_port(), MAX_PLAYERS) != OK:
-		status.emit("Port %d açılamadı." % local_port())
+		status.emit(L10n.pick("Port %d açılamadı.", "Could not open port %d.") % local_port())
 		return
 	multiplayer.multiplayer_peer = p
+	lobby_code = "LAN"
 	_register_self()
-	status.emit("Yerel host açık (port %d)." % local_port())
+	status.emit(L10n.pick("Yerel host açık (port %d).", "Local host open (port %d).") % local_port())
 
 
-func join_local() -> void:
+func join_local(ip := "127.0.0.1") -> void:
 	leave()
+	var target := ip.strip_edges()
+	if target == "":
+		target = "127.0.0.1"
 	var p := ENetMultiplayerPeer.new()
-	if p.create_client("127.0.0.1", local_port()) != OK:
-		status.emit("İstemci oluşturulamadı.")
+	if p.create_client(target, local_port()) != OK:
+		status.emit(L10n.pick("İstemci oluşturulamadı.", "Could not create client."))
 		return
 	multiplayer.multiplayer_peer = p
-	status.emit("Yerel hosta bağlanılıyor...")
+	status.emit(L10n.pick("Yerel hosta bağlanılıyor (%s)...", "Connecting to local host (%s)...") % target)
+
+
+# --- Host Kick ---
+
+func kick_peer(peer_id: int) -> void:
+	if not online() or not multiplayer.is_server() or peer_id <= 1:
+		return
+	rpc_kicked.rpc_id(peer_id)
+	if multiplayer.multiplayer_peer and multiplayer.multiplayer_peer.has_method("disconnect_peer"):
+		multiplayer.multiplayer_peer.disconnect_peer(peer_id)
+
+
+@rpc("authority", "reliable")
+func rpc_kicked() -> void:
+	status.emit(L10n.pick("Host tarafından odadan çıkarıldın.", "You were kicked by the host."))
+	leave()
 
 
 # --- Ortak ---
@@ -164,29 +276,34 @@ func leave() -> void:
 	if steam_ok and lobby_id != 0:
 		Steam.leaveLobby(lobby_id)
 	lobby_id = 0
+	lobby_code = ""
+	lobby_name = ""
 	if multiplayer.multiplayer_peer and not (multiplayer.multiplayer_peer is OfflineMultiplayerPeer):
 		multiplayer.multiplayer_peer.close()
 	multiplayer.multiplayer_peer = OfflineMultiplayerPeer.new()
 	names.clear()
+	Settings.muted_peers.clear()
+	SteamMgr.set_presence_menu()
 	left.emit()
 
 
 func _on_peer_left(id: int) -> void:
 	names.erase(id)
+	Settings.muted_peers.erase(id)
 	if multiplayer.is_server():
-		sync_names.rpc(names) # istemcilerin listesi de güncellensin
+		sync_names.rpc(names)
 	lobby_changed.emit()
 
 
 func _on_connected() -> void:
 	_register_self()
-	status.emit("Bağlandı. Hostun pazarı açmasını bekle.")
+	status.emit(L10n.pick("Bağlandı. Hostun pazarı açmasını bekle.", "Connected. Waiting for host to open the bazaar."))
 
 
 func _register_self() -> void:
 	var n := my_name()
 	if multiplayer.multiplayer_peer is ENetMultiplayerPeer:
-		n += " #%d" % (multiplayer.get_unique_id() % 1000) # aynı PC'de iki pencere ayırt edilsin
+		n += " #%d" % (multiplayer.get_unique_id() % 1000)
 	if multiplayer.is_server():
 		names[1] = n
 		lobby_changed.emit()
@@ -196,7 +313,9 @@ func _register_self() -> void:
 
 @rpc("any_peer", "reliable")
 func register_name(n: String) -> void:
-	names[multiplayer.get_remote_sender_id()] = n.left(32) # istemciden gelen ad: sınırla
+	if not multiplayer.is_server():
+		return
+	names[multiplayer.get_remote_sender_id()] = n.left(32)
 	sync_names.rpc(names)
 	lobby_changed.emit()
 
@@ -204,4 +323,6 @@ func register_name(n: String) -> void:
 @rpc("authority", "reliable")
 func sync_names(d: Dictionary) -> void:
 	names = d
+	if lobby_id != 0:
+		SteamMgr.set_presence_lobby(names.size(), MAX_PLAYERS)
 	lobby_changed.emit()

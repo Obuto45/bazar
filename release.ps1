@@ -34,9 +34,10 @@ $ErrorActionPreference = "Stop"
 if (-not (Test-Path "$out/Bazar.exe")) { throw "Export başarısız (export şablonları kurulu mu?)." }
 Copy-Item steam_appid.txt $out/
 
-# 3) Zip: dosya adı _Windows.zip ile bitmeli
+# 3) Zip: dosya adı _Windows.zip ile bitmeli (.pck ayrıysa onu da ekle)
 $zip = "build/Bazar_${tag}_Windows.zip"
-Compress-Archive -Path "$out/Bazar.exe", "$out/*.dll", "$out/steam_appid.txt" -DestinationPath $zip -Force
+$files = @("$out/Bazar.exe", "$out/steam_appid.txt") + @(Get-ChildItem "$out/*.dll", "$out/*.pck" -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
+Compress-Archive -Path $files -DestinationPath $zip -Force
 
 # 4) Commit, etiket, Release. git uyarıları stderr'e yazar: PS 5.1'de hata sayılmasın, çıkış koduna bak.
 $ErrorActionPreference = "Continue"

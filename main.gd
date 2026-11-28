@@ -43,7 +43,7 @@ const MENU_TIPS := [
 	"İpucu: Bayatlayan ürünü 💦 Su Fısfısı ile tazele; Market'te satılıyor.",
 	"İpucu: Arka sokaktaki dükkanların saatleri var: Fırın akşam kapanır, Tekel öğlen açılır.",
 	"İpucu: Zabıta fahiş fiyata ve yerdeki kasalara ceza keser.",
-	"İpucu: Mikrofona bağırmak [B] tuşundan daha uzağa ulaşır!",
+	"İpucu: Müşteri çekmek için doğrudan mikrofona bağırabilirsin.",
 ]
 
 const CONTROLS_TEXT := """WASD  yürü   •   Shift  koş   •   Boşluk  zıpla
@@ -256,13 +256,31 @@ func _ready() -> void:
 		await get_tree().create_timer(1.2).timeout
 		var st1 := stalls.get_node_or_null("Stall_1")
 		if st1:
-			st1.rpc_sync_slot(0, "domates", 8, 10)
+			st1.rpc_sync_slot(0, "domates", st1.max_slot_count(), 10)
 			st1.rpc_sync_slot(1, "karpuz", 5, 26)
-			st1.rpc_sync_slot(2, "muz", 7, 19)
+			st1.rpc_sync_slot(2, "muz", 2, 19, 0.22)
 			st1.rpc_sync_slot(3, "patlican", 6, 17)
 			st1.rpc_set_stall_radio(true, true)
 		var me1 := players.get_node_or_null("1")
 		if me1:
+			me1.rpc_add_inventory_item("cay")
+			me1.rpc_add_inventory_item("cay")
+			if me1.inventory.filter(func(slot): return slot.get("id") == "cay").size() != 3:
+				push_error("Two teas must occupy separate inventory slots")
+				get_tree().quit(1)
+				return
+			me1.rpc_add_inventory_item("megafon")
+			for second in 30:
+				me1._spend_mega_battery()
+			if me1.has_inventory_item("megafon") or me1.is_holding_item("megafon"):
+				push_error("Depleted megaphone must be removed")
+				get_tree().quit(1)
+				return
+			me1.rpc_add_inventory_item("megafon")
+			if not me1.is_holding_item("megafon"):
+				push_error("Megaphone must be available again after depletion")
+				get_tree().quit(1)
+				return
 			me1.select_slot(0) # elinde yanan sigara!
 		if wholesaler_node:
 			wholesaler_node.position = Vector3(0.0, 0.0, WholesalerScript.PARK_Z)
@@ -287,6 +305,12 @@ func _ready() -> void:
 		if DisplayServer.get_name() != "headless":
 			get_viewport().get_texture().get_image().save_png(OS.get_user_data_dir() + "/selftest_sunset.png")
 		print("SELFTEST_OK stalls=", stalls.get_child_count() if stalls else 0, " customers=", customers.get_child_count() if customers else 0)
+		rpc_start_next_day(day_num + 1)
+		if st1.total_stock() != 0 or st1.has_radio:
+			push_error("Day rollover left items on the stall")
+			get_tree().quit(1)
+			return
+		print("DAY_ROLLOVER_OK")
 		get_tree().quit()
 		return
 	if "--showcase" in args:
@@ -889,7 +913,10 @@ func _build_market_hud(layer: CanvasLayer, theme: Theme) -> void:
 	interact_lbl = _lbl(layer, "", 14, 0.96)
 	interact_lbl.set_anchors_preset(Control.PRESET_CENTER)
 	interact_lbl.offset_left = -380; interact_lbl.offset_right = 380
-	interact_lbl.offset_top = 24; interact_lbl.offset_bottom = 50
+	interact_lbl.offset_top = 24; interact_lbl.offset_bottom = 76
+	interact_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	interact_lbl.add_theme_color_override("font_outline_color", Color(0.05, 0.035, 0.02))
+	interact_lbl.add_theme_constant_override("outline_size", 7)
 	interact_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	interact_lbl.add_theme_color_override("font_color", Color(1.0, 0.95, 0.78))
 	interact_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -1458,6 +1485,9 @@ func rpc_request_buy_item(item_id: String, shop_id := "") -> void:
 	var info_i: Dictionary = Items.CATALOG[item_id]
 	var cons: bool = bool(info_i["consumable"])
 	if not cons and (p.has_inventory_item(item_id) or (item_id == "radyo" and st.has_radio)):
+		return
+	if not p.can_add_inventory_item(item_id):
+		_notify_peer(pid, L10n.pick("Envanter dolu", "Inventory is full"), Color(1.0, 0.45, 0.4))
 		return
 	var cost: int = int(ceil(float(info_i["cost"]) * Shops.price_mult(shop_id, _day_prog())))
 	if int(p.money) < cost:
@@ -2184,6 +2214,8 @@ func _on_next_day_pressed() -> void:
 
 @rpc("authority", "call_local", "reliable")
 func rpc_start_next_day(new_day: int) -> void:
+	for st in stalls.get_children():
+		st.clear_day_stock()
 	day_num = new_day
 	day_time = 0.0
 	day_ended = false
@@ -2682,7 +2714,7 @@ const TUT_STEPS := [
 	["crate", "🚚 → 📦  Toptancıdan kasa al [E]"],
 	["place", "🍅 Rafa bak, [Sol Tık] basılı tut: diz"],
 	["price", "🏷️ Fiyat: [Tekerlek] ya da [Z] [X]"],
-	["shout", "📣 [B] basılı tut: bağır"],
+	["shout", "📣 Mikrofona bağır (mikrofon yoksa [B])"],
 	["sell", "🤝 Müşteriye bak, [E]: sat"],
 	["spray", "💦 🛒 Market → fısfıs, rafa [Sol Tık]"],
 ]
@@ -3386,7 +3418,7 @@ func _apply_career(c: Dictionary) -> void:
 		var rep := float(c.get("reputation", 2.5))
 		st.apply_snapshot({
 			"expansion_level": int(c.get("expansion_level", 0)),
-			"upgrades": ups, "has_radio": bool(c.get("has_radio", false)),
+			"upgrades": ups, "has_radio": false,
 			"radio_playing": false, "reputation": rep,
 		})
 		if st.has_method("set_reputation"):
@@ -3424,7 +3456,7 @@ func _save_career_day_end() -> void:
 			ups.append(k)
 	c["upgrades"] = ups
 	c["expansion_level"] = _expansion_level(st)
-	c["has_radio"] = bool(st.has_radio)
+	c.erase("has_radio")
 	var rep := _my_reputation()
 	c["reputation"] = clampf(rep, 0.0, 5.0) if rep >= 0.0 else float(c.get("reputation", 2.5))
 	c["total_earned"] = int(c.get("total_earned", 0)) + maxi(int(me.daily_revenue), 0)

@@ -31,7 +31,7 @@ Oyun her açılışta yeni sürüm var mı bakar; varsa kendini günceller ve ye
 | **Sol Tık** (basılı) | ürün diz / eldeki eşyayı kullan (sigara, megafon, 💦 fısfıs...); 🏏 sopa elindeyken sol tık = savur |
 | **Q** | kasayı / eldeki eşyayı fırlat (sopa dahil) |
 | Tekerlek / **Z**-**X** | fiyat düşür / artır |
-| **B** veya mikrofon | bağır (müşteri çek) |
+| Mikrofon veya **B** | bağırarak müşteri çek. Mikrofonla bağırmak için tuş gerekmez |
 | **R** | pazarlığa "olmaz" de / radyoyu geri al |
 | **F** | tezgah zili |
 | **T** | "Çaycııı!" — çaycı yanına gelir (ayağına çay 12 TL, kıraathanede 10 TL) |

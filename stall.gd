@@ -496,8 +496,10 @@ func _apply_fresh_visual(idx: int) -> void:
 	if not pile.is_empty() and is_instance_valid(pile["root"]):
 		# Taze üründe (fresh > 0.92) overlay'i çıkar ki ikinci pass draw call yemesin
 		Produce.set_pile_overlay(pile["root"], ov if rot_a > 0.015 else null)
-		var k := lerpf(0.88, 1.0, clampf(f / 0.8, 0.0, 1.0))
-		(pile["root"] as Node3D).scale = Vector3(k, k * lerpf(0.86, 1.0, clampf(f / 0.8, 0.0, 1.0)), k)
+		var fullness := clampf(float(s["count"]) / max_slot_count(), 0.0, 1.0)
+		var k := lerpf(0.84, 1.0, clampf(f / 0.8, 0.0, 1.0))
+		var height := lerpf(0.72, 1.0, fullness) * lerpf(0.70, 1.0, clampf(f / 0.8, 0.0, 1.0))
+		(pile["root"] as Node3D).scale = Vector3(k, height, k)
 	var bar := _slot_fresh_bars[idx]
 	bar.visible = stocked
 	bar.scale.x = maxf(f, 0.02)
@@ -930,6 +932,7 @@ func _build_slots() -> void:
 		var tag := Node3D.new()
 		tag.position = Vector3(sx + 0.2, 0.74, 0.6)
 		tag.rotation.x = -0.32
+		tag.scale = Vector3.ONE * 1.32
 		add_child(tag)
 		_slot_tags.append(tag)
 		# Koyu çerçeve kartonun içinde kalır (yalnızca kenarı görünür) — yüzeylerde z-fighting olmaz
@@ -1068,6 +1071,16 @@ func owner_spawn_pos() -> Vector3:
 
 ## Yuva görseli: ürün yığını (MultiMesh) yalnızca ürün değişince yeniden kurulur; stok değişince
 ## görünür adet ayarlanır, böylece yığın tepeden eriyerek azalır.
+func clear_day_stock() -> void:
+	rpc_set_stall_radio(false, false)
+	bell_boost = 0.0
+	stink_t = 0.0
+	_reserved_spots.clear()
+	for i in slots.size():
+		slots[i] = {"item": "", "count": 0, "price": 10, "fresh": 1.0}
+		_refresh_slot_visual(i)
+
+
 func _refresh_slot_visual(idx: int) -> void:
 	var s := slots[idx]
 	if not s.has("fresh"):

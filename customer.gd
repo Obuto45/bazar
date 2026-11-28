@@ -1009,6 +1009,11 @@ func _item_fresh(st, item_id: String) -> float:
 	return 1.0
 
 
+func order_text() -> String:
+	var order := _wants_line()
+	return L10n.pick("Sipariş  ·  ", "Order  ·  ") + order if order != "" else ""
+
+
 func _wants_line() -> String:
 	var segs := PackedStringArray()
 	for k in wants:

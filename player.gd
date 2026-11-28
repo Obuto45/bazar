@@ -170,6 +170,7 @@ var _knife_cd := 0.0
 var _puff_cd := 0.0
 var _sec_cd := 0.0
 var _mega_burst := 0.0
+var _mega_battery_time := 0.0
 var _stun_t := 0.0
 var _spray_cd := 0.0
 var _catch_cd := 0.0
@@ -400,9 +401,9 @@ func has_prestige_aura() -> bool:
 
 ## Efektif bağırma gücü: normal mikrofon/B + El Megafonu (1.85x) + Tezgah Hoparlörü (1.35x).
 func get_effective_shout() -> float:
-	var sp := maxf(shout_power, 1.15 if _mega_burst > 0.0 else 0.0)
+	var sp := shout_power
 	if is_holding_item("megafon"):
-		sp *= 1.85
+		sp = maxf(sp, 1.15 if _mega_burst > 0.0 else 0.0) * 1.85
 	var st := _find_stall(_my_peer_id())
 	if st and st.has_upgrade("megaphone"):
 		sp *= 1.35
@@ -603,6 +604,16 @@ func _refresh_equipped_visual() -> void:
 			_tp_item_visual.rotation_degrees.x = 60.0 # sopa ucu yukarı
 
 
+const SINGLE_SLOT_ITEMS := ["cay", "simit", "acma", "bira"]
+
+
+func can_add_inventory_item(item_id: String) -> bool:
+	var info: Dictionary = Items.CATALOG[item_id]
+	if item_id not in SINGLE_SLOT_ITEMS and has_inventory_item(item_id):
+		return bool(info["consumable"])
+	return inventory.any(func(slot): return slot.is_empty())
+
+
 func add_inventory_item_synced(item_id: String) -> void:
 	if Net.online():
 		rpc_add_inventory_item.rpc(item_id)
@@ -620,21 +631,18 @@ func rpc_add_inventory_item(item_id: String) -> void:
 	var add_uses: int = int(info["uses"])
 	# Aynı tüketilebilir eşya varsa adetini ekle (sigara/puro/çay/simit/fısfıs)
 	for i in inventory.size():
-		if str(inventory[i].get("id", "")) == item_id:
+		if item_id not in SINGLE_SLOT_ITEMS and str(inventory[i].get("id", "")) == item_id:
 			if bool(info["consumable"]):
 				inventory[i]["uses"] = int(inventory[i]["uses"]) + add_uses
 			if is_multiplayer_authority():
-				if item_id in ["cay", "simit", "acma", "bira"] and not held_crate:
-					active_slot = i
-					_equip_t = 1.0
-					_sync_equipped_to_peers()
-					_refresh_equipped_visual()
 				inventory_changed.emit()
 			return
 	# Boş yuvaya koy
 	for i in inventory.size():
 		if inventory[i].is_empty():
 			inventory[i] = {"id": item_id, "uses": add_uses, "puffs": 0}
+			if item_id == "megafon":
+				_mega_battery_time = 0.0
 			if is_multiplayer_authority():
 				active_slot = i
 				_equip_t = 1.0
@@ -666,17 +674,34 @@ func rpc_confiscate_item(item_id: String) -> void:
 		inventory_changed.emit()
 
 
+@rpc("authority", "call_local", "reliable")
+func _spend_mega_battery() -> void:
+	for i in inventory.size():
+		if inventory[i].get("id") != "megafon":
+			continue
+		inventory[i]["uses"] = int(inventory[i]["uses"]) - 1
+		if inventory[i]["uses"] <= 0:
+			inventory[i] = {}
+			_mega_burst = 0.0
+			if is_multiplayer_authority() and active_slot == i:
+				select_slot(-1)
+				_toast(L10n.pick("Megafonun pili bitti. Telefoncudan yenisini al.", "Megaphone battery depleted. Buy another at the phone shop."), Color(1.0, 0.77, 0.35))
+		if is_multiplayer_authority():
+			inventory_changed.emit()
+		return
+
+
 func _build_highlight_box() -> void:
 	_hl_box = Node3D.new()
 	_hl_box.top_level = true
 	_hl_mat = StandardMaterial3D.new()
-	_hl_mat.albedo_color = Color(1.0, 0.88, 0.35, 0.9)
+	_hl_mat.albedo_color = Color(1.0, 0.88, 0.35, 0.72)
 	_hl_mat.emission_enabled = true
 	_hl_mat.emission = Color(1.0, 0.82, 0.28)
-	_hl_mat.emission_energy_multiplier = 2.0
+	_hl_mat.emission_energy_multiplier = 0.8
 	_hl_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_hl_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	var t := 0.022
+	var t := 0.010
 	var edge_x := LP.box(Vector3(1.0, t, t))
 	var edge_y := LP.box(Vector3(t, 1.0, t))
 	var edge_z := LP.box(Vector3(t, t, 1.0))
@@ -1989,10 +2014,18 @@ func _local(dt: float) -> void:
 	# Bağırma: megafon +12 dB sadece gerçekten ses eşiği geçildiğinde eklenir (sessizlik bağırma sayılmaz!)
 	var db_boost := 12.0 if (is_holding_item("megafon") and talk_db > Settings.mic_threshold_db) else 0.0
 	var manual_shout := SHOUT_KEY_POWER if (captured and Input.is_action_pressed("shout")) else 0.0
-	var mic_active := (not mic_muted) and (Settings.voice_mode == 0 or Input.is_action_pressed("ptt")) and talk_db > Settings.mic_threshold_db
+	var mic_active := captured and not mic_muted and talk_db > Settings.mic_threshold_db
 	var mic_shout := 0.0 if not mic_active else \
 		clampf(((talk_db + db_boost) - SHOUT_DB_MIN) / (SHOUT_DB_MAX - SHOUT_DB_MIN), 0.0, 1.0) * 1.45
-	var burst := 1.05 if _mega_burst > 0.0 else 0.0
+	var burst := 1.05 if is_holding_item("megafon") and _mega_burst > 0.0 else 0.0
+	if is_holding_item("megafon") and (mic_active or manual_shout > 0.0 or burst > 0.0):
+		_mega_battery_time += dt
+		if _mega_battery_time >= 1.0:
+			_mega_battery_time -= 1.0
+			if Net.online():
+				_spend_mega_battery.rpc()
+			else:
+				_spend_mega_battery()
 	# Çay: senkronlanan shout_power'a uygulanır ki host da görsün
 	var tea_k: float = (1.25 if tea_buff > 0.0 else 1.0) * float(DRUNK_SHOUT[mini(drunk_level, 2)])
 	shout_power = lerpf(shout_power, maxf(maxf(manual_shout, mic_shout), burst) * tea_k, minf(dt * 14.0, 1.0))
@@ -2979,7 +3012,7 @@ func _process_voice_capture(dt: float) -> void:
 		return
 	var frames := _voice_cap.get_buffer(avail)
 	var ptt_blocked := Settings.voice_mode == 1 and not Input.is_action_pressed("ptt")
-	if mic_muted or ptt_blocked:
+	if mic_muted:
 		talk_level = 0.0
 		talk_db = -60.0
 		_voice_accum.clear()
@@ -3013,7 +3046,7 @@ func _process_voice_capture(dt: float) -> void:
 		_voice_hold = 0.28
 	else:
 		_voice_hold = maxf(_voice_hold - dt, 0.0)
-	if _voice_hold <= 0.0:
+	if ptt_blocked or _voice_hold <= 0.0:
 		_voice_accum.clear()
 		_resamp_pos = 0.0
 		_resamp_prev = mono[n - 1]
@@ -3326,7 +3359,7 @@ func _process_interaction(dt: float) -> void:
 				"puro":
 					interact_hint = "🪵 Küba Purosu  •  [Sol Tık] Nefes Çek (+Prestij)"
 				"megafon":
-					interact_hint = "📢 El Megafonu (+12 dB)  •  [B / Mikrofon / Sol Tık] Bağır!"
+					interact_hint = "📢 Megafon · Pil %d sn · Mikrofon / [Sol Tık]" % int(inventory[active_slot]["uses"])
 				"bicak":
 					interact_hint = "🔪 Meyve Bıçağı  •  [Sol Tık] Savur (Zabıta Dikkat!)"
 				"radyo":
@@ -3424,9 +3457,12 @@ func _process_interaction(dt: float) -> void:
 			var c := _find_customer(str(area.get_meta("customer_name", "")))
 			if c:
 				var h: String = c.get_next_sell_hint(my_id)
+				var order: String = c.order_text()
+				if order != "":
+					interact_hint = order
 				if h != "":
 					show_hl = true
-					interact_hint = h
+					interact_hint = order + "\n" + h if order != "" else h
 		"vendor":
 			show_hl = true
 			interact_hint = str(area.get_meta("offer", "[E] Satın al"))
@@ -3531,13 +3567,7 @@ func _do_buy_from_vendor(area: Area3D, main: Node) -> void:
 			main.show_toast("Cebinde %d TL yok abi!" % price, Color(1.0, 0.5, 0.4))
 		return
 	spend_money(price, "Çay" if is_tea else "Simit")
-	var can_store := has_inventory_item(item_id)
-	if not can_store:
-		for sl in inventory:
-			if sl.is_empty():
-				can_store = true
-				break
-	if can_store:
+	if can_add_inventory_item(item_id):
 		add_inventory_item_synced(item_id)
 		Sfx.play("tea" if is_tea else "happy", -6.0)
 		if main and main.has_method("show_toast"):

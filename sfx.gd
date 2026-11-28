@@ -192,7 +192,7 @@ func _ensure_bus(bus_name: String) -> void:
 		var idx := AudioServer.bus_count
 		AudioServer.add_bus(idx)
 		AudioServer.set_bus_name(idx, bus_name)
-		AudioServer.set_bus_send(idx, "Master")
+		AudioServer.set_bus_send(idx, BUS_VOICE if bus_name == BUS_VOICE_MEGA else "Master")
 
 
 ## Klibi döndürür. Arka planda henüz üretilmemişse (veya headless süreçteyse) o anda üretir.

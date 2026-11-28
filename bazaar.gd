@@ -414,17 +414,17 @@ func apply_graphics_settings() -> void:
 	if _env == null or _sun == null:
 		return
 	var q: int = clampi(int(Settings.quality_level), 0, 2)
-	var sh: int = clampi(int(Settings.shadows_level), 0, 3)
+	var sh: int = clampi(int(Settings.shadows_level), 0, 2)
 	_quality_high = q >= 2
 	_env.ssao_enabled = Settings.ssao_enabled
 	_env.ssil_enabled = q >= 2
 	_env.glow_enabled = Settings.glow_enabled
 	_env.volumetric_fog_enabled = Settings.vol_fog_enabled
 	_env.ssr_enabled = q >= 1 and _wet_k > 0.15
-	_sun.shadow_enabled = sh > 0
-	_sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS if sh >= 2 else DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
-	_sun.directional_shadow_max_distance = 44.0 if sh >= 3 else (36.0 if sh == 2 else 26.0)
-	_sun.shadow_blur = 1.35 if sh >= 3 else (1.1 if sh == 2 else 0.8)
+	_sun.shadow_enabled = true
+	_sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS if sh >= 1 else DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
+	_sun.directional_shadow_max_distance = 46.0 if sh >= 2 else (36.0 if sh == 1 else 26.0)
+	_sun.shadow_blur = 1.35 if sh >= 2 else (1.1 if sh == 1 else 0.8)
 	_sky.radiance_size = Sky.RADIANCE_SIZE_128 if q >= 2 else (Sky.RADIANCE_SIZE_64 if q == 1 else Sky.RADIANCE_SIZE_32)
 	var rain_mult := 1.0 if q >= 2 else (0.72 if q == 1 else 0.42)
 	if _rain:

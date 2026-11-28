@@ -1329,8 +1329,8 @@ func open_settings(tab := 0) -> void:
 	pause_wrap.hide()
 	players_wrap.hide()
 	ach_wrap.hide()
-	_select_settings_tab(tab)
 	settings_wrap.show()
+	_select_settings_tab(tab)
 	_pop_in(settings_wrap)
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
@@ -1491,4 +1491,8 @@ func _on_lang_changed(_new_lang: String) -> void:
 	if main and main.has_method("_sync_menu_refs"):
 		main._sync_menu_refs()
 	refresh_lobby()
-	SteamMgr.set_presence_menu()
+	if main and main.world != null:
+		update_crosshair(true, false)
+		SteamMgr.set_presence_game(main.day_num, Net.names.size() if Net.online() else 1, Net.online())
+	else:
+		SteamMgr.set_presence_menu()

@@ -780,7 +780,7 @@ func _unhandled_input(e: InputEvent) -> void:
 			select_slot(-1)
 			return
 	if e is InputEventMouseMotion:
-		var sens := Settings.mouse_sens
+		var sens := SENS * Settings.mouse_sens
 		var y_sgn := -1.0 if Settings.invert_y else 1.0
 		look_yaw = wrapf(look_yaw - e.relative.x * sens, -PI, PI)
 		look_pitch = clampf(look_pitch - e.relative.y * sens * y_sgn, -1.45, 1.35)
@@ -1808,10 +1808,10 @@ func _process(dt: float) -> void:
 			var rx := Input.get_axis("look_left", "look_right")
 			var ry := Input.get_axis("look_up", "look_down")
 			if absf(rx) > 0.01 or absf(ry) > 0.01:
-				var gs := Settings.gamepad_sens
+				var gs := 2.4 * Settings.gamepad_sens
 				var ys := -1.0 if Settings.invert_y else 1.0
 				look_yaw = wrapf(look_yaw - rx * gs * dt, -PI, PI)
-				look_pitch = clampf(look_pitch - ry * gs * ys * dt, -1.45, 1.35)
+				look_pitch = clampf(look_pitch - ry * gs * 0.78 * ys * dt, -1.45, 1.35)
 		# Standart sigara mekaniği: yanan sigara elde dururken yavaşça kül uzatır, çok uzarsa kendiliğinden düşer!
 		if _action_kind == "" and active_slot >= 0 and active_slot < inventory.size():
 			var eq_s := equipped_item_id()
